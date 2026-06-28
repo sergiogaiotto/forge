@@ -55,6 +55,7 @@ export interface UIState {
   reviewed: boolean;
   lastFileRun: RunResultData | null;
   lastTestRun: RunResultData | null;
+  attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" }[];
 }
 
 export const initialState: UIState = {
@@ -69,6 +70,7 @@ export const initialState: UIState = {
   reviewed: false,
   lastFileRun: null,
   lastTestRun: null,
+  attachments: [],
 };
 
 export type Action =
@@ -174,6 +176,8 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "applied" })), reviewed: false };
     case "review/done":
       return { ...state, reviewed: true };
+    case "context/attachments":
+      return { ...state, attachments: msg.items };
     case "proposal/discarded":
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "discarded" }));
     case "run/result": {

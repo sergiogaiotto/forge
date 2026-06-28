@@ -472,6 +472,67 @@ body {
 .composer {
   border-top: 1px solid var(--border);
   padding: 10px 12px;
+  position: relative;
+}
+.attach-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+.attach-menu {
+  position: absolute;
+  bottom: 58px;
+  left: 12px;
+  z-index: 21;
+  background: var(--surface);
+  border: 1px solid var(--border-3);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  box-shadow: 0 8px 24px #0009;
+}
+.attach-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--sans);
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.attach-menu button:hover {
+  background: #ffffff10;
+}
+.attach-menu button.disabled {
+  color: var(--muted-2);
+}
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-3);
+  color: var(--accent-soft);
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .composer-box {
   background: var(--surface);

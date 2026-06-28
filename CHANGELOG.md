@@ -3,6 +3,16 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.5.0] — 2026-06-28
+
+### Added — Anexar contexto (menu "+")
+- **Anexar contexto** no compositor (botão 📎): **seleção do editor**, **arquivo do
+  workspace** (quick pick) e **enviar do computador** (upload de arquivo de texto).
+  Os anexos viram chips removíveis e entram no contexto da próxima mensagem (in-network).
+- **"Buscar na web" — bloqueada por política** (deny-by-default / soberania de dados),
+  exibida no menu de forma transparente; busca, quando necessária, deve vir de fonte
+  **interna** (MCP), não da internet pública.
+
 ## [1.4.0] — 2026-06-28
 
 ### Added — Notebooks (.ipynb) célula-a-célula

@@ -72,6 +72,8 @@ export class Controller {
   private sessionToken: SessionToken | undefined;
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
+  private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection"; content: string }[] = [];
+  private attachmentSeq = 0;
   private currentTask: Task | undefined;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
@@ -365,6 +367,26 @@ export class Controller {
       case "review/changes":
         await this.reviewChanges();
         break;
+      case "context/pickWorkspaceFile":
+        await this.pickWorkspaceFile();
+        break;
+      case "context/pickLocalFile":
+        await this.pickLocalFile();
+        break;
+      case "context/addSelection":
+        await this.addSelectionAttachment();
+        break;
+      case "context/removeAttachment":
+        this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== msg.id);
+        this.postAttachments();
+        break;
+      case "context/webInfo":
+        this.post({
+          type: "notice",
+          level: "info",
+          message: "Por política, o FORGE não navega na internet pública (soberania de dados). O admin pode habilitar uma fonte interna (MCP).",
+        });
+        break;
       case "skill/toggle":
         await this.toggleSkill(msg.name, msg.enabled);
         break;
@@ -431,6 +453,7 @@ export class Controller {
     this.sessionToken = undefined;
     this.licenseKey = undefined;
     this.history = [];
+    this.pendingAttachments = [];
     await this.postState();
   }
 
@@ -549,7 +572,13 @@ export class Controller {
       toActivate.map(async (meta) => ({ meta, body: await this.loader.loadBody(meta) }))
     );
 
-    const retrievedContext = await this.gatherContext(text);
+    let retrievedContext = await this.gatherContext(text);
+    if (this.pendingAttachments.length > 0) {
+      const att = this.pendingAttachments.map((a) => `### Anexo: ${a.label}\n\`\`\`\n${a.content}\n\`\`\``).join("\n\n");
+      retrievedContext = `Anexos fornecidos pelo usuário:\n${att}\n\n${retrievedContext}`;
+      this.pendingAttachments = [];
+      this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
+    }
     const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
     const assembled = this.assembler.assemble({
       basePrompt,
@@ -660,6 +689,62 @@ export class Controller {
       parts.push(`Arquivo aberto: ${rel}\n\`\`\`\n${clipped}\n\`\`\``);
     }
     return parts.join("\n\n");
+  }
+
+  // ---- anexos de contexto (workspace / upload / seleção) ---------------------
+
+  private postAttachments(): void {
+    this.post({
+      type: "context/attachments",
+      items: this.pendingAttachments.map((a) => ({ id: a.id, label: a.label, bytes: a.content.length, kind: a.kind })),
+    });
+  }
+
+  private addAttachment(label: string, kind: "workspace" | "upload" | "selection", content: string): void {
+    const capped = content.length > 16000 ? content.slice(0, 16000) + "\n… (truncado)" : content;
+    this.pendingAttachments.push({ id: `att_${++this.attachmentSeq}`, label, kind, content: capped });
+    if (this.pendingAttachments.length > 8) this.pendingAttachments = this.pendingAttachments.slice(-8);
+    this.postAttachments();
+  }
+
+  async pickWorkspaceFile(): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para anexar arquivos do workspace." });
+      return;
+    }
+    const uris = await vscode.workspace.findFiles("**/*", "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 3000);
+    const items = uris.map((u) => ({ label: path.relative(ws, u.fsPath).split(path.sep).join("/"), uri: u }));
+    const pick = await vscode.window.showQuickPick(items.map((i) => i.label), { placeHolder: "Anexar arquivo do workspace ao contexto" });
+    if (!pick) return;
+    const chosen = items.find((i) => i.label === pick);
+    if (!chosen) return;
+    try {
+      this.addAttachment(pick, "workspace", await fs.readFile(chosen.uri.fsPath, "utf8"));
+    } catch {
+      this.post({ type: "notice", level: "error", message: `Não foi possível ler ${pick} (binário?).` });
+    }
+  }
+
+  async pickLocalFile(): Promise<void> {
+    const picks = await vscode.window.showOpenDialog({ canSelectMany: false, openLabel: "Anexar ao FORGE" });
+    if (!picks || !picks[0]) return;
+    const uri = picks[0];
+    try {
+      this.addAttachment(path.basename(uri.fsPath), "upload", await fs.readFile(uri.fsPath, "utf8"));
+    } catch {
+      this.post({ type: "notice", level: "error", message: "Não foi possível ler o arquivo (provavelmente binário). Suportado: texto." });
+    }
+  }
+
+  async addSelectionAttachment(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      this.post({ type: "notice", level: "warn", message: "Selecione um trecho no editor para anexar." });
+      return;
+    }
+    const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, editor.document.uri.fsPath) : editor.document.fileName;
+    this.addAttachment(`${path.basename(rel)} (seleção)`, "selection", editor.document.getText(editor.selection));
   }
 
   // ---- propostas -------------------------------------------------------------

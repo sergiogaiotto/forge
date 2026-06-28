@@ -208,6 +208,16 @@ lateral no topo do painel — para abrir o FORGE na direita sempre que precisar.
 
 ## 6. Recursos do dia a dia
 
+### Anexar contexto (botão 📎)
+No compositor, o botão **📎** abre um menu para dar mais contexto ao FORGE:
+- **Anexar seleção do editor** — o trecho que você selecionou.
+- **Anexar arquivo do workspace** — escolha um arquivo do projeto.
+- **Enviar do computador** — um arquivo de texto do seu disco (ex.: um CSV de amostra, um log de erro).
+
+Os anexos aparecem como **chips** (remova no **×**) e entram no contexto da próxima mensagem. Tudo
+fica **na rede interna**. *"Buscar na web" aparece bloqueada de propósito* — o FORGE não acessa a
+internet pública (soberania de dados); busca externa, se necessária, é configurada pelo admin via fonte interna.
+
 ### Skills (habilidades)
 São como "manuais de boas práticas" que o FORGE aplica **sozinho** quando o assunto bate. Há skills
 para pandas, polars, SQL, dbt, Airflow, Spark, PyTorch, MLOps, qualidade de dados e análise

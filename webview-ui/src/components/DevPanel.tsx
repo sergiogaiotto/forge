@@ -8,6 +8,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const forge = state.forge!;
   const [input, setInput] = useState("");
   const [tdd, setTdd] = useState(false);
+  const [attachMenu, setAttachMenu] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -125,7 +126,42 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
 
       {/* Compositor */}
       <div className="composer">
+        {attachMenu && (
+          <>
+            <div className="attach-backdrop" onClick={() => setAttachMenu(false)} />
+            <div className="attach-menu">
+              <button onClick={() => { setAttachMenu(false); post({ type: "context/addSelection" }); }}>
+                <Icon name="code" size={14} /> Anexar seleção do editor
+              </button>
+              <button onClick={() => { setAttachMenu(false); post({ type: "context/pickWorkspaceFile" }); }}>
+                <Icon name="paperclip" size={14} /> Anexar arquivo do workspace
+              </button>
+              <button onClick={() => { setAttachMenu(false); post({ type: "context/pickLocalFile" }); }}>
+                <Icon name="arrow-up" size={14} /> Enviar do computador
+              </button>
+              <button className="disabled" onClick={() => { setAttachMenu(false); post({ type: "context/webInfo" }); }}>
+                <Icon name="network" size={14} /> Buscar na web · bloqueada (rede interna)
+              </button>
+            </div>
+          </>
+        )}
         <div className="composer-box">
+          {state.attachments.length > 0 && (
+            <div className="attach-chips">
+              {state.attachments.map((a) => (
+                <span key={a.id} className="attach-chip" title={`${a.label} · ${a.bytes} chars`}>
+                  <Icon name={a.kind === "upload" ? "arrow-up" : a.kind === "selection" ? "code" : "paperclip"} size={12} />
+                  {a.label}
+                  <span
+                    style={{ cursor: "pointer", display: "inline-flex" }}
+                    onClick={() => post({ type: "context/removeAttachment", id: a.id })}
+                  >
+                    <Icon name="x" size={12} />
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             ref={taRef}
             placeholder="Pergunte ou descreva a tarefa…"
@@ -139,6 +175,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             rows={1}
           />
           <div className="composer-tools">
+            <span className="pill" title="Anexar contexto (arquivo, seleção, upload)" onClick={() => setAttachMenu((v) => !v)}>
+              <Icon name="paperclip" size={15} />
+            </span>
             <span
               className="pill"
               title="Modo TDD: escreve o teste primeiro, depois a implementação"
