@@ -140,8 +140,11 @@ O FORGE indexa o workspace e injeta os trechos mais relevantes na geração:
 - **GitHub Actions** — [`ci.yml`](.github/workflows/ci.yml) roda typecheck + testes + build + empacota
   o `.vsix` em cada push/PR; [`release.yml`](.github/workflows/release.yml) publica no **VS Marketplace**
   e **Open VSX** ao criar uma tag `v*`.
-- **GitLab CI** — [`.gitlab-ci.yml`](.gitlab-ci.yml) com estágios `verify → build → publish` (publish
-  manual em tags).
+- **FORGE Review na PR** — [`forge-review.yml`](.github/workflows/forge-review.yml) +
+  [`ci/forge-review.mjs`](ci/forge-review.mjs): revisão por IA da Pull Request **in-network** (HubGPU),
+  com comentários inline — o "CodeRabbit soberano" (código não sai da empresa). No-op se não configurado.
+- **GitLab CI** — [`.gitlab-ci.yml`](.gitlab-ci.yml) com estágios `verify → review → build → publish`
+  (revisão de MR + publish manual em tags).
 
 Secrets necessários: `VSCE_PAT` (Azure DevOps → VS Marketplace) e `OVSX_PAT` (Open VSX). A chave
 **pública** Ed25519 fica versionada em `src/license/embeddedKey.ts`; a privada nunca entra no repo.

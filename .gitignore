@@ -11,3 +11,14 @@ Thumbs.db
 
 # Arquivos gerados ao testar a extensão neste próprio repo
 /cobrinha.py
+
+# Artefatos Python (ambientes/caches gerados ao testar a extensão aqui)
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/

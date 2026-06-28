@@ -7,6 +7,7 @@
 
 stages:
   - verify
+  - review
   - build
   - publish
 
@@ -24,6 +25,18 @@ verify:
   script:
     - npm run typecheck
     - npm test
+
+# FORGE Review (in-network) — revisa o MR pelo HubGPU/gateway interno e publica
+# uma nota de revisão. Rode num runner in-network (tag) que alcance o LLM_BASE_URL.
+# Variáveis: LLM_BASE_URL, LLM_MODEL, LLM_AUTH_HEADER (opcional), GITLAB_TOKEN.
+forge:review:
+  stage: review
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $LLM_BASE_URL'
+  # tags: [in-network]   # descomente e ajuste para o seu runner interno
+  before_script: []
+  script:
+    - node ci/forge-review.mjs
 
 build:
   stage: build

@@ -1,0 +1,39 @@
+name: FORGE Review
+
+# Revisão de Pull Request por IA, rodando IN-NETWORK (o "CodeRabbit soberano").
+# Publica comentários inline na PR. O código não sai da empresa: o LLM é o
+# HubGPU/gateway interno, alcançável a partir de um runner self-hosted in-network.
+#
+# Para ativar, defina no repositório:
+#   - secret  FORGE_LLM_BASE_URL   (ex.: https://gateway.interno:8787/v1)
+#   - secret  FORGE_LLM_AUTH_HEADER (opcional, "Header: valor")
+#   - var     FORGE_LLM_MODEL      (ex.: openai/gpt-oss-120b)
+#   - var     FORGE_REVIEW_RUNNER  (ex.: self-hosted)  ← runner que alcança a rede interna
+# Sem FORGE_LLM_BASE_URL, o job roda mas é no-op (não falha a PR).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ${{ vars.FORGE_REVIEW_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: FORGE Review (in-network)
+        run: node ci/forge-review.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLM_BASE_URL: ${{ secrets.FORGE_LLM_BASE_URL }}
+          LLM_AUTH_HEADER: ${{ secrets.FORGE_LLM_AUTH_HEADER }}
+          LLM_MODEL: ${{ vars.FORGE_LLM_MODEL || 'openai/gpt-oss-120b' }}

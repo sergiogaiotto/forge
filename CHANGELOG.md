@@ -3,6 +3,15 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## CI — FORGE Review na PR — 2026-06-28 (Fase C; não altera o `.vsix`)
+
+### Added
+- **Revisão de Pull/Merge Request por IA, in-network** ("CodeRabbit soberano"):
+  [`ci/forge-review.mjs`](ci/forge-review.mjs) + workflow
+  [`forge-review.yml`](.github/workflows/forge-review.yml) (GitHub, comentários inline) e job
+  `forge:review` no GitLab CI. O diff é revisado pelo HubGPU/gateway **interno** — o código não sai
+  da empresa. No-op seguro quando `FORGE_LLM_BASE_URL` não está definido.
+
 ## [1.2.0] — 2026-06-28
 
 ### Added — Fase B: TDD nativo

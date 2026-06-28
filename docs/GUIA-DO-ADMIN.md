@@ -441,6 +441,33 @@ Princípios que sustentam a segurança do FORGE:
 
 ---
 
+## 🔍 FORGE Review na Pull Request (revisão soberana na CI)
+
+Além da revisão no editor (Guia do Usuário), o FORGE pode **revisar cada Pull/Merge Request
+automaticamente** e comentar inline — como o CodeRabbit, mas **in-network**: o diff é revisado pelo
+**HubGPU/gateway interno**, então o código **não sai da empresa**.
+
+**Como funciona:** o workflow [`forge-review.yml`](../.github/workflows/forge-review.yml) roda o script
+[`ci/forge-review.mjs`](../ci/forge-review.mjs) num **runner que alcança a rede interna**. O script pega
+o diff da PR, pede uma revisão JSON ao LLM e publica os achados como comentários inline (GitHub) ou uma
+nota (GitLab).
+
+**GitHub — para ativar:**
+1. Provisione um **runner self-hosted in-network** (que alcance o `LLM_BASE_URL`).
+2. Em *Settings → Secrets and variables → Actions*:
+   - secret **`FORGE_LLM_BASE_URL`** — ex.: `https://gateway.interno:8787/v1` (ou o HubGPU).
+   - secret **`FORGE_LLM_AUTH_HEADER`** — opcional (`Header: valor`).
+   - var **`FORGE_LLM_MODEL`** — ex.: `openai/gpt-oss-120b`.
+   - var **`FORGE_REVIEW_RUNNER`** — o label do runner interno (ex.: `self-hosted`).
+3. Abra uma PR → o FORGE comenta. **Sem `FORGE_LLM_BASE_URL`, o job é no-op** (não falha a PR).
+
+**GitLab:** o job `forge:review` em [`.gitlab-ci.yml`](../.gitlab-ci.yml) roda em
+`merge_request_event` quando `LLM_BASE_URL` está definido; ajuste a `tag` para o runner interno e defina
+`LLM_BASE_URL`, `LLM_MODEL`, `GITLAB_TOKEN`.
+
+> 🔒 O diferencial: a inteligência da revisão é a mesma de uma ferramenta SaaS, mas roda na **sua
+> infraestrutura** — soberania de dados (LGPD, segredo industrial).
+
 ## 17. Glossário para leigos
 
 | Termo | Em palavras simples |
