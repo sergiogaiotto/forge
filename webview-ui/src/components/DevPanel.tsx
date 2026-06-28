@@ -7,6 +7,7 @@ import { DiffView } from "./DiffView";
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
   const [input, setInput] = useState("");
+  const [tdd, setTdd] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -20,8 +21,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const send = () => {
     const text = input.trim();
     if (!text || state.busy) return;
-    dispatch({ kind: "pushUser", text });
-    post({ type: "chat/send", text });
+    dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
+    post({ type: "chat/send", text, tdd });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
   };
@@ -135,12 +136,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             rows={1}
           />
           <div className="composer-tools">
-            <Icon name="paperclip" size={15} />
-            <span className="pill" title="Skills habilitadas">
-              <Icon name="puzzle" size={14} color="#e0a85a" /> Skills
+            <span
+              className="pill"
+              title="Modo TDD: escreve o teste primeiro, depois a implementação"
+              onClick={() => setTdd((v) => !v)}
+              style={{ color: tdd ? "#e0863c" : undefined, fontWeight: tdd ? 500 : undefined }}
+            >
+              <Icon name={tdd ? "circle-check" : "circle"} size={14} color={tdd ? "#e0863c" : undefined} /> TDD
             </span>
-            <span className="pill" title="MCP in-network">
-              <Icon name="plug" size={14} color="#8aa0b8" /> MCP
+            <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>
+              <Icon name="terminal" size={14} color="#86c98e" /> Testes
             </span>
             <span className="pill" title={forge.provider.modelId}>
               <Icon name="cpu" size={14} /> {forge.provider.modelId}
@@ -341,12 +346,16 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
 function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispatch<Action> }): JSX.Element {
   const [open, setOpen] = useState(!run.ok);
   const status = run.skippedReason ? "skip" : run.ok ? "ok" : "fail";
-  const fixText = `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
+  const isTests = run.label === "testes";
+  const title = run.label ? run.label : run.command || "execução";
+  const fixText = isTests
+    ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
+    : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
   return (
     <div className="run-card">
       <div className={`run-head ${status}`} onClick={() => setOpen((v) => !v)}>
-        <Icon name={status === "ok" ? "check" : status === "skip" ? "info-circle" : "alert-triangle"} size={13} />
-        <span style={{ fontFamily: "var(--mono)" }}>{run.command || "execução"}</span>
+        <Icon name={status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle"} size={13} />
+        <span style={{ fontFamily: "var(--mono)" }}>{title}</span>
         <div className="spacer" />
         {run.skippedReason ? (
           <span>indisponível</span>

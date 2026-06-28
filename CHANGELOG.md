@@ -3,6 +3,17 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.2.0] — 2026-06-28
+
+### Added — Fase B: TDD nativo
+- **Modo TDD (test-first).** Toggle **TDD** no compositor: o FORGE escreve os
+  **testes primeiro** (pytest, "vermelho") e depois a implementação mínima
+  ("verde"), entregues como dois diffs aplicáveis.
+- **Rodar testes.** Botão **Testes** / comando **FORGE: Rodar testes (pytest)**
+  executa a suíte na raiz do workspace e mostra o resultado; em falha, o
+  **"Corrigir com FORGE"** realimenta a saída do pytest e itera até o verde.
+  Configurável por `forge.test.enabled` / `forge.test.command` (default `pytest -q`).
+
 ## [1.1.0] — 2026-06-28
 
 ### Added — Fase A do ciclo completo (depois do "Aplicar")

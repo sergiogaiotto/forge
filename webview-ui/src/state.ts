@@ -2,6 +2,7 @@ import type { DiffProposal, ExtToWebview, ForgeState, ValidatorResult } from "..
 
 export interface RunResultData {
   filePath: string;
+  label?: string;
   command: string;
   ok: boolean;
   exitCode: number | null;
@@ -169,6 +170,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "run/result": {
       const data: RunResultData = {
         filePath: msg.filePath,
+        label: msg.label,
         command: msg.command,
         ok: msg.ok,
         exitCode: msg.exitCode,

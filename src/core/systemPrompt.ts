@@ -33,6 +33,25 @@ Protocolo de edição de arquivos (OBRIGATÓRIO quando você propõe mudanças e
 - Se a tarefa não exigir mudança de arquivo (ex.: explicação), responda normalmente sem bloco.`;
 }
 
+// Prompt do Modo TDD (test-first): o modelo escreve os testes antes da
+// implementação, para o ciclo vermelho → verde → refatora.
+export function buildTddPrompt(workspaceName: string): string {
+  return (
+    buildBasePrompt(workspaceName) +
+    `
+
+MODO TDD (test-first) — OBRIGATÓRIO nesta tarefa:
+1. PRIMEIRO, escreva os TESTES que especificam o comportamento desejado (eles devem falhar agora —
+   estado "vermelho"). Use pytest: arquivo \`test_*.py\` (ou \`*_test.py\`), nomes de teste descritivos,
+   asserts claros e casos de borda. Emita o teste como um bloco \`${FORGE_FILE_BLOCK_LANG}\`.
+2. DEPOIS, escreva a IMPLEMENTAÇÃO mínima que faz os testes passarem ("verde"), em OUTRO bloco de
+   arquivo (nunca misture teste e implementação no mesmo arquivo).
+3. Explique em 1–2 linhas o contrato que os testes garantem.
+4. Se, após rodar, algum teste falhar, ajuste a IMPLEMENTAÇÃO — não enfraqueça os testes sem
+   justificativa explícita.`
+  );
+}
+
 // Prompt do revisor de código (RF: "CodeRabbit soberano" — roda no HubGPU
 // in-network, o código não sai da rede). Revisão multi-lente, em pt-BR.
 export function buildReviewPrompt(): string {

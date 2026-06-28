@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, licença Ed25519, observabilidade e MCP in-network.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -108,6 +108,12 @@
         "title": "Revisar alterações (IA in-network)",
         "category": "FORGE",
         "icon": "$(checklist)"
+      },
+      {
+        "command": "forge.runTests",
+        "title": "Rodar testes (pytest)",
+        "category": "FORGE",
+        "icon": "$(beaker)"
       },
       {
         "command": "forge.signOut",
@@ -349,6 +355,16 @@
           "type": "object",
           "default": {},
           "markdownDescription": "Sobrescreve os comandos de execução por extensão. Ex.: `{ \".py\": \"python {file}\" }`. `{file}` é o caminho do arquivo. Mesclado sobre os padrões."
+        },
+        "forge.test.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Habilita o **Modo TDD** e o comando **Rodar testes**."
+        },
+        "forge.test.command": {
+          "type": "string",
+          "default": "pytest -q",
+          "markdownDescription": "Comando da suíte de testes, executado na raiz do workspace (ex.: `pytest -q`, `pytest tests/`, `npm test`)."
         }
       }
     }

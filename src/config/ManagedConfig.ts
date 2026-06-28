@@ -87,6 +87,14 @@ export class ManagedConfig {
     };
   }
 
+  test(): { enabled: boolean; command: string } {
+    const c = this.cfg();
+    return {
+      enabled: c.get<boolean>("test.enabled", true),
+      command: c.get<string>("test.command", "pytest -q"),
+    };
+  }
+
   onChange(listener: () => void): vscode.Disposable {
     return vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("forge")) listener();

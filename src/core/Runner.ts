@@ -51,8 +51,12 @@ export class Runner {
     }
     const abs = this.cwd ? path.join(this.cwd, relPath) : relPath;
     const command = resolved.template.replace(/\{file\}/g, quote(abs));
-    const started = Date.now();
+    return this.runRaw(command, timeoutMs);
+  }
 
+  // Executa um comando arbitrário na raiz do workspace (ex.: a suíte de testes).
+  runRaw(command: string, timeoutMs: number): Promise<RunResult> {
+    const started = Date.now();
     return new Promise<RunResult>((resolve) => {
       exec(command, { cwd: this.cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
         const durationMs = Date.now() - started;

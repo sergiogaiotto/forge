@@ -47,6 +47,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await focusView();
       await controller.reviewChanges();
     }),
+    vscode.commands.registerCommand("forge.runTests", async () => {
+      await focusView();
+      await controller.runTests();
+    }),
     vscode.commands.registerCommand("forge.signOut", async () => {
       await controller.signOut();
       void vscode.window.showInformationMessage("FORGE: licença e credenciais removidas.");

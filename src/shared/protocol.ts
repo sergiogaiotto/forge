@@ -126,6 +126,7 @@ export type ExtToWebview =
       type: "run/result";
       proposalId?: string;
       filePath: string;
+      label?: string; // ex.: "testes" — quando não é a execução de um arquivo
       command: string;
       ok: boolean;
       exitCode: number | null;
@@ -145,7 +146,8 @@ export type WebviewToExt =
   | { type: "provider/test"; setup: ProviderSetup }
   | { type: "provider/openSettings" }
   | { type: "embeddings/test" }
-  | { type: "chat/send"; text: string }
+  | { type: "chat/send"; text: string; tdd?: boolean }
+  | { type: "tests/run" }
   | { type: "chat/abort"; taskId: string }
   | { type: "proposal/apply"; proposalId: string }
   | { type: "proposal/discard"; proposalId: string }

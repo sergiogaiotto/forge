@@ -35,7 +35,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
-import { buildBasePrompt, buildReviewPrompt } from "./systemPrompt";
+import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -339,7 +339,10 @@ export class Controller {
         await this.testEmbeddings();
         break;
       case "chat/send":
-        await this.startTask(msg.text);
+        await this.startTask(msg.text, msg.tdd ? "tdd" : "normal");
+        break;
+      case "tests/run":
+        await this.runTests();
         break;
       case "chat/abort":
         this.currentTask?.abort();
@@ -513,7 +516,7 @@ export class Controller {
 
   // ---- geração ---------------------------------------------------------------
 
-  async startTask(text: string): Promise<void> {
+  async startTask(text: string, mode: "normal" | "tdd" = "normal"): Promise<void> {
     if (!text.trim()) return;
     // RF-010/015: condiciona a inferência a uma sessão válida.
     if (!(await this.ensureSession())) {
@@ -544,8 +547,9 @@ export class Controller {
     );
 
     const retrievedContext = await this.gatherContext(text);
+    const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
     const assembled = this.assembler.assemble({
-      basePrompt: buildBasePrompt(this.workspaceName()),
+      basePrompt,
       discoverySkills: discovery,
       activatedSkills: activated,
       retrievedContext,
@@ -716,6 +720,33 @@ export class Controller {
       type: "run/result",
       proposalId,
       filePath: relPath,
+      command: result.command,
+      ok: result.ok,
+      exitCode: result.exitCode,
+      output: result.output,
+      durationMs: result.durationMs,
+      skippedReason: result.skippedReason,
+    });
+  }
+
+  // Roda a suíte de testes (pytest por padrão) — TDD / quality gate de testes.
+  async runTests(): Promise<void> {
+    const testCfg = this.config.test();
+    if (!testCfg.enabled) {
+      this.post({ type: "notice", level: "warn", message: "Testes desabilitados (forge.test.enabled = false)." });
+      return;
+    }
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para rodar os testes." });
+      return;
+    }
+    const runner = new Runner(ws);
+    const result = await runner.runRaw(testCfg.command, this.config.run().timeoutSeconds * 1000);
+    this.post({
+      type: "run/result",
+      filePath: "",
+      label: "testes",
       command: result.command,
       ok: result.ok,
       exitCode: result.exitCode,

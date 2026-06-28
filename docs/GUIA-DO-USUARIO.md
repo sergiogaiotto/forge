@@ -156,6 +156,12 @@ painel.
   roda de novo. É o ciclo *rodar → corrigir → rodar* sem copiar-colar erro nenhum.
 - Também dá para rodar o arquivo aberto pelo comando **FORGE: Executar arquivo atual**.
 
+**🧪 Modo TDD (testes primeiro)**
+- No compositor, ligue o selo **TDD** antes de enviar a tarefa. O FORGE escreve **os testes primeiro**
+  (pytest) e, em seguida, a implementação — você recebe dois diffs (teste + código) para aplicar.
+- Clique no selo **Testes** (ou **FORGE: Rodar testes**) para rodar a suíte. Se algum teste falhar, use
+  **"Corrigir com FORGE"** — ele lê a saída do pytest e ajusta o código, repetindo até passar.
+
 **🔎 Revisar alterações (revisão por IA, interna)**
 - Clique no botão **Revisar** (✓ no topo do painel) ou use **FORGE: Revisar alterações**.
 - O FORGE revisa **suas mudanças** (`git diff`) sob várias lentes — correção, segurança, dados/LGPD,
@@ -280,6 +286,7 @@ Tecle `Ctrl+Shift+P` (abre a "paleta de comandos"), digite **"FORGE"** e escolha
 | **FORGE: Ativar licença** | reabre a tela de licença |
 | **FORGE: Configurar provedor** | troca a IA / ajusta o provedor |
 | **FORGE: Executar arquivo atual** | roda o arquivo aberto e mostra a saída |
+| **FORGE: Rodar testes (pytest)** | roda a suíte de testes e mostra o resultado |
 | **FORGE: Revisar alterações** | revisão por IA (interna) do seu `git diff` |
 | **FORGE: Reindexar codebase (RAG)** | relê o projeto para a busca |
 | **FORGE: Reindexar skills** | recarrega o catálogo de habilidades |
