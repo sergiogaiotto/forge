@@ -127,6 +127,13 @@ const PATHS: Record<string, React.ReactNode> = {
       <path d="M21 21l-6-6" />
     </>
   ),
+  "player-play": <path d="M7 4l12 8-12 8z" />,
+  terminal: (
+    <>
+      <path d="M5 7l5 5-5 5" />
+      <path d="M12 19h7" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof PATHS;

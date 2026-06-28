@@ -314,8 +314,47 @@ body {
   gap: 3px;
 }
 
+.run-card {
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 8px 0 10px;
+}
+.run-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  background: var(--surface);
+}
+.run-head.ok {
+  color: var(--green-2);
+}
+.run-head.fail {
+  color: #d98989;
+}
+.run-head.skip {
+  color: var(--muted);
+}
+.run-output {
+  margin: 0;
+  padding: 8px 10px;
+  background: #1c1c1c;
+  color: #cfcfcf;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid #2e2e2e;
+}
 .actions {
   display: flex;
+  align-items: center;
   gap: 7px;
   margin-bottom: 6px;
   flex-wrap: wrap;

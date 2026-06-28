@@ -78,6 +78,15 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("identity.requireEmail", false);
   }
 
+  run(): { enabled: boolean; timeoutSeconds: number; commands: Record<string, string> } {
+    const c = this.cfg();
+    return {
+      enabled: c.get<boolean>("run.enabled", true),
+      timeoutSeconds: c.get<number>("run.timeoutSeconds", 120),
+      commands: c.get<Record<string, string>>("run.commands", {}),
+    };
+  }
+
   onChange(listener: () => void): vscode.Disposable {
     return vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("forge")) listener();

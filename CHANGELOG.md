@@ -3,6 +3,19 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.1.0] — 2026-06-28
+
+### Added — Fase A do ciclo completo (depois do "Aplicar")
+- **Executar com auto-cura.** Botão **Executar** na proposta aplicada (e comando
+  **FORGE: Executar arquivo atual**). Detecta o tipo de arquivo, roda localmente,
+  captura saída e *exit code*. Em caso de falha, o cartão oferece **"Corrigir com
+  FORGE"** — realimenta o erro e gera a correção (loop humano-no-controle). Configurável
+  por `forge.run.enabled` / `forge.run.timeoutSeconds` / `forge.run.commands`.
+- **Revisão de código in-network ("CodeRabbit soberano").** Comando/botão **FORGE:
+  Revisar alterações** revisa o `git diff` do workspace pelo HubGPU — o código **não
+  sai da rede**. Revisão multi-lente (correção, segurança, dados/LGPD, performance,
+  estilo), em pt-BR, com achados por severidade e correções aplicáveis com um clique.
+
 ## [1.0.4] — 2026-06-28
 
 ### Changed

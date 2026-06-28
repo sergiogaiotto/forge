@@ -142,6 +142,28 @@ E só. Você revisa, aplica, segue codando. Pode continuar a conversa pedindo aj
 
 ---
 
+## 4.1. Depois de aplicar: rodar e revisar
+
+Aplicar não é o fim — o FORGE ajuda a **fazer o código funcionar** e a **revisá-lo**, sem sair do
+painel.
+
+**▶️ Executar (com auto-cura)**
+- Depois de **Aplicar**, aparece o botão **Executar** na proposta. Clique para rodar o arquivo
+  (o FORGE escolhe o comando certo: `python`, `node`, notebook, etc.).
+- O resultado aparece num cartão: ✅ sucesso ou 🔴 erro, com a saída do terminal (clique para
+  expandir).
+- **Deu erro?** Clique em **"Corrigir com FORGE"** — ele lê o erro, propõe a correção e você aplica e
+  roda de novo. É o ciclo *rodar → corrigir → rodar* sem copiar-colar erro nenhum.
+- Também dá para rodar o arquivo aberto pelo comando **FORGE: Executar arquivo atual**.
+
+**🔎 Revisar alterações (revisão por IA, interna)**
+- Clique no botão **Revisar** (✓ no topo do painel) ou use **FORGE: Revisar alterações**.
+- O FORGE revisa **suas mudanças** (`git diff`) sob várias lentes — correção, segurança, dados/LGPD,
+  performance e estilo — e lista os achados por severidade (🔴/🟠/🟡), com a correção sugerida.
+- Quando a correção é objetiva, ela vem como um **diff aplicável** (botão Aplicar).
+- 🔒 A revisão roda **na rede interna (HubGPU)** — seu código **não sai da empresa** (diferente de
+  ferramentas SaaS de revisão).
+
 ## 5. Conhecendo a tela
 
 O painel do FORGE tem três áreas:
@@ -257,6 +279,8 @@ Tecle `Ctrl+Shift+P` (abre a "paleta de comandos"), digite **"FORGE"** e escolha
 | **FORGE: Nova tarefa** | foca o painel para uma nova pergunta |
 | **FORGE: Ativar licença** | reabre a tela de licença |
 | **FORGE: Configurar provedor** | troca a IA / ajusta o provedor |
+| **FORGE: Executar arquivo atual** | roda o arquivo aberto e mostra a saída |
+| **FORGE: Revisar alterações** | revisão por IA (interna) do seu `git diff` |
 | **FORGE: Reindexar codebase (RAG)** | relê o projeto para a busca |
 | **FORGE: Reindexar skills** | recarrega o catálogo de habilidades |
 | **FORGE: Mostrar logs** | abre o registro técnico (útil para reportar erros) |

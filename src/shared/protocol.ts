@@ -122,6 +122,17 @@ export type ExtToWebview =
   | { type: "validation/result"; proposalId: string; results: ValidatorResult[]; gateOk: boolean; running: boolean }
   | { type: "proposal/applied"; proposalId: string }
   | { type: "proposal/discarded"; proposalId: string }
+  | {
+      type: "run/result";
+      proposalId?: string;
+      filePath: string;
+      command: string;
+      ok: boolean;
+      exitCode: number | null;
+      output: string;
+      durationMs: number;
+      skippedReason?: string;
+    }
   | { type: "mcp/approvalRequest"; requestId: string; server: string; tool: string; scope: string; argsPreview: string };
 
 // ---- Webview → Host da extensão ------------------------------------------------
@@ -139,6 +150,8 @@ export type WebviewToExt =
   | { type: "proposal/apply"; proposalId: string }
   | { type: "proposal/discard"; proposalId: string }
   | { type: "proposal/viewDiff"; proposalId: string }
+  | { type: "run/file"; filePath: string; proposalId?: string }
+  | { type: "review/changes" }
   | { type: "skill/toggle"; name: string; enabled: boolean }
   | { type: "mcp/approvalResponse"; requestId: string; approved: boolean }
   | { type: "signOut" }

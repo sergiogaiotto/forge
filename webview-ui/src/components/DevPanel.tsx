@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
-import type { Action, MessageVM, ProposalVM, UIState } from "../state";
+import type { Action, MessageVM, ProposalVM, RunResultData, UIState } from "../state";
 import { post } from "../vscode";
 import { DiffView } from "./DiffView";
 
@@ -53,6 +53,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               <Icon name="activity" size={13} /> trace
             </span>
           )}
+          <button
+            className="icon-btn"
+            title="Revisar alterações (IA in-network)"
+            onClick={() => {
+              dispatch({ kind: "pushUser", text: "Revisar minhas alterações (git diff)." });
+              post({ type: "review/changes" });
+            }}
+          >
+            <Icon name="list-check" size={15} />
+          </button>
           <button className="icon-btn" title="Nova conversa" onClick={() => dispatch({ kind: "newConversation" })}>
             <Icon name="history" size={15} />
           </button>
@@ -84,7 +94,12 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               </div>
             </div>
           )}
-          {state.messages.map((m) => (m.role === "user" ? <UserBubble key={m.id} m={m} /> : <AssistantBlock key={m.id} m={m} />))}
+          {state.messages.map((m) =>
+            m.role === "user" ? <UserBubble key={m.id} m={m} /> : <AssistantBlock key={m.id} m={m} dispatch={dispatch} />
+          )}
+          {state.runs.map((r) => (
+            <RunCard key={r.id} run={r} dispatch={dispatch} />
+          ))}
         </div>
 
         {state.messages.length > 0 && (
@@ -199,7 +214,7 @@ function UserBubble({ m }: { m: MessageVM }): JSX.Element {
   return <div className="user-msg">{m.text}</div>;
 }
 
-function AssistantBlock({ m }: { m: MessageVM }): JSX.Element {
+function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatch<Action> }): JSX.Element {
   const [showReasoning, setShowReasoning] = useState(false);
   const thinking = m.streaming && !m.text && !m.proposals.length;
   return (
@@ -235,7 +250,7 @@ function AssistantBlock({ m }: { m: MessageVM }): JSX.Element {
         </div>
       )}
       {m.proposals.map((p) => (
-        <ProposalCard key={p.proposal.id} p={p} />
+        <ProposalCard key={p.proposal.id} p={p} dispatch={dispatch} />
       ))}
       {m.error && (
         <div className="validation fail" style={{ marginTop: 4 }}>
@@ -246,7 +261,7 @@ function AssistantBlock({ m }: { m: MessageVM }): JSX.Element {
   );
 }
 
-function ProposalCard({ p }: { p: ProposalVM }): JSX.Element {
+function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch<Action> }): JSX.Element {
   const v = p.validation;
   const gateFailed = v && !v.running && !v.gateOk;
   const labels = v?.results.map((r) => r.label).join(" + ") || "validação";
@@ -284,8 +299,18 @@ function ProposalCard({ p }: { p: ProposalVM }): JSX.Element {
       )}
 
       {p.status === "applied" ? (
-        <div className="status-applied">
-          <Icon name="check" size={13} /> Aplicado em {p.proposal.filePath}
+        <div className="actions">
+          <div className="status-applied" style={{ marginBottom: 0 }}>
+            <Icon name="check" size={13} /> Aplicado em {p.proposal.filePath}
+          </div>
+          <div className="spacer" />
+          <button
+            className="btn"
+            title="Executar este arquivo (com auto-cura)"
+            onClick={() => post({ type: "run/file", filePath: p.proposal.filePath, proposalId: p.proposal.id })}
+          >
+            <Icon name="player-play" size={12} /> Executar
+          </button>
         </div>
       ) : p.status === "discarded" ? (
         <div className="status-discarded">Descartado.</div>
@@ -304,6 +329,47 @@ function ProposalCard({ p }: { p: ProposalVM }): JSX.Element {
           </button>
           <button className="btn" onClick={() => post({ type: "proposal/discard", proposalId: p.proposal.id })}>
             <Icon name="x" size={13} /> Descartar
+          </button>
+        </div>
+      )}
+
+      {p.run && <RunCard run={p.run} dispatch={dispatch} />}
+    </div>
+  );
+}
+
+function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispatch<Action> }): JSX.Element {
+  const [open, setOpen] = useState(!run.ok);
+  const status = run.skippedReason ? "skip" : run.ok ? "ok" : "fail";
+  const fixText = `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
+  return (
+    <div className="run-card">
+      <div className={`run-head ${status}`} onClick={() => setOpen((v) => !v)}>
+        <Icon name={status === "ok" ? "check" : status === "skip" ? "info-circle" : "alert-triangle"} size={13} />
+        <span style={{ fontFamily: "var(--mono)" }}>{run.command || "execução"}</span>
+        <div className="spacer" />
+        {run.skippedReason ? (
+          <span>indisponível</span>
+        ) : (
+          <span>
+            {run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
+          </span>
+        )}
+        <Icon name="chevron-down" size={12} style={{ transform: open ? "none" : "rotate(-90deg)", transition: "transform .12s" }} />
+      </div>
+      {open && (run.skippedReason || run.output) && (
+        <pre className="run-output">{run.skippedReason ? run.skippedReason : run.output || "(sem saída)"}</pre>
+      )}
+      {status === "fail" && (
+        <div className="actions" style={{ marginTop: 7 }}>
+          <button
+            className="btn p"
+            onClick={() => {
+              dispatch({ kind: "pushUser", text: fixText });
+              post({ type: "chat/send", text: fixText });
+            }}
+          >
+            <Icon name="refresh" size={12} /> Corrigir com FORGE
           </button>
         </div>
       )}

@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, licença Ed25519, observabilidade e MCP in-network.",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -98,6 +98,18 @@
         "icon": "$(database)"
       },
       {
+        "command": "forge.runActiveFile",
+        "title": "Executar arquivo atual",
+        "category": "FORGE",
+        "icon": "$(play)"
+      },
+      {
+        "command": "forge.reviewChanges",
+        "title": "Revisar alterações (IA in-network)",
+        "category": "FORGE",
+        "icon": "$(checklist)"
+      },
+      {
         "command": "forge.signOut",
         "title": "Sair (limpar licença e credenciais)",
         "category": "FORGE"
@@ -127,14 +139,19 @@
           "group": "navigation@2"
         },
         {
-          "command": "forge.reindexCodebase",
+          "command": "forge.reviewChanges",
           "when": "view == forge.sidebar",
           "group": "navigation@3"
         },
         {
-          "command": "forge.showOutput",
+          "command": "forge.reindexCodebase",
           "when": "view == forge.sidebar",
           "group": "navigation@4"
+        },
+        {
+          "command": "forge.showOutput",
+          "when": "view == forge.sidebar",
+          "group": "navigation@6"
         }
       ]
     },
@@ -317,6 +334,21 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Exige que o dev informe o **e-mail** no setup inicial (vira o `userId` do trace no Langfuse). Use `true` quando as licenças são compartilhadas/genéricas. Mesmo com `false`, o e-mail é solicitado se o `subject` da licença não for um e-mail válido."
+        },
+        "forge.run.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Permite **executar** o código gerado pelo painel (botão Executar / comando). A execução é local; o egress deny-by-default continua valendo."
+        },
+        "forge.run.timeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "markdownDescription": "Tempo máximo (s) de execução antes de abortar."
+        },
+        "forge.run.commands": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Sobrescreve os comandos de execução por extensão. Ex.: `{ \".py\": \"python {file}\" }`. `{file}` é o caminho do arquivo. Mesclado sobre os padrões."
         }
       }
     }

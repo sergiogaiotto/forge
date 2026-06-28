@@ -34,7 +34,9 @@ import {
 } from "../shared/protocol";
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
-import { buildBasePrompt } from "./systemPrompt";
+import { exec } from "node:child_process";
+import { buildBasePrompt, buildReviewPrompt } from "./systemPrompt";
+import { Runner } from "./Runner";
 import { Task } from "./Task";
 
 const GS_PROVIDER = "forge.provider";
@@ -350,6 +352,12 @@ export class Controller {
         break;
       case "proposal/viewDiff":
         await this.viewDiff(msg.proposalId);
+        break;
+      case "run/file":
+        await this.runFile(msg.filePath, msg.proposalId);
+        break;
+      case "review/changes":
+        await this.reviewChanges();
         break;
       case "skill/toggle":
         await this.toggleSkill(msg.name, msg.enabled);
@@ -675,6 +683,123 @@ export class Controller {
       `${entry.proposal.filePath} — FORGE (atual ↔ proposto)`
     );
   }
+
+  // ---- execução (com auto-cura via UI) ---------------------------------------
+
+  async runActiveFile(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    const ws = this.workspaceRoot();
+    if (!editor || editor.document.uri.scheme !== "file" || !ws) {
+      void vscode.window.showWarningMessage("FORGE: abra um arquivo do workspace para executar.");
+      return;
+    }
+    await editor.document.save();
+    const rel = path.relative(ws, editor.document.uri.fsPath).split(path.sep).join("/");
+    await this.runFile(rel);
+    await vscode.commands.executeCommand("forge.sidebar.focus");
+  }
+
+  async runFile(relPath: string, proposalId?: string): Promise<void> {
+    const cfg = this.config.run();
+    if (!cfg.enabled) {
+      this.post({ type: "notice", level: "warn", message: "Execução desabilitada (forge.run.enabled = false)." });
+      return;
+    }
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para executar." });
+      return;
+    }
+    const runner = new Runner(ws);
+    const result = await runner.run(relPath, cfg.commands, cfg.timeoutSeconds * 1000);
+    this.post({
+      type: "run/result",
+      proposalId,
+      filePath: relPath,
+      command: result.command,
+      ok: result.ok,
+      exitCode: result.exitCode,
+      output: result.output,
+      durationMs: result.durationMs,
+      skippedReason: result.skippedReason,
+    });
+  }
+
+  // ---- revisão de código (in-network) ----------------------------------------
+
+  async reviewChanges(): Promise<void> {
+    if (!(await this.ensureSession())) {
+      this.post({ type: "notice", level: "error", message: "Licença requerida para revisar." });
+      return;
+    }
+    if (this.resolveIdentity().emailRequired) {
+      this.post({ type: "notice", level: "error", message: "Informe seu e-mail na configuração inicial antes de revisar." });
+      return;
+    }
+    const runtime = await this.runtimeProviderConfig();
+    if (!runtime) {
+      this.post({ type: "notice", level: "error", message: "Nenhum provedor configurado." });
+      return;
+    }
+
+    const diff = await this.gatherDiff();
+    if (!diff) {
+      this.post({ type: "notice", level: "info", message: "Nenhuma alteração para revisar." });
+      return;
+    }
+
+    const provider = createProvider(runtime, this.egress);
+    const taskId = `review_${Date.now()}`;
+    const task = new Task({
+      taskId,
+      provider,
+      systemPrompt: buildReviewPrompt(),
+      messages: [{ role: "user", content: `Revise estas alterações do workspace (\`git diff\`):\n\n\`\`\`diff\n${diff}\n\`\`\`` }],
+      activatedSkillNames: ["FORGE Review (in-network)"],
+      validators: [],
+      skillValidator: new SkillValidator(this.workspaceRoot()),
+      workspaceRoot: this.workspaceRoot(),
+      timeoutMs: runtime.timeoutSeconds * 1000,
+      extraHeaders: this.buildTraceHeaders(["review"], runtime.modelId, runtime.type),
+      post: (m) => this.post(m),
+    });
+    this.currentTask = task;
+    await task.run();
+  }
+
+  // git diff (working tree vs HEAD); fallback: conteúdo do editor ativo.
+  private async gatherDiff(): Promise<string> {
+    const ws = this.workspaceRoot();
+    if (ws) {
+      const tryDiff = async (args: string) => {
+        try {
+          return await execCapture(`git --no-pager ${args}`, ws);
+        } catch {
+          return "";
+        }
+      };
+      let out = await tryDiff("diff HEAD");
+      if (!out.trim()) out = await tryDiff("diff");
+      if (!out.trim()) out = await tryDiff("diff --staged");
+      if (out.trim()) return out.slice(0, 24000);
+    }
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.uri.scheme === "file") {
+      const rel = ws ? path.relative(ws, editor.document.uri.fsPath) : editor.document.fileName;
+      const text = editor.document.getText().slice(0, 20000);
+      return `// (sem git: revisando o arquivo aberto ${rel})\n${text}`;
+    }
+    return "";
+  }
+}
+
+function execCapture(command: string, cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    exec(command, { cwd, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
+    });
+  });
 }
 
 function dedupeValidators(validators: SkillValidatorSpec[]): SkillValidatorSpec[] {

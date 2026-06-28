@@ -1,9 +1,20 @@
 import type { DiffProposal, ExtToWebview, ForgeState, ValidatorResult } from "../../src/shared/protocol";
 
+export interface RunResultData {
+  filePath: string;
+  command: string;
+  ok: boolean;
+  exitCode: number | null;
+  output: string;
+  durationMs: number;
+  skippedReason?: string;
+}
+
 export interface ProposalVM {
   proposal: DiffProposal;
   validation?: { running: boolean; results: ValidatorResult[]; gateOk: boolean };
   status: "pending" | "applied" | "discarded";
+  run?: RunResultData;
 }
 
 export interface MessageVM {
@@ -34,6 +45,7 @@ export interface ApprovalRequest {
 export interface UIState {
   forge: ForgeState | null;
   messages: MessageVM[];
+  runs: (RunResultData & { id: string })[];
   busy: boolean;
   toast: Toast | null;
   approval: ApprovalRequest | null;
@@ -44,6 +56,7 @@ export interface UIState {
 export const initialState: UIState = {
   forge: null,
   messages: [],
+  runs: [],
   busy: false,
   toast: null,
   approval: null,
@@ -61,6 +74,7 @@ export type Action =
   | { kind: "clearToast" };
 
 let toastSeq = 0;
+let runSeq = 0;
 
 // Remove o bloco ```forge-file path=...``` de um determinado caminho do texto transmitido
 // para que o cartão de diff não seja duplicado pela cerca bruta.
@@ -84,7 +98,7 @@ export function reducer(state: UIState, action: Action): UIState {
     case "clearApproval":
       return { ...state, approval: null };
     case "newConversation":
-      return { ...state, messages: [], busy: false };
+      return { ...state, messages: [], runs: [], busy: false };
     case "providerTestPending":
       return { ...state, providerTest: { ok: false, message: "", pending: true } };
     case "embeddingsTestPending":
@@ -152,6 +166,19 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "applied" }));
     case "proposal/discarded":
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "discarded" }));
+    case "run/result": {
+      const data: RunResultData = {
+        filePath: msg.filePath,
+        command: msg.command,
+        ok: msg.ok,
+        exitCode: msg.exitCode,
+        output: msg.output,
+        durationMs: msg.durationMs,
+        skippedReason: msg.skippedReason,
+      };
+      if (msg.proposalId) return mapProposals(state, msg.proposalId, (p) => ({ ...p, run: data }));
+      return { ...state, runs: [...state.runs, { ...data, id: `run_${++runSeq}` }] };
+    }
     case "stream/end":
       return { ...state, busy: false, messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false } : m)) };
     case "stream/error":
