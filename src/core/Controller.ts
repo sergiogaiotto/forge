@@ -37,7 +37,8 @@ import { log } from "../util/logger";
 import { exec } from "node:child_process";
 import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { appendRule, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
-import { detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
+import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
+import { validatorsFromStack } from "../skills/stackValidators";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -235,10 +236,12 @@ export class Controller {
     return parts.join("\n\n");
   }
 
-  // Lê os arquivos-âncora da raiz e devolve o bloco "Stack detectada" (ou "" se nada/sem workspace).
-  private async detectStackBlock(): Promise<string> {
+  // Lê os arquivos-âncora da raiz e devolve a stack detectada (linguagem, gerenciador, lint/tipos/
+  // testes, libs). Vazia se não houver workspace. Dela derivamos tanto o bloco do prompt quanto os
+  // validadores de convenções.
+  private async detectWorkspaceStack(): Promise<DetectedStack> {
     const ws = this.workspaceRoot();
-    if (!ws) return "";
+    if (!ws) return { lintFormat: [], types: [], libs: [] };
     const files: Record<string, string | undefined> = {};
     await Promise.all(
       STACK_PROBE_FILES.map(async (name) => {
@@ -249,7 +252,7 @@ export class Controller {
         }
       })
     );
-    return renderStackBlock(detectStack(files));
+    return detectStack(files);
   }
 
   async addProjectRule(rule: string): Promise<void> {
@@ -672,8 +675,8 @@ export class Controller {
     }
     const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
     // Combina a stack detectada (sempre fresca, sem drift) com o perfil editado pelo time.
-    const [stackBlock, profileFile] = await Promise.all([this.detectStackBlock(), this.loadProjectProfileText()]);
-    const projectProfile = renderProfileBlock([stackBlock, profileFile].filter((s) => s.trim()).join("\n\n"));
+    const [stack, profileFile] = await Promise.all([this.detectWorkspaceStack(), this.loadProjectProfileText()]);
+    const projectProfile = renderProfileBlock([renderStackBlock(stack), profileFile].filter((s) => s.trim()).join("\n\n"));
     const assembled = this.assembler.assemble({
       basePrompt,
       projectProfile,
@@ -685,7 +688,12 @@ export class Controller {
       tokenBudget: 24000,
     });
 
-    const validators: SkillValidatorSpec[] = dedupeValidators(activated.flatMap((a) => a.meta.validators));
+    // Convenções-como-validators: as ferramentas detectadas (ruff/mypy/eslint/…) viram validadores
+    // advisory do quality gate, checando o código gerado contra o ferramental real do projeto.
+    const validators: SkillValidatorSpec[] = dedupeValidators([
+      ...activated.flatMap((a) => a.meta.validators),
+      ...validatorsFromStack(stack),
+    ]);
     const provider = createProvider(runtime, this.egress);
     const taskId = `task_${Date.now()}`;
     const task = new Task({

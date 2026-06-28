@@ -22,8 +22,13 @@ export class SkillValidator {
     const applicable = validators.filter((v) => !v.appliesTo || v.appliesTo.includes(ext));
     if (applicable.length === 0) return [];
 
-    // Valida contra um arquivo temporário que espelha o conteúdo proposto.
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-val-"));
+    // Valida contra um arquivo temporário que espelha o conteúdo proposto. Escreve DENTRO do
+    // workspace (.forge/) quando há cwd: assim linters/type-checkers descobrem a config do projeto
+    // (pyproject/.flake8/eslintrc) e resolvem imports internos, em vez de rodar com defaults. Sem
+    // workspace, cai no tmp do SO. O diretório é removido no finally.
+    const baseDir = this.cwd ? path.join(this.cwd, ".forge") : os.tmpdir();
+    await fs.mkdir(baseDir, { recursive: true });
+    const tmpDir = await fs.mkdtemp(path.join(baseDir, "val-"));
     const tmpFile = path.join(tmpDir, "candidate" + ext);
     await fs.writeFile(tmpFile, content, "utf8");
 
