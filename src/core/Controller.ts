@@ -36,6 +36,7 @@ import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/i
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
 import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { appendRule, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -211,6 +212,65 @@ export class Controller {
 
   private workspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  // ---- perfil do projeto (.forge/project.md) ---------------------------------
+
+  // Lê o perfil com precedência usuário → workspace (workspace tem a palavra final ao concatenar).
+  // Tolerante a ausência. O admin pode semear padrões via managedSkillsDir (onda futura).
+  private async loadProjectProfileText(): Promise<string> {
+    const candidates = [path.join(os.homedir(), PROFILE_RELPATH)];
+    const ws = this.workspaceRoot();
+    if (ws) candidates.push(path.join(ws, PROFILE_RELPATH));
+    const parts: string[] = [];
+    for (const p of candidates) {
+      try {
+        const t = (await fs.readFile(p, "utf8")).trim();
+        if (t) parts.push(t);
+      } catch {
+        /* arquivo ausente — ok */
+      }
+    }
+    return parts.join("\n\n");
+  }
+
+  async addProjectRule(rule: string): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para salvar regras do projeto." });
+      return;
+    }
+    const abs = path.join(ws, PROFILE_RELPATH);
+    let existing = "";
+    try {
+      existing = await fs.readFile(abs, "utf8");
+    } catch {
+      /* primeiro uso */
+    }
+    const updated = appendRule(existing, rule);
+    if (updated === existing) {
+      this.post({ type: "notice", level: "info", message: "Essa regra já está no perfil do projeto." });
+      return;
+    }
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, updated, "utf8");
+    this.post({ type: "notice", level: "info", message: `Regra adicionada ao perfil do projeto (${PROFILE_RELPATH}).` });
+  }
+
+  async openProjectProfile(): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para ter um perfil do projeto." });
+      return;
+    }
+    const abs = path.join(ws, PROFILE_RELPATH);
+    try {
+      await fs.access(abs);
+    } catch {
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, defaultProfileSkeleton(), "utf8");
+    }
+    await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: false });
   }
 
   // ---- estado ----------------------------------------------------------------
@@ -405,6 +465,12 @@ export class Controller {
         }
         break;
       }
+      case "profile/addRule":
+        await this.addProjectRule(msg.rule);
+        break;
+      case "profile/open":
+        await this.openProjectProfile();
+        break;
       case "signOut":
         await this.signOut();
         break;
@@ -587,8 +653,10 @@ export class Controller {
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
     const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
+    const projectProfile = renderProfileBlock(await this.loadProjectProfileText());
     const assembled = this.assembler.assemble({
       basePrompt,
+      projectProfile,
       discoverySkills: discovery,
       activatedSkills: activated,
       retrievedContext,

@@ -170,6 +170,8 @@ export type WebviewToExt =
   | { type: "proposal/discard"; proposalId: string }
   | { type: "proposal/viewDiff"; proposalId: string }
   | { type: "proposal/copy"; proposalId: string }
+  | { type: "profile/addRule"; rule: string }
+  | { type: "profile/open" }
   | { type: "run/file"; filePath: string; proposalId?: string }
   | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }
