@@ -229,9 +229,15 @@ Algumas skills checam o código gerado com ferramentas como `ruff`/`mypy`. Se vo
 ferramentas instaladas e o time exigir, o botão **Aplicar** só libera se passar. Se as ferramentas
 não estiverem instaladas, aparece "indisponível" — e isso **não** te impede de aplicar.
 
-### Notebooks Jupyter
-Funciona normalmente em arquivos `.ipynb` (e em `.py` com marcadores `# %%`), preservando suas
-células.
+### Notebooks Jupyter (.ipynb) — célula a célula
+Com um notebook aberto, o FORGE edita **por célula**, sem reescrever o arquivo:
+- Ele propõe **inserir** uma célula nova ou **substituir** uma célula específica — você aplica com
+  **Inserir célula** / **Substituir célula [N]**, e o resto do notebook (outras células, saídas) fica intacto.
+- Depois de aplicar, clique em **Executar célula**: o FORGE roda aquela célula (usando o kernel do
+  notebook), **captura a saída**; se der erro, aparece **"Corrigir com FORGE"** para ajustar e rodar de novo.
+- Também funciona em `.py` com marcadores `# %%`.
+
+> Precisa de um kernel Python ativo (a extensão Jupyter/Python do VSCode fornece) para executar as células.
 
 ### Ferramentas internas (MCP)
 Se o admin tiver habilitado, o FORGE pode usar ferramentas da empresa (por exemplo, consultar um

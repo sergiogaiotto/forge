@@ -274,13 +274,16 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
   const gateFailed = v && !v.running && !v.gateOk;
   const labels = v?.results.map((r) => r.label).join(" + ") || "validação";
   const skipped = v?.results.filter((r) => r.status === "skipped").map((r) => r.label) ?? [];
+  const cell = p.proposal.cell;
+  const applyLabel = cell ? (cell.op === "add" ? "Inserir célula" : `Substituir célula [${cell.index}]`) : "Aplicar";
 
   return (
     <div>
       <div className="diff-card">
         <div className="diff-head">
           <span className="left">
-            <Icon name="code" size={13} color="#4ec9b0" /> diff · {p.proposal.filePath}
+            <Icon name={cell ? "terminal" : "code"} size={13} color="#4ec9b0" />{" "}
+            {cell ? `célula · ${p.proposal.filePath} · ${p.proposal.summary}` : `diff · ${p.proposal.filePath}`}
           </span>
           <Icon name="copy" size={13} />
         </div>
@@ -309,16 +312,22 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
       {p.status === "applied" ? (
         <div className="actions">
           <div className="status-applied" style={{ marginBottom: 0 }}>
-            <Icon name="check" size={13} /> Aplicado em {p.proposal.filePath}
+            <Icon name="check" size={13} /> {cell ? "Célula aplicada" : `Aplicado em ${p.proposal.filePath}`}
           </div>
           <div className="spacer" />
-          <button
-            className="btn"
-            title="Executar este arquivo (com auto-cura)"
-            onClick={() => post({ type: "run/file", filePath: p.proposal.filePath, proposalId: p.proposal.id })}
-          >
-            <Icon name="player-play" size={12} /> Executar
-          </button>
+          {cell ? (
+            <button className="btn" title="Executar esta célula (captura a saída)" onClick={() => post({ type: "cell/run", proposalId: p.proposal.id })}>
+              <Icon name="player-play" size={12} /> Executar célula
+            </button>
+          ) : (
+            <button
+              className="btn"
+              title="Executar este arquivo (com auto-cura)"
+              onClick={() => post({ type: "run/file", filePath: p.proposal.filePath, proposalId: p.proposal.id })}
+            >
+              <Icon name="player-play" size={12} /> Executar
+            </button>
+          )}
         </div>
       ) : p.status === "discarded" ? (
         <div className="status-discarded">Descartado.</div>
@@ -330,7 +339,7 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             title={gateFailed ? "Quality gate reprovado — corrija antes de aplicar" : "Aplicar"}
             onClick={() => post({ type: "proposal/apply", proposalId: p.proposal.id })}
           >
-            <Icon name="check" size={13} /> Aplicar
+            <Icon name="check" size={13} /> {applyLabel}
           </button>
           <button className="btn" onClick={() => post({ type: "proposal/viewDiff", proposalId: p.proposal.id })}>
             <Icon name="git-compare" size={13} /> Ver diff

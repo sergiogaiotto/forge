@@ -103,6 +103,8 @@ export interface DiffProposal {
   modified: string;
   summary: string;
   activatedSkills: string[];
+  // Presente quando a proposta é uma edição de CÉLULA de notebook (.ipynb).
+  cell?: { op: "add" | "replace"; index?: number; after?: number };
 }
 
 // ---- Host da extensão → Webview ------------------------------------------------
@@ -154,6 +156,7 @@ export type WebviewToExt =
   | { type: "proposal/discard"; proposalId: string }
   | { type: "proposal/viewDiff"; proposalId: string }
   | { type: "run/file"; filePath: string; proposalId?: string }
+  | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }
   | { type: "skill/toggle"; name: string; enabled: boolean }
   | { type: "mcp/approvalResponse"; requestId: string; approved: boolean }

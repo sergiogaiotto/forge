@@ -359,6 +359,9 @@ export class Controller {
       case "run/file":
         await this.runFile(msg.filePath, msg.proposalId);
         break;
+      case "cell/run":
+        await this.runCell(msg.proposalId);
+        break;
       case "review/changes":
         await this.reviewChanges();
         break;
@@ -630,6 +633,24 @@ export class Controller {
       log.warn("RAG: recuperação falhou, seguindo só com o editor ativo.", err);
     }
 
+    // Notebook ativo: lista as células com índice ABSOLUTO (para edição por célula).
+    const nbEditor = vscode.window.activeNotebookEditor;
+    if (nbEditor) {
+      const nb = nbEditor.notebook;
+      const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, nb.uri.fsPath) : nb.uri.fsPath;
+      const cells = nb
+        .getCells()
+        .map((c) => {
+          const kind = c.kind === vscode.NotebookCellKind.Markup ? "markdown" : "code";
+          const src = c.document.getText();
+          const preview = src.length > 600 ? src.slice(0, 600) + "\n# … (truncado)" : src;
+          return `[${c.index}] (${kind})\n${preview}`;
+        })
+        .join("\n\n");
+      parts.push(`Notebook aberto: ${rel} (${nb.cellCount} células; use op=replace index=N ou op=add after=N):\n${cells}`);
+      return parts.join("\n\n");
+    }
+
     const editor = vscode.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === "file") {
       const doc = editor.document;
@@ -662,6 +683,14 @@ export class Controller {
       this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para aplicar mudanças." });
       return;
     }
+
+    // Edição de célula de notebook (.ipynb) — aplica via NotebookEdit, preservando o resto.
+    if (entry.proposal.cell) {
+      const ok = await this.applyCellProposal(proposalId, entry);
+      if (ok) this.post({ type: "proposal/applied", proposalId });
+      return;
+    }
+
     const abs = path.join(ws, entry.proposal.filePath);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, entry.proposal.modified, "utf8");
@@ -669,6 +698,76 @@ export class Controller {
     this.post({ type: "proposal/applied", proposalId });
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
+  }
+
+  // Aplica uma proposta de célula no notebook ao vivo e registra o índice final
+  // (para execução por célula). Retorna false se algo impedir a aplicação.
+  private async applyCellProposal(
+    proposalId: string,
+    entry: { proposal: import("../shared/protocol").DiffProposal; cellIndex?: number }
+  ): Promise<boolean> {
+    const ws = this.workspaceRoot();
+    const abs = path.join(ws!, entry.proposal.filePath);
+    const uri = vscode.Uri.file(abs);
+    let nb: vscode.NotebookDocument;
+    try {
+      nb = await vscode.workspace.openNotebookDocument(uri);
+    } catch (err) {
+      this.post({ type: "notice", level: "error", message: `Não foi possível abrir o notebook: ${(err as Error).message}` });
+      return false;
+    }
+    await vscode.window.showNotebookDocument(nb, { preview: false });
+
+    const cell = entry.proposal.cell!;
+    const cellData = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, entry.proposal.modified, "python");
+    const edit = new vscode.WorkspaceEdit();
+    let targetIndex: number;
+    if (cell.op === "replace" && cell.index !== undefined && cell.index < nb.cellCount) {
+      targetIndex = cell.index;
+      edit.set(uri, [vscode.NotebookEdit.replaceCells(new vscode.NotebookRange(targetIndex, targetIndex + 1), [cellData])]);
+    } else {
+      targetIndex = cell.after !== undefined ? Math.min(cell.after + 1, nb.cellCount) : nb.cellCount;
+      edit.set(uri, [vscode.NotebookEdit.insertCells(targetIndex, [cellData])]);
+    }
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (!applied) {
+      this.post({ type: "notice", level: "error", message: "Falha ao aplicar a célula no notebook." });
+      return false;
+    }
+    entry.cellIndex = targetIndex;
+    this.history.push({ role: "assistant", content: `Apliquei uma célula em ${entry.proposal.filePath} (índice ${targetIndex}).` });
+    return true;
+  }
+
+  // Executa uma célula aplicada e captura a saída (com auto-cura se houver erro).
+  async runCell(proposalId: string): Promise<void> {
+    const entry = this.currentTask?.getProposal(proposalId);
+    if (!entry || !entry.proposal.cell || entry.cellIndex === undefined) {
+      this.post({ type: "notice", level: "warn", message: "Aplique a célula antes de executá-la." });
+      return;
+    }
+    const ws = this.workspaceRoot();
+    const uri = vscode.Uri.file(path.join(ws!, entry.proposal.filePath));
+    const index = entry.cellIndex;
+    try {
+      await vscode.commands.executeCommand("notebook.cell.execute", { start: index, end: index + 1 }, uri);
+    } catch (err) {
+      this.post({ type: "notice", level: "error", message: `Falha ao executar a célula (kernel disponível?): ${(err as Error).message}` });
+      return;
+    }
+    const nb = vscode.workspace.notebookDocuments.find((d) => d.uri.fsPath === uri.fsPath);
+    const { text, isError } = readCellOutputs(nb, index);
+    this.post({
+      type: "run/result",
+      proposalId,
+      filePath: entry.proposal.filePath,
+      label: `célula [${index}]`,
+      command: `notebook.cell.execute [${index}]`,
+      ok: !isError,
+      exitCode: isError ? 1 : 0,
+      output: text || "(sem saída capturada — veja a célula no notebook)",
+      durationMs: 0,
+    });
   }
 
   async viewDiff(proposalId: string): Promise<void> {
@@ -838,4 +937,29 @@ function dedupeValidators(validators: SkillValidatorSpec[]): SkillValidatorSpec[
   const seen = new Map<string, SkillValidatorSpec>();
   for (const v of validators) if (!seen.has(v.id)) seen.set(v.id, v);
   return [...seen.values()];
+}
+
+// Extrai texto e flag de erro das saídas de uma célula de notebook executada.
+function readCellOutputs(nb: vscode.NotebookDocument | undefined, index: number): { text: string; isError: boolean } {
+  if (!nb || index >= nb.cellCount) return { text: "", isError: false };
+  const cell = nb.cellAt(index);
+  let text = "";
+  let isError = false;
+  for (const out of cell.outputs) {
+    for (const item of out.items) {
+      const s = new TextDecoder().decode(item.data);
+      if (item.mime === "application/vnd.code.notebook.error") {
+        isError = true;
+        try {
+          const e = JSON.parse(s);
+          text += `${e.name ?? "Erro"}: ${e.message ?? ""}\n${(e.stack ?? "").toString()}\n`;
+        } catch {
+          text += s + "\n";
+        }
+      } else if (item.mime.startsWith("text/") || item.mime.includes("stdout") || item.mime.includes("stderr")) {
+        text += s + "\n";
+      }
+    }
+  }
+  return { text: text.slice(0, 8000).trim(), isError };
 }

@@ -3,6 +3,18 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.4.0] — 2026-06-28
+
+### Added — Notebooks (.ipynb) célula-a-célula
+- **Edição por célula.** O FORGE edita notebooks por **célula** (não reescreve o
+  arquivo): protocolo `forge-cell` com `op=add after=N` / `op=replace index=N`. As
+  propostas são aplicadas no notebook **ao vivo** via `NotebookEdit`, preservando as
+  demais células, saídas e metadados. Botões **Inserir célula** / **Substituir célula [N]**.
+- **Execução por célula.** Botão **Executar célula** roda a célula aplicada (kernel do
+  notebook), **captura a saída/erro** e, em falha, oferece **"Corrigir com FORGE"**.
+- **Contexto de notebook.** Quando um `.ipynb` está aberto, o FORGE recebe as células
+  com índice absoluto, para referenciá-las/editá-las com precisão.
+
 ## [1.3.0] — 2026-06-28
 
 ### Added — Fase D: painel "Definição de Pronto" (DoD)

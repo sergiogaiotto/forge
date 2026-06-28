@@ -5,6 +5,7 @@ import { ChatMessage } from "../api/types";
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { SkillValidatorSpec } from "../skills/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
+import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 
@@ -32,7 +33,11 @@ const LANG_BY_EXT: Record<string, string> = {
 export class Task {
   private readonly controller = new AbortController();
   // Propostas geradas nesta task, mantidas para que o Controller possa aplicá-las/validá-las.
-  readonly proposals = new Map<string, { proposal: DiffProposal; results: ValidatorResult[]; gateOk: boolean }>();
+  // `cellIndex` é resolvido na aplicação de uma proposta de célula (para executá-la depois).
+  readonly proposals = new Map<
+    string,
+    { proposal: DiffProposal; results: ValidatorResult[]; gateOk: boolean; cellIndex?: number }
+  >();
 
   constructor(private readonly deps: TaskDeps) {}
 
@@ -86,7 +91,41 @@ export class Task {
       void this.validateProposal(proposal);
     }
 
+    // Edições de CÉLULA de notebook (.ipynb).
+    for (const cb of parseCellBlocks(full)) {
+      const proposal = await this.makeCellProposal(cb);
+      this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
+      d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
+    }
+
     d.post({ type: "stream/end", taskId: d.taskId });
+  }
+
+  private async makeCellProposal(cb: import("../util/cellBlocks").CellBlock): Promise<DiffProposal> {
+    const d = this.deps;
+    let original = "";
+    if (cb.op === "replace" && cb.index !== undefined && d.workspaceRoot) {
+      try {
+        const content = await fs.readFile(path.join(d.workspaceRoot, cb.path), "utf8");
+        original = parseNotebookCells(content)[cb.index]?.source ?? "";
+      } catch {
+        original = "";
+      }
+    }
+    const summary =
+      cb.op === "add"
+        ? `Nova célula${cb.after !== undefined ? ` após [${cb.after}]` : " (ao final)"}`
+        : `Substituir célula [${cb.index}]`;
+    return {
+      id: `prop_${++proposalCounter}`,
+      filePath: cb.path,
+      language: "python",
+      original,
+      modified: cb.code,
+      summary,
+      activatedSkills: this.deps.activatedSkillNames,
+      cell: { op: cb.op, index: cb.index, after: cb.after },
+    };
   }
 
   private async makeProposal(relPath: string, content: string): Promise<DiffProposal> {
