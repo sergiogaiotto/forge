@@ -4,6 +4,12 @@
 
 export type ProviderType = "openai" | "anthropic" | "openai-compatible";
 
+// Linguagens das cercas de código que o modelo emite e a extensão faz parse em propostas.
+// Ficam AQUI (módulo sem dependências) para que tanto o host quanto a webview possam importá-las
+// sem arrastar o systemPrompt/node para o bundle do navegador.
+export const FORGE_FILE_BLOCK_LANG = "forge-file";
+export const FORGE_CELL_BLOCK_LANG = "forge-cell";
+
 export interface ProviderPreset {
   id: string;
   label: string;
@@ -157,6 +163,7 @@ export type WebviewToExt =
   | { type: "proposal/apply"; proposalId: string }
   | { type: "proposal/discard"; proposalId: string }
   | { type: "proposal/viewDiff"; proposalId: string }
+  | { type: "proposal/copy"; proposalId: string }
   | { type: "run/file"; filePath: string; proposalId?: string }
   | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }
