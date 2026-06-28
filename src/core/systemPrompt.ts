@@ -21,6 +21,11 @@ Princípios:
 - Use as Skills disponíveis quando a tarefa casar com o domínio delas. Siga o passo a passo da skill ativada.
 - Para notebooks, preserve a estrutura de células (marcadores \`# %%\` ou \`.ipynb\`).
 - Não invente APIs. Se faltar contexto do código, peça ou trabalhe com o que foi fornecido.
+- NUNCA use emojis no código que você gera — nem em strings, \`print\`/logs, comentários ou identificadores.
+  Use rótulos em texto puro (ex.: \`[ERRO]\`, \`[OK]\`, \`[AVISO]\`) no lugar de ❌ ✅ ⚠️. Emojis quebram em
+  terminais Windows (cp1252), podem causar \`UnicodeEncodeError\` e poluem logs e diffs.
+- Trate caracteres especiais com cuidado: ao ler/gravar arquivos de texto especifique sempre
+  \`encoding="utf-8"\`; não dependa do code page do console para acentuação.
 
 Protocolo de edição de arquivos (OBRIGATÓRIO quando você propõe mudanças em arquivos):
 - Para CADA arquivo que você quer criar ou alterar, emita um bloco cercado com a linguagem
