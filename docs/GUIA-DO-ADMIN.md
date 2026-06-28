@@ -112,13 +112,13 @@ O que isso faz:
 Cada dev recebe uma **chave de licença** (texto `FORGE-...`). Para emitir:
 
 ```bash
-npm run license:issue -- --subject joao@claro.com --org claro --scope codegen,skills --days 365
+npm run license:issue -- --subject joao@claro.com.br --org claro --scope codegen,skills --days 365
 ```
 
 Parâmetros (todos opcionais, com padrões):
 | Parâmetro | Significado | Padrão |
 |---|---|---|
-| `--subject` | identidade do dev (e-mail) | `dev@claro.com` |
+| `--subject` | identidade do dev (e-mail) | `dev@claro.com.br` |
 | `--org` | organização | `claro` |
 | `--scope` | o que a licença libera (`codegen`, `skills`) | `codegen,skills` |
 | `--days` | validade em dias | `365` |
