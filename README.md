@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🔥 FORGE — Codegen Claro
+# 🔥 FORGE — ADEX-Codegen
 
 **Geração de código assistida por IA para times de dados e IA, dentro do VSCode.**
 
@@ -51,7 +51,7 @@ npm test             # roda a suíte de testes (29 testes)
 Emita uma licença de teste (já feito por `keygen` em `admin-cli/keys/SAMPLE_LICENSE.txt`):
 
 ```bash
-npm run license:issue -- --subject dev@claro.com --org claro --scope codegen,skills --days 365
+npm run license:issue -- --subject sergio.gaiotto@claro.com.br --org claro --scope codegen,skills --days 365
 ```
 
 ### Rodar a extensão
