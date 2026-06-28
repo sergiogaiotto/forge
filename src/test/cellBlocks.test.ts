@@ -32,6 +32,29 @@ test("parseCellBlocks: op default é add; replace sem index é ignorado", () => 
   assert.equal(blocks[0].op, "add");
 });
 
+test("parseCellBlocks: cerca de 4 crases preserva cerca interna de 3 no código da célula", () => {
+  const text = [
+    "Vou inserir uma célula com docstring contendo um exemplo:",
+    "````forge-cell path=nb.ipynb op=add after=1",
+    "# Demonstração",
+    "doc = '''",
+    "```sql",
+    "select 1",
+    "```",
+    "'''",
+    "print(doc)",
+    "````",
+  ].join("\n");
+  const blocks = parseCellBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].op, "add");
+  assert.equal(blocks[0].after, 1);
+  assert.match(blocks[0].code, /```sql/);
+  assert.match(blocks[0].code, /select 1/);
+  assert.match(blocks[0].code, /print\(doc\)/);
+  assert.ok(!blocks[0].code.includes("forge-cell"));
+});
+
 test("parseNotebookCells lê células na ordem absoluta", () => {
   const ipynb = JSON.stringify({
     cells: [
