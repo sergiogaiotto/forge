@@ -8,3 +8,6 @@ gateway/.env
 *.log
 .DS_Store
 Thumbs.db
+
+# Arquivos gerados ao testar a extensão neste próprio repo
+/cobrinha.py
