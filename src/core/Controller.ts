@@ -111,6 +111,7 @@ export class Controller {
 
   async initialize(): Promise<void> {
     this.registry.load(this.config.mcpCatalog());
+    void this.sweepValidatorTemp(); // remove órfãos .forge/val-* de um host morto antes do finally
     await this.reindexSkills();
     await this.restoreSession();
     this.setupWatchers();
@@ -214,6 +215,24 @@ export class Controller {
 
   private workspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  // Remove diretórios de validação órfãos (.forge/val-*) deixados por um host encerrado antes do
+  // finally do SkillValidator — restaura o auto-limpeza que o os.tmpdir dava de graça. Best-effort.
+  private async sweepValidatorTemp(): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) return;
+    const dir = path.join(ws, ".forge");
+    try {
+      const entries = await fs.readdir(dir);
+      await Promise.all(
+        entries
+          .filter((e) => e.startsWith("val-"))
+          .map((e) => fs.rm(path.join(dir, e), { recursive: true, force: true }).catch(() => undefined))
+      );
+    } catch {
+      /* .forge ausente — nada a limpar */
+    }
   }
 
   // ---- perfil do projeto (.forge/project.md) ---------------------------------

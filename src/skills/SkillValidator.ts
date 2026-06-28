@@ -29,6 +29,10 @@ export class SkillValidator {
     const baseDir = this.cwd ? path.join(this.cwd, ".forge") : os.tmpdir();
     await fs.mkdir(baseDir, { recursive: true });
     const tmpDir = await fs.mkdtemp(path.join(baseDir, "val-"));
+    // Blindagem: se o host morrer antes do finally, deixando o dir órfão dentro do .forge/
+    // versionado do usuário, o `*` ignora todo o conteúdo (inclusive a si mesmo) — o git nem mostra
+    // o diretório, então nada vaza para um commit acidental. A varredura no startup remove o órfão.
+    await fs.writeFile(path.join(tmpDir, ".gitignore"), "*\n", "utf8");
     const tmpFile = path.join(tmpDir, "candidate" + ext);
     await fs.writeFile(tmpFile, content, "utf8");
 
