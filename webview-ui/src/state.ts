@@ -55,7 +55,7 @@ export interface UIState {
   reviewed: boolean;
   lastFileRun: RunResultData | null;
   lastTestRun: RunResultData | null;
-  attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" }[];
+  attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
 }
 
 export const initialState: UIState = {

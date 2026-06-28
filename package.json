@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, licença Ed25519, observabilidade e MCP in-network.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -365,6 +365,21 @@
           "type": "string",
           "default": "pytest -q",
           "markdownDescription": "Comando da suíte de testes, executado na raiz do workspace (ex.: `pytest -q`, `pytest tests/`, `npm test`)."
+        },
+        "forge.search.server": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "ID do **MCP server de busca interna** (presente em `forge.mcp.catalog`). Quando definido, habilita **Buscar (rede interna)** no menu de contexto — busca governada (egress/aprovação/auditoria), **sem internet pública**. Vazio = busca desabilitada."
+        },
+        "forge.search.tool": {
+          "type": "string",
+          "default": "search",
+          "markdownDescription": "Nome da ferramenta MCP de busca exposta pelo `forge.search.server`."
+        },
+        "forge.search.queryArg": {
+          "type": "string",
+          "default": "query",
+          "markdownDescription": "Nome do argumento que recebe o texto da busca na ferramenta MCP."
         }
       }
     }

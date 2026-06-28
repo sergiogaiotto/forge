@@ -72,7 +72,7 @@ export class Controller {
   private sessionToken: SessionToken | undefined;
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
-  private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection"; content: string }[] = [];
+  private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
   private attachmentSeq = 0;
   private currentTask: Task | undefined;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -235,6 +235,7 @@ export class Controller {
       network: { internalOnly: !policy.allowExternal, allowedHosts: policy.allowedHosts },
       observability: { traceActive: this.config.gatewayUrl() !== "", managedByAdmin: true, login: osLogin() },
       identity,
+      search: { enabled: this.config.search().server !== "", label: "Buscar (rede interna)" },
       mcp: this.registry.toViews(),
       skills: this.skills.map(this.toSkillView),
       rag: {
@@ -380,11 +381,14 @@ export class Controller {
         this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== msg.id);
         this.postAttachments();
         break;
+      case "context/search":
+        await this.searchInternal();
+        break;
       case "context/webInfo":
         this.post({
           type: "notice",
           level: "info",
-          message: "Por política, o FORGE não navega na internet pública (soberania de dados). O admin pode habilitar uma fonte interna (MCP).",
+          message: "Por política, o FORGE não navega na internet pública (soberania de dados). O admin pode habilitar uma fonte interna (MCP) em forge.search.server.",
         });
         break;
       case "skill/toggle":
@@ -700,7 +704,7 @@ export class Controller {
     });
   }
 
-  private addAttachment(label: string, kind: "workspace" | "upload" | "selection", content: string): void {
+  private addAttachment(label: string, kind: "workspace" | "upload" | "selection" | "search", content: string): void {
     const capped = content.length > 16000 ? content.slice(0, 16000) + "\n… (truncado)" : content;
     this.pendingAttachments.push({ id: `att_${++this.attachmentSeq}`, label, kind, content: capped });
     if (this.pendingAttachments.length > 8) this.pendingAttachments = this.pendingAttachments.slice(-8);
@@ -745,6 +749,28 @@ export class Controller {
     }
     const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, editor.document.uri.fsPath) : editor.document.fileName;
     this.addAttachment(`${path.basename(rel)} (seleção)`, "selection", editor.document.getText(editor.selection));
+  }
+
+  // Busca interna GOVERNADA via MCP — substitui a "web" pública por uma fonte
+  // in-network (egress/aprovação/auditoria já aplicados pelo McpManager).
+  async searchInternal(): Promise<void> {
+    const cfg = this.config.search();
+    if (!cfg.server) {
+      this.post({ type: "notice", level: "info", message: "Busca interna não configurada (defina forge.search.server)." });
+      return;
+    }
+    const query = await vscode.window.showInputBox({
+      prompt: `Buscar na fonte interna (${cfg.server})`,
+      placeHolder: "termos da busca…",
+    });
+    if (!query || !query.trim()) return;
+    this.post({ type: "notice", level: "info", message: `Buscando "${query}" em ${cfg.server}…` });
+    const res = await this.mcp.callTool(cfg.server, cfg.tool, { [cfg.queryArg]: query.trim() });
+    if (!res.ok) {
+      this.post({ type: "notice", level: "error", message: `Busca falhou: ${res.content}` });
+      return;
+    }
+    this.addAttachment(`🔍 ${query.trim()}`, "search", `Resultados da busca interna para "${query.trim()}":\n${res.content}`);
   }
 
   // ---- propostas -------------------------------------------------------------

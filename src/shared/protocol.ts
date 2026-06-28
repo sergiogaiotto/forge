@@ -76,6 +76,7 @@ export interface ForgeState {
   network: { internalOnly: boolean; allowedHosts: string[] };
   observability: { traceActive: boolean; managedByAdmin: boolean; login: string };
   identity: { email: string | null; emailRequired: boolean; source: "license" | "manual" | "none" };
+  search: { enabled: boolean; label: string }; // busca interna via MCP (governada)
   mcp: McpServerView[];
   skills: SkillView[];
   rag: RagView;
@@ -121,7 +122,7 @@ export type ExtToWebview =
   | { type: "stream/proposal"; taskId: string; proposal: DiffProposal }
   | { type: "stream/end"; taskId: string }
   | { type: "stream/error"; taskId: string; message: string }
-  | { type: "context/attachments"; items: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" }[] }
+  | { type: "context/attachments"; items: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[] }
   | { type: "validation/result"; proposalId: string; results: ValidatorResult[]; gateOk: boolean; running: boolean }
   | { type: "proposal/applied"; proposalId: string }
   | { type: "proposal/discarded"; proposalId: string }
@@ -163,6 +164,7 @@ export type WebviewToExt =
   | { type: "context/pickLocalFile" }
   | { type: "context/addSelection" }
   | { type: "context/removeAttachment"; id: string }
+  | { type: "context/search" }
   | { type: "context/webInfo" }
   | { type: "skill/toggle"; name: string; enabled: boolean }
   | { type: "mcp/approvalResponse"; requestId: string; approved: boolean }

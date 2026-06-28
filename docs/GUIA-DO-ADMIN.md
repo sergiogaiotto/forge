@@ -337,6 +337,26 @@ Regras aplicadas automaticamente:
 
 ---
 
+## 10.1. Busca interna (o equivalente soberano à "web")
+
+O FORGE **não navega na internet pública** por design. Para dar ao dev uma "busca", você expõe uma
+**fonte interna** (wiki, Confluence, docs, base de conhecimento) como **MCP** e a aponta:
+
+```jsonc
+// 1) cadastre o MCP de busca no catálogo (ver Passo 7)
+"forge.mcp.catalog": [
+  { "id": "wiki", "transport": "streamableHttp", "url": "https://wiki-mcp.interno/mcp", "scope": "readonly", "autoApprove": true, "enabled": true }
+],
+// 2) aponte a busca para ele
+"forge.search.server": "wiki",     // id do MCP acima
+"forge.search.tool": "search",     // nome da ferramenta de busca exposta
+"forge.search.queryArg": "query"   // nome do argumento do texto buscado
+```
+
+Com isso, o menu **📎 → Buscar (rede interna)** fica habilitado: o dev digita a busca, o FORGE chama
+a ferramenta MCP (com **egress/aprovação/auditoria**) e anexa os resultados ao contexto. Tudo
+in-network. Sem configurar, o item aparece como **bloqueado** (transparente ao usuário).
+
 ## 11. Passo 8 — Configurar embeddings (busca semântica)
 
 A "busca inteligente" no código do dev usa um modelo de **embeddings**. O padrão já aponta para o

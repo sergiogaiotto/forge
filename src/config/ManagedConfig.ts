@@ -95,6 +95,15 @@ export class ManagedConfig {
     };
   }
 
+  search(): { server: string; tool: string; queryArg: string } {
+    const c = this.cfg();
+    return {
+      server: c.get<string>("search.server", "").trim(),
+      tool: c.get<string>("search.tool", "search"),
+      queryArg: c.get<string>("search.queryArg", "query"),
+    };
+  }
+
   onChange(listener: () => void): vscode.Disposable {
     return vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("forge")) listener();

@@ -139,9 +139,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               <button onClick={() => { setAttachMenu(false); post({ type: "context/pickLocalFile" }); }}>
                 <Icon name="arrow-up" size={14} /> Enviar do computador
               </button>
-              <button className="disabled" onClick={() => { setAttachMenu(false); post({ type: "context/webInfo" }); }}>
-                <Icon name="network" size={14} /> Buscar na web · bloqueada (rede interna)
-              </button>
+              {forge.search.enabled ? (
+                <button onClick={() => { setAttachMenu(false); post({ type: "context/search" }); }}>
+                  <Icon name="search" size={14} color="#86c98e" /> {forge.search.label}
+                </button>
+              ) : (
+                <button className="disabled" onClick={() => { setAttachMenu(false); post({ type: "context/webInfo" }); }}>
+                  <Icon name="network" size={14} /> Buscar na web · bloqueada (rede interna)
+                </button>
+              )}
             </div>
           </>
         )}
@@ -150,7 +156,10 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             <div className="attach-chips">
               {state.attachments.map((a) => (
                 <span key={a.id} className="attach-chip" title={`${a.label} · ${a.bytes} chars`}>
-                  <Icon name={a.kind === "upload" ? "arrow-up" : a.kind === "selection" ? "code" : "paperclip"} size={12} />
+                  <Icon
+                    name={a.kind === "upload" ? "arrow-up" : a.kind === "selection" ? "code" : a.kind === "search" ? "search" : "paperclip"}
+                    size={12}
+                  />
                   {a.label}
                   <span
                     style={{ cursor: "pointer", display: "inline-flex" }}

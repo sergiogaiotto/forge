@@ -3,6 +3,17 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.6.0] — 2026-06-28
+
+### Added — Busca interna governada (substitui a "web")
+- **Buscar (rede interna)** no menu de contexto: quando o admin define
+  `forge.search.server` (um MCP do `forge.mcp.catalog`), o item antes bloqueado vira
+  uma **busca real em fonte interna** (wiki/docs/Confluence) — via MCP, com
+  **egress/aprovação/auditoria** já aplicados. Os resultados entram como anexo de
+  contexto. **Nada de internet pública** — o equivalente soberano ao "Browse the web".
+- Configurável: `forge.search.server`, `forge.search.tool` (default `search`),
+  `forge.search.queryArg` (default `query`).
+
 ## [1.5.0] — 2026-06-28
 
 ### Added — Anexar contexto (menu "+")
