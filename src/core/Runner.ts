@@ -57,8 +57,12 @@ export class Runner {
   // Executa um comando arbitrário na raiz do workspace (ex.: a suíte de testes).
   runRaw(command: string, timeoutMs: number): Promise<RunResult> {
     const started = Date.now();
+    // No Windows o console usa cp1252 por padrão: o Python emitiria acentos em cp1252 e o Node,
+    // decodificando como UTF-8, mostraria "" (mojibake) — emojis chegariam a causar
+    // UnicodeEncodeError. Forçamos a saída do processo em UTF-8 e a capturamos como UTF-8.
+    const env = { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" };
     return new Promise<RunResult>((resolve) => {
-      exec(command, { cwd: this.cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+      exec(command, { cwd: this.cwd, env, encoding: "utf8", timeout: timeoutMs, windowsHide: true, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
         const durationMs = Date.now() - started;
         let output = `${stdout ?? ""}${stderr ?? ""}`.trim();
         const code = err ? (err as NodeJS.ErrnoException).code : undefined;
