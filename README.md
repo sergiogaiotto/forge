@@ -180,6 +180,8 @@ forge/
 
 ## 📚 Mais
 
+- **Guia do Usuário** (passo a passo, para leigos): [`docs/GUIA-DO-USUARIO.md`](docs/GUIA-DO-USUARIO.md)
+- **Guia do Admin** (licenças, gateway, skills, MCP): [`docs/GUIA-DO-ADMIN.md`](docs/GUIA-DO-ADMIN.md)
 - Autoria de skills: [`skills/README.md`](skills/README.md)
 - Gateway e Langfuse: [`gateway/README.md`](gateway/README.md)
 - Admin (licenças): [`admin-cli/README.md`](admin-cli/README.md)
