@@ -3,6 +3,16 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.0.4] — 2026-06-28
+
+### Changed
+- **Tudo em pt-BR para o usuário.** O system prompt agora exige resposta sempre em
+  português do Brasil — incluindo o raciocínio/análise do modelo, não só a resposta
+  final (evita o "chain-of-thought" em inglês do gpt-oss).
+- **Raciocínio recolhível.** O bloco de raciocínio do modelo aparece recolhido por
+  padrão (toggle "Raciocínio" / "Raciocinando…"), deixando a resposta em pt-BR em
+  primeiro plano e o painel mais limpo.
+
 ## [1.0.3] — 2026-06-28
 
 ### Changed

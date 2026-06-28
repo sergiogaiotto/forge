@@ -200,6 +200,8 @@ function UserBubble({ m }: { m: MessageVM }): JSX.Element {
 }
 
 function AssistantBlock({ m }: { m: MessageVM }): JSX.Element {
+  const [showReasoning, setShowReasoning] = useState(false);
+  const thinking = m.streaming && !m.text && !m.proposals.length;
   return (
     <div className="assistant">
       {m.skills.map((s) => (
@@ -208,9 +210,17 @@ function AssistantBlock({ m }: { m: MessageVM }): JSX.Element {
         </div>
       ))}
       {m.reasoning && (
-        <div className="reasoning">
-          {m.reasoning}
-          {m.streaming && <span className="blink">▏</span>}
+        <div className="reasoning-box">
+          <button className="reasoning-toggle" onClick={() => setShowReasoning((v) => !v)}>
+            <Icon
+              name="chevron-down"
+              size={12}
+              style={{ transform: showReasoning ? "none" : "rotate(-90deg)", transition: "transform .12s" }}
+            />
+            {thinking ? "Raciocinando…" : "Raciocínio"}
+            {thinking && <Icon name="refresh" size={11} className="spin" style={{ marginLeft: 2 }} />}
+          </button>
+          {showReasoning && <div className="reasoning">{m.reasoning}</div>}
         </div>
       )}
       {m.text && (
