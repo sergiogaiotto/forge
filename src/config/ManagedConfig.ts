@@ -33,6 +33,12 @@ export class ManagedConfig {
     return this.cfg().get<string>("skills.managedDir", "").trim();
   }
 
+  // Caminho para um perfil de projeto GERIDO PELO ADMIN (padrões/convenções da organização),
+  // injetado em todo prompt como camada de menor precedência. Vazio = sem camada admin.
+  managedProfile(): string {
+    return this.cfg().get<string>("project.managedProfile", "").trim();
+  }
+
   retrievalThreshold(): number {
     return this.cfg().get<number>("skills.retrievalThreshold", 15);
   }
