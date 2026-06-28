@@ -203,6 +203,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             <span className="pill" title="Perfil do projeto (.forge/project.md) — convenções do time" onClick={() => post({ type: "profile/open" })}>
               <Icon name="list-check" size={14} /> Perfil
             </span>
+            <span className="pill" title="Definir seu papel no projeto — ajusta o estilo/defaults" onClick={() => post({ type: "profile/pickRole" })}>
+              <Icon name="users" size={14} /> Papel
+            </span>
             <span className="pill" title={forge.provider.modelId}>
               <Icon name="cpu" size={14} /> {forge.provider.modelId}
             </span>
