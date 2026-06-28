@@ -3,6 +3,16 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.0.2] — 2026-06-28
+
+### Added
+- **Identidade do dev na observabilidade (RF-063):** a extensão captura o **login
+  do usuário** (do sistema operacional) e o propaga ao gateway nos headers de
+  trace (`x-forge-login`, além de sessão, org, modelo e skills). O gateway grava o
+  login como **`userId`** do trace no Langfuse (fallback para o hash do subject).
+  Transparência ao dev: o indicador de telemetria mostra o login capturado.
+  A captura efetiva ocorre quando a inferência passa pelo gateway.
+
 ## [1.0.1] — 2026-06-28
 
 ### Added

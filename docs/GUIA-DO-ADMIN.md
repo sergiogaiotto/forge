@@ -229,6 +229,14 @@ O que escolher em `LANGFUSE_CAPTURE` (política de conteúdo, importante para LG
 - **masked** — registra, mas **mascara** dados sensíveis (e-mails, tokens, números longos);
 - **metadata-only** — registra só metadados (sem o conteúdo do código).
 
+**Identidade do dev (quem rodou cada geração).** A extensão captura o **login do usuário** (do
+sistema operacional) e o envia ao gateway no header `x-forge-login` (junto de sessão, org, modelo e
+skills). O gateway grava esse login como **`userId`** do trace no Langfuse — assim você filtra o uso
+por pessoa. O `subject` da licença (e seu hash) também ficam nos metadados. A captura só acontece
+**quando a inferência passa pelo gateway** (provedor apontando para o gateway, ou o gateway como
+proxy); em acesso direto ao HubGPU não há trace. Para conformidade (LGPD), trate o login como dado
+pessoal e ajuste a retenção no Langfuse conforme sua política.
+
 > 🛡️ Se o Langfuse cair, o FORGE **não trava**: ele descarta/enfileira os registros e segue gerando
 > ("fail-open"). A observabilidade nunca atrapalha o usuário.
 

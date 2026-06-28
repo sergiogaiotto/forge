@@ -164,7 +164,7 @@ function enqueueTrace(ctx, record) {
   const genId = crypto.randomUUID();
   const ts = new Date().toISOString();
   const events = [
-    { id: crypto.randomUUID(), type: "trace-create", timestamp: ts, body: { id: traceId, name: "forge.generation", userId: ctx.subjectHash, environment: lf.environment, metadata: ctx } },
+    { id: crypto.randomUUID(), type: "trace-create", timestamp: ts, body: { id: traceId, name: "forge.generation", userId: ctx.login || ctx.subjectHash, environment: lf.environment, metadata: ctx } },
     {
       id: crypto.randomUUID(),
       type: "generation-create",
@@ -243,6 +243,7 @@ async function handleProxy(req, res, reqId) {
   const bodyText = await readBody(req);
   const ctx = {
     sessionId: req.headers["x-forge-session"] || "",
+    login: req.headers["x-forge-login"] || "", // RF-063: identidade do dev (login do SO)
     org: session.org,
     subjectHash: crypto.createHash("sha256").update(session.subject).digest("hex").slice(0, 16),
     provider: req.headers["x-forge-provider"] || "openai-compatible",

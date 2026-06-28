@@ -24,6 +24,9 @@ export interface CreateMessageOptions {
   tools?: ToolDefinition[];
   signal?: AbortSignal;
   timeoutMs: number;
+  // Headers de metadados de trace (x-forge-*) propagados ao gateway para a
+  // observabilidade (login, sessão, skills, modelo). Nunca contêm segredos.
+  extraHeaders?: Record<string, string>;
 }
 
 export interface LLMProvider {

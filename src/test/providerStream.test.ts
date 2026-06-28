@@ -55,6 +55,37 @@ test("streams text, reasoning and usage from an OpenAI-compatible endpoint", asy
   }
 });
 
+test("encaminha os headers de trace (x-forge-login) ao endpoint", async () => {
+  let received: http.IncomingHttpHeaders | undefined;
+  const server = http.createServer((req, res) => {
+    received = req.headers;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const egress = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, () => undefined);
+    const provider = new OpenAICompatibleProvider(
+      { type: "openai-compatible", modelId: "m", baseUrl: `http://127.0.0.1:${port}`, apiKey: "not-needed", timeoutSeconds: 10 },
+      egress
+    );
+    await collect(
+      provider.createMessage("s", [{ role: "user", content: "hi" }], {
+        timeoutMs: 5000,
+        extraHeaders: { "x-forge-login": "sergio.gaiotto", "x-forge-session": "sess-1", "x-forge-skills": "pandas-defensive-pipelines" },
+      })
+    );
+    assert.equal(received?.["x-forge-login"], "sergio.gaiotto");
+    assert.equal(received?.["x-forge-session"], "sess-1");
+    assert.equal(received?.["x-forge-skills"], "pandas-defensive-pipelines");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("egress enforcer blocks the request to an external host", async () => {
   const egress = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, () => undefined);
   const provider = new OpenAICompatibleProvider(

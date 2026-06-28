@@ -20,6 +20,7 @@ export interface TaskDeps {
   skillValidator: SkillValidator;
   workspaceRoot: string | undefined;
   timeoutMs: number;
+  extraHeaders?: Record<string, string>;
   post: (msg: ExtToWebview) => void;
 }
 
@@ -53,6 +54,7 @@ export class Task {
       for await (const chunk of d.provider.createMessage(d.systemPrompt, d.messages, {
         timeoutMs: d.timeoutMs,
         signal: this.controller.signal,
+        extraHeaders: d.extraHeaders,
       })) {
         switch (chunk.kind) {
           case "reasoning":

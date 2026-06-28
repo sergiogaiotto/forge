@@ -45,7 +45,11 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           </span>
           <div className="spacer" />
           {forge.observability.traceActive && (
-            <span className="chip" style={{ color: "#6f8fb0" }}>
+            <span
+              className="chip"
+              style={{ color: "#6f8fb0" }}
+              title={`Observabilidade ativa · registrado como "${forge.observability.login}" no Langfuse (gerido pelo admin)`}
+            >
               <Icon name="activity" size={13} /> trace
             </span>
           )}
@@ -157,7 +161,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           <Icon name="shield-check" size={13} /> Licença ✓
         </div>
         {forge.observability.traceActive && (
-          <div className="sb-item" style={{ color: "#7bbf6a" }}>
+          <div className="sb-item" style={{ color: "#7bbf6a" }} title={`Telemetria ativa · usuário "${forge.observability.login}"`}>
             <Icon name="activity" size={13} /> trace ✓
           </div>
         )}

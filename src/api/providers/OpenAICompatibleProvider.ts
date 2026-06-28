@@ -42,7 +42,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     try {
       res = await fetch(url, {
         method: "POST",
-        headers: buildAuthHeaders(this.cfg),
+        headers: { ...buildAuthHeaders(this.cfg), ...(opts.extraHeaders ?? {}) },
         body: JSON.stringify(body),
         signal,
       });

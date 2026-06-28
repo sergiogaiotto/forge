@@ -74,7 +74,7 @@ export interface ForgeState {
   license: LicenseView;
   provider: ProviderView;
   network: { internalOnly: boolean; allowedHosts: string[] };
-  observability: { traceActive: boolean; managedByAdmin: boolean };
+  observability: { traceActive: boolean; managedByAdmin: boolean; login: string };
   mcp: McpServerView[];
   skills: SkillView[];
   rag: RagView;

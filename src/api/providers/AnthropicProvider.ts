@@ -39,6 +39,7 @@ export class AnthropicProvider implements LLMProvider {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "anthropic-version": "2023-06-01",
+      ...(opts.extraHeaders ?? {}),
     };
     if (this.cfg.apiKey && this.cfg.apiKey !== "not-needed") headers["x-api-key"] = this.cfg.apiKey;
 

@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,6 +32,7 @@ import {
   SkillView,
   WebviewToExt,
 } from "../shared/protocol";
+import { osLogin } from "../util/identity";
 import { log } from "../util/logger";
 import { buildBasePrompt } from "./systemPrompt";
 import { Task } from "./Task";
@@ -62,6 +64,7 @@ export class Controller {
   private readonly mcp: McpManager;
   private readonly rag: CodebaseIndex;
 
+  private readonly sessionId = crypto.randomUUID(); // id de sessão p/ correlação no Langfuse
   private skills: SkillMeta[] = [];
   private sessionToken: SessionToken | undefined;
   private licenseKey: string | undefined;
@@ -224,7 +227,7 @@ export class Controller {
       license,
       provider,
       network: { internalOnly: !policy.allowExternal, allowedHosts: policy.allowedHosts },
-      observability: { traceActive: this.config.gatewayUrl() !== "", managedByAdmin: true },
+      observability: { traceActive: this.config.gatewayUrl() !== "", managedByAdmin: true, login: osLogin() },
       mcp: this.registry.toViews(),
       skills: this.skills.map(this.toSkillView),
       rag: {
@@ -520,6 +523,9 @@ export class Controller {
       skillValidator: new SkillValidator(this.workspaceRoot()),
       workspaceRoot: this.workspaceRoot(),
       timeoutMs: runtime.timeoutSeconds * 1000,
+      // RF-063: propaga identidade do dev (login), sessão, modelo e skills ao
+      // gateway para a observabilidade — nunca segredos.
+      extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type),
       post: (m) => this.post(m),
     });
     this.currentTask = task;
@@ -533,6 +539,21 @@ export class Controller {
 
   private workspaceName(): string {
     return vscode.workspace.workspaceFolders?.[0]?.name ?? "workspace";
+  }
+
+  // Headers x-forge-* propagados ao gateway (RF-063/064). Apenas metadados — o
+  // gateway transforma em atributos do trace no Langfuse (userId = login).
+  private buildTraceHeaders(activatedSkills: string[], modelId: string, providerType: string): Record<string, string> {
+    const meta = this.context.globalState.get<{ org: string; subject: string }>(GS_LICENSE_META);
+    return {
+      "x-forge-login": osLogin(),
+      "x-forge-session": this.sessionId,
+      "x-forge-org": meta?.org ?? "",
+      "x-forge-subject": meta?.subject ?? "",
+      "x-forge-provider": providerType,
+      "x-forge-model": modelId,
+      "x-forge-skills": activatedSkills.join(","),
+    };
   }
 
   // Contexto recuperado: trechos relevantes do codebase (RAG: embeddings ou
