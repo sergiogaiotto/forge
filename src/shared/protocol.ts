@@ -10,6 +10,12 @@ export type ProviderType = "openai" | "anthropic" | "openai-compatible";
 export const FORGE_FILE_BLOCK_LANG = "forge-file";
 export const FORGE_CELL_BLOCK_LANG = "forge-cell";
 
+// Cerca EXTERNA padrão dos blocos forge-file/forge-cell: 4 crases. Usar 4 (em vez de 3) permite que
+// o CONTEÚDO do bloco tenha suas próprias cercas de 3 crases (ex.: um ```bash dentro de um README)
+// sem fechar o bloco prematuramente. Os parsers aceitam N>=3 crases (retrocompat com 3), exigindo
+// que o fechamento tenha o MESMO número de crases da abertura, sozinho na própria linha.
+export const FORGE_FENCE = "````";
+
 export interface ProviderPreset {
   id: string;
   label: string;

@@ -1,6 +1,6 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-import { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
+import { FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -28,13 +28,18 @@ Princípios:
   \`encoding="utf-8"\`; não dependa do code page do console para acentuação.
 
 Protocolo de edição de arquivos (OBRIGATÓRIO quando você propõe mudanças em arquivos):
-- Para CADA arquivo que você quer criar ou alterar, emita um bloco cercado com a linguagem
-  \`${FORGE_FILE_BLOCK_LANG}\` e o caminho relativo do arquivo no info-string, assim:
+- Para CADA arquivo que você quer criar ou alterar, emita um bloco cercado por QUATRO crases (\`${FORGE_FENCE}\`),
+  com a linguagem \`${FORGE_FILE_BLOCK_LANG}\` e o caminho relativo do arquivo no info-string, assim:
 
-\`\`\`${FORGE_FILE_BLOCK_LANG} path=caminho/relativo/arquivo.py
+${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG} path=caminho/relativo/arquivo.py
 <conteúdo COMPLETO e final do arquivo após a sua mudança>
-\`\`\`
+${FORGE_FENCE}
 
+- USE QUATRO crases na abertura e no fechamento (não três). Isso é essencial quando o conteúdo do
+  arquivo tem suas PRÓPRIAS cercas de três crases (ex.: um README.md ou docstring com um bloco
+  \`\`\`bash … \`\`\`): com quatro crases externas, as de três crases internas NÃO encerram o bloco.
+- A cerca de fechamento (\`${FORGE_FENCE}\`) deve ficar SOZINHA em sua própria linha, com o MESMO número
+  de crases da abertura. Se, por acaso, o conteúdo já tiver uma cerca de quatro crases, use cinco.
 - O bloco deve conter o conteúdo COMPLETO do arquivo resultante (não apenas o trecho alterado),
   para que o editor gere um diff correto e o usuário possa aplicar com um clique.
 - Escreva uma breve explicação em texto antes do bloco. Não coloque vários arquivos no mesmo bloco.
@@ -42,21 +47,24 @@ Protocolo de edição de arquivos (OBRIGATÓRIO quando você propõe mudanças e
 
 Protocolo de NOTEBOOKS (.ipynb) — edição célula-a-célula:
 - Quando o usuário está num notebook, NÃO reescreva o arquivo inteiro. Edite por CÉLULA com blocos
-  \`${FORGE_CELL_BLOCK_LANG}\`. O contexto do notebook lista as células com seu índice ABSOLUTO ([0], [1], …).
+  \`${FORGE_CELL_BLOCK_LANG}\`, também cercados por QUATRO crases (\`${FORGE_FENCE}\`). O contexto do notebook
+  lista as células com seu índice ABSOLUTO ([0], [1], …).
 - Para INSERIR uma célula nova:
 
-\`\`\`${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=add after=2
+${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=add after=2
 <código da nova célula>
-\`\`\`
+${FORGE_FENCE}
 
   (\`after=N\` insere depois da célula N; omita \`after\` para acrescentar ao final.)
 - Para SUBSTITUIR uma célula existente:
 
-\`\`\`${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=replace index=3
+${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=replace index=3
 <novo código da célula 3>
-\`\`\`
+${FORGE_FENCE}
 
-- Use o índice absoluto exato do contexto. Uma célula por bloco. O usuário aplica e executa a célula.`;
+- Use o índice absoluto exato do contexto. Uma célula por bloco. O usuário aplica e executa a célula.
+- A regra das crases é a mesma do protocolo de arquivos: o fechamento (\`${FORGE_FENCE}\`) fica sozinho na
+  linha, com o mesmo número de crases da abertura, e quatro crases preservam cercas de três no código.`;
 }
 
 // Prompt do Modo TDD (test-first): o modelo escreve os testes antes da
@@ -102,5 +110,12 @@ Formato da resposta (markdown, conciso):
 
 Quando uma correção for objetiva, você PODE propô-la como um bloco de edição de arquivo usando o
 protocolo \`${FORGE_FILE_BLOCK_LANG}\` (com o conteúdo COMPLETO do arquivo corrigido), para que o Dev
-aplique com um clique. Caso contrário, apenas descreva a correção.`;
+aplique com um clique. Cerque o bloco com QUATRO crases — abertura e fechamento — assim:
+
+${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG} path=caminho/relativo/arquivo.py
+<conteúdo COMPLETO e final do arquivo corrigido>
+${FORGE_FENCE}
+
+O fechamento (\`${FORGE_FENCE}\`) fica sozinho na linha; quatro crases preservam cercas de três que o
+conteúdo porventura tenha. Caso contrário, apenas descreva a correção.`;
 }

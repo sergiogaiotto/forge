@@ -1,4 +1,5 @@
 import { FORGE_CELL_BLOCK_LANG } from "../core/systemPrompt";
+import { scanFencedBlocks } from "./fences";
 
 export interface CellBlock {
   path: string;
@@ -8,19 +9,18 @@ export interface CellBlock {
   code: string;
 }
 
-// Extrai os blocos ```forge-cell path=... op=add|replace ...``` da resposta do modelo.
+// Extrai os blocos forge-cell COMPLETOS (op=add|replace) da resposta do modelo. Usa o mesmo scanner
+// de cercas do forge-file (cerca de N>=3 crases, ver fences.ts), então o CÓDIGO da célula pode conter
+// suas próprias cercas de 3 crases (ex.: uma docstring com um ```sql) sem fechar o bloco antes da hora.
 export function parseCellBlocks(text: string): CellBlock[] {
-  const re = new RegExp("```" + FORGE_CELL_BLOCK_LANG + "\\s+([^\\n`]+)\\n([\\s\\S]*?)```", "g");
   const out: CellBlock[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const info = parseInfo(m[1]);
+  for (const f of scanFencedBlocks(text, FORGE_CELL_BLOCK_LANG)) {
+    if (!f.closed) continue;
+    const info = parseInfo(f.info);
     const path = (info.path ?? "").replace(/^["']|["']$/g, "");
     const op = info.op === "replace" ? "replace" : "add";
     if (!path) continue;
-    let code = m[2];
-    if (code.endsWith("\n")) code = code.slice(0, -1);
-    const block: CellBlock = { path, op, code };
+    const block: CellBlock = { path, op, code: f.content };
     if (info.index !== undefined) block.index = toInt(info.index);
     if (info.after !== undefined) block.after = toInt(info.after);
     if (op === "replace" && block.index === undefined) continue; // replace exige index

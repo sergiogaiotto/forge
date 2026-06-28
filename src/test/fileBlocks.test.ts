@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseFileBlocks, parsePartialFileBlocks, stripFileBlocksFromText } from "../util/fileBlocks";
+import {
+  parseFileBlocks,
+  parsePartialFileBlocks,
+  stripFileBlockOfPath,
+  stripFileBlocksFromText,
+} from "../util/fileBlocks";
 
 test("extracts a single file block", () => {
   const text = [
@@ -145,4 +150,124 @@ test("a valid block right after a false-prefix fence is still found", () => {
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].path, "ok.py");
   assert.equal(blocks[0].closed, true);
+});
+
+// ---- cerca de 4 crases: conteúdo com cercas internas (o bug do parser) ------
+
+test("4-backtick fence preserves the whole content even with an inner ```bash block", () => {
+  // Um README cujo CONTEÚDO tem suas próprias cercas de 3 crases: com a cerca externa de 4 crases,
+  // o parser NÃO pode truncar no fence interno. Este é exatamente o bug corrigido.
+  const text = [
+    "Aqui o README:",
+    "````forge-file path=README.md",
+    "# Projeto",
+    "",
+    "Instale com:",
+    "```bash",
+    "pip install foo",
+    "```",
+    "",
+    "Fim do README.",
+    "````",
+    "Pronto.",
+  ].join("\n");
+  const blocks = parseFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].path, "README.md");
+  assert.match(blocks[0].content, /```bash/);
+  assert.match(blocks[0].content, /pip install foo/);
+  assert.match(blocks[0].content, /Fim do README\./);
+  assert.ok(!blocks[0].content.includes("forge-file"));
+  // a cerca externa de 4 crases não deve sobrar no conteúdo
+  assert.ok(!blocks[0].content.includes("````"));
+});
+
+test("a 3-backtick line does NOT close a 4-backtick block (closing count must match)", () => {
+  const text = [
+    "````forge-file path=a.md",
+    "conteúdo antes",
+    "```",
+    "conteúdo depois",
+    "````",
+  ].join("\n");
+  const blocks = parseFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.match(blocks[0].content, /conteúdo antes/);
+  assert.match(blocks[0].content, /conteúdo depois/);
+  // a cerca de 3 crases ficou preservada DENTRO do conteúdo (não foi tratada como fechamento)
+  assert.ok(blocks[0].content.includes("```"));
+});
+
+test("backward compat: a 3-backtick block (no inner fences) still closes at 3 backticks", () => {
+  const text = ["```forge-file path=a.py", "x = 1", "y = 2", "```", "depois"].join("\n");
+  const blocks = parseFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].path, "a.py");
+  assert.equal(blocks[0].content, "x = 1\ny = 2");
+});
+
+test("a closing fence with trailing whitespace still closes the block", () => {
+  const text = ["````forge-file path=a.md", "oi", "````   "].join("\n");
+  const blocks = parseFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].content, "oi");
+});
+
+test("partial parser keeps an inner fence while a 4-backtick block is still streaming", () => {
+  const text = [
+    "````forge-file path=a.md",
+    "# t",
+    "```bash",
+    "ls",
+    "```",
+    "ainda gerando",
+  ].join("\n");
+  const blocks = parsePartialFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].closed, false);
+  assert.match(blocks[0].content, /```bash/);
+  assert.match(blocks[0].content, /ainda gerando/);
+});
+
+test("strip removes an entire 4-backtick block with an inner fence (no truncation)", () => {
+  const text = [
+    "Olha:",
+    "````forge-file path=a.md",
+    "# t",
+    "```bash",
+    "ls",
+    "```",
+    "````",
+    "Fim.",
+  ].join("\n");
+  const out = stripFileBlocksFromText(text);
+  assert.match(out, /Olha:/);
+  assert.match(out, /Fim\./);
+  assert.ok(!out.includes("forge-file"));
+  assert.ok(!out.includes("ls")); // bloco inteiro removido, não truncado no fence interno
+  assert.ok(!out.includes("```bash"));
+});
+
+// ---- stripFileBlockOfPath (webview remove a cerca quando a proposta chega) ----
+
+test("stripFileBlockOfPath removes only the block of the given path, fence-aware", () => {
+  const text = [
+    "Dois arquivos:",
+    "````forge-file path=a.md",
+    "# A",
+    "```bash",
+    "echo a",
+    "```",
+    "````",
+    "entre",
+    "```forge-file path=b.py",
+    "b = 1",
+    "```",
+  ].join("\n");
+  const out = stripFileBlockOfPath(text, "a.md");
+  assert.ok(!out.includes("# A"));
+  assert.ok(!out.includes("echo a")); // bloco de 4 crases removido por inteiro
+  assert.match(out, /b = 1/); // o outro bloco permanece
+  assert.match(out, /Dois arquivos:/);
+  assert.match(out, /entre/);
 });

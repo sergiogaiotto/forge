@@ -3,6 +3,7 @@ import type { DiffProposal, ExtToWebview, ForgeState, ValidatorResult } from "..
 // Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
 export { parsePartialFileBlocks, stripFileBlocksFromText } from "../../src/util/fileBlocks";
 export type { PartialFileBlock } from "../../src/util/fileBlocks";
+import { stripFileBlockOfPath } from "../../src/util/fileBlocks";
 
 export interface RunResultData {
   filePath: string;
@@ -89,14 +90,6 @@ export type Action =
 let toastSeq = 0;
 let runSeq = 0;
 
-// Remove o bloco ```forge-file path=...``` de um determinado caminho do texto transmitido
-// para que o cartão de diff não seja duplicado pela cerca bruta.
-function stripFileBlock(text: string, filePath: string): string {
-  const escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp("```forge-file\\s+path=[\"']?" + escaped + "[\"']?\\n[\\s\\S]*?```", "g");
-  return text.replace(re, "").replace(/\n{3,}/g, "\n\n").trimEnd();
-}
-
 function lastAssistant(messages: MessageVM[]): MessageVM | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "assistant") return messages[i];
@@ -167,7 +160,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "stream/proposal":
       return updateLastAssistant(state, (m) => ({
         ...m,
-        text: stripFileBlock(m.text, msg.proposal.filePath),
+        text: stripFileBlockOfPath(m.text, msg.proposal.filePath),
         proposals: [...m.proposals, { proposal: msg.proposal, status: "pending" }],
       }));
     case "validation/result":
