@@ -242,7 +242,12 @@ export class Controller {
   // documentos SEPARABLES — para que papel e frontmatter sejam resolvidos por documento, não no blob
   // mesclado. Tolerante a ausência. O admin pode semear padrões via managedSkillsDir (onda futura).
   private async loadProfileSources(): Promise<string[]> {
-    const candidates = [path.join(os.homedir(), PROFILE_RELPATH)];
+    // Ordem = precedência crescente: admin (padrões da organização) → usuário → workspace.
+    // O último a declarar um papel vence; os corpos são concatenados nessa ordem.
+    const candidates: string[] = [];
+    const admin = this.config.managedProfile();
+    if (admin) candidates.push(admin);
+    candidates.push(path.join(os.homedir(), PROFILE_RELPATH));
     const ws = this.workspaceRoot();
     if (ws) candidates.push(path.join(ws, PROFILE_RELPATH));
     const out: string[] = [];

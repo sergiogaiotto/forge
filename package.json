@@ -380,6 +380,11 @@
           "type": "string",
           "default": "query",
           "markdownDescription": "Nome do argumento que recebe o texto da busca na ferramenta MCP."
+        },
+        "forge.project.managedProfile": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Caminho para um **perfil de projeto gerido pelo admin** (markdown — padrões/convenções da organização). Quando definido, é injetado em todo prompt como camada de **menor precedência**: o `.forge/project.md` do workspace ainda tem a palavra final. Vazio = sem camada admin."
         }
       }
     }

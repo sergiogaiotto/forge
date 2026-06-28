@@ -81,3 +81,11 @@ test("resolveRole: o papel do workspace (último) vence o do usuário", () => {
   assert.equal(resolveRole([user]), "cientista-de-dados");
   assert.equal(resolveRole([]), undefined);
 });
+
+test("resolveRole: 3 camadas admin → usuário → workspace (workspace vence; admin é fallback)", () => {
+  const admin = ["---", "papel: engenheiro-de-dados", "---", "", "padrões da org"].join("\n");
+  const userSemPapel = ["---", "stack: nota", "---", "", "global"].join("\n");
+  const ws = ["---", "papel: engenheiro-de-ml", "---", "", "projeto"].join("\n");
+  assert.equal(resolveRole([admin, userSemPapel, ws]), "engenheiro-de-ml");
+  assert.equal(resolveRole([admin, userSemPapel]), "engenheiro-de-dados"); // admin como fallback
+});
