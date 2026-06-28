@@ -3,6 +3,17 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.0.3] — 2026-06-28
+
+### Changed
+- **Identidade do dev passa a ser o e-mail** (antes era o login do SO). O gateway
+  usa o e-mail como **`userId`** do trace no Langfuse (o login vira metadado).
+- **Coleta do e-mail (RF-063):** usa o `subject` da licença quando ele é um e-mail.
+  Quando não há coleta automática (subject genérico/não-e-mail) — ou quando o admin
+  ativa `forge.identity.requireEmail` (licenças compartilhadas) — o dev **deve
+  informar o e-mail no setup inicial**; sem isso, a configuração não conclui e a
+  geração é bloqueada. Novo campo obrigatório no onboarding.
+
 ## [1.0.2] — 2026-06-28
 
 ### Added

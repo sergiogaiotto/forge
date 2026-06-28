@@ -229,12 +229,22 @@ O que escolher em `LANGFUSE_CAPTURE` (política de conteúdo, importante para LG
 - **masked** — registra, mas **mascara** dados sensíveis (e-mails, tokens, números longos);
 - **metadata-only** — registra só metadados (sem o conteúdo do código).
 
-**Identidade do dev (quem rodou cada geração).** A extensão captura o **login do usuário** (do
-sistema operacional) e o envia ao gateway no header `x-forge-login` (junto de sessão, org, modelo e
-skills). O gateway grava esse login como **`userId`** do trace no Langfuse — assim você filtra o uso
-por pessoa. O `subject` da licença (e seu hash) também ficam nos metadados. A captura só acontece
+**Identidade do dev (quem rodou cada geração).** A identidade principal é o **e-mail**, gravado como
+**`userId`** do trace no Langfuse — assim você filtra o uso por pessoa. Como o e-mail é obtido:
+
+- **Coleta automática:** se o `subject` da licença for um e-mail (caso de licença por usuário), ele é
+  usado direto.
+- **Coleta manual obrigatória:** se o `subject` **não** for um e-mail (genérico/compartilhado), ou se
+  você ativar **`forge.identity.requireEmail: true`**, o dev é **obrigado a informar o e-mail no setup
+  inicial** — sem isso a configuração não conclui e a geração fica bloqueada.
+
+> 💡 Use `forge.identity.requireEmail: true` quando emitir **licenças compartilhadas** (um mesmo
+> `subject` para vários devs) — assim cada pessoa informa o próprio e-mail e a atribuição no Langfuse
+> fica individual.
+
+O login do SO e o `subject`/hash da licença também vão nos metadados do trace. A captura só acontece
 **quando a inferência passa pelo gateway** (provedor apontando para o gateway, ou o gateway como
-proxy); em acesso direto ao HubGPU não há trace. Para conformidade (LGPD), trate o login como dado
+proxy); em acesso direto ao HubGPU não há trace. Para conformidade (LGPD), trate o e-mail como dado
 pessoal e ajuste a retenção no Langfuse conforme sua política.
 
 > 🛡️ Se o Langfuse cair, o FORGE **não trava**: ele descarta/enfileira os registros e segue gerando

@@ -32,13 +32,14 @@ import {
   SkillView,
   WebviewToExt,
 } from "../shared/protocol";
-import { osLogin } from "../util/identity";
+import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { buildBasePrompt } from "./systemPrompt";
 import { Task } from "./Task";
 
 const GS_PROVIDER = "forge.provider";
 const GS_LICENSE_META = "forge.license.meta";
+const GS_IDENTITY_EMAIL = "forge.identity.email";
 const WS_DISABLED_SKILLS = "forge.skills.disabled";
 
 interface ProviderPersisted {
@@ -214,9 +215,10 @@ export class Controller {
     const provider = this.providerView();
     const licenseActive = !!this.sessionToken;
     const license = this.licenseView();
+    const identity = this.resolveIdentity();
     let stage: ForgeState["stage"];
     if (!licenseActive) stage = "onboarding-license";
-    else if (!provider.configured) stage = "onboarding-provider";
+    else if (!provider.configured || identity.emailRequired) stage = "onboarding-provider";
     else stage = "ready";
 
     const policy = this.config.egressPolicy();
@@ -228,6 +230,7 @@ export class Controller {
       provider,
       network: { internalOnly: !policy.allowExternal, allowedHosts: policy.allowedHosts },
       observability: { traceActive: this.config.gatewayUrl() !== "", managedByAdmin: true, login: osLogin() },
+      identity,
       mcp: this.registry.toViews(),
       skills: this.skills.map(this.toSkillView),
       rag: {
@@ -244,6 +247,29 @@ export class Controller {
       telemetryEnabled: this.config.telemetryEnabled(),
       version: "1.0.0",
     };
+  }
+
+  // RF-063: resolve a identidade (e-mail) do dev a partir do subject da licença,
+  // do e-mail informado manualmente e da política do admin (requireEmail).
+  private resolveIdentity(): EmailIdentity {
+    const meta = this.context.globalState.get<{ subject?: string }>(GS_LICENSE_META);
+    const manual = this.context.globalState.get<string>(GS_IDENTITY_EMAIL);
+    return resolveEmailIdentity({
+      subject: meta?.subject,
+      manualEmail: manual,
+      requireEmail: this.config.requireEmail(),
+    });
+  }
+
+  async setEmail(email: string): Promise<void> {
+    const value = (email ?? "").trim();
+    if (!isEmail(value)) {
+      this.post({ type: "notice", level: "error", message: "E-mail inválido. Informe um e-mail corporativo válido." });
+      return;
+    }
+    await this.context.globalState.update(GS_IDENTITY_EMAIL, value);
+    this.post({ type: "notice", level: "info", message: "E-mail registrado para a observabilidade." });
+    await this.postState();
   }
 
   private toSkillView(s: SkillMeta): SkillView {
@@ -294,6 +320,9 @@ export class Controller {
         break;
       case "license/submit":
         await this.activateLicense(msg.key);
+        break;
+      case "identity/setEmail":
+        await this.setEmail(msg.email);
         break;
       case "provider/setup":
         await this.setupProvider(msg.setup);
@@ -384,6 +413,7 @@ export class Controller {
     await this.secrets.delete(SecretsStore.providerApiKey("default"));
     await this.context.globalState.update(GS_PROVIDER, undefined);
     await this.context.globalState.update(GS_LICENSE_META, undefined);
+    await this.context.globalState.update(GS_IDENTITY_EMAIL, undefined);
     this.sessionToken = undefined;
     this.licenseKey = undefined;
     this.history = [];
@@ -482,6 +512,12 @@ export class Controller {
       this.post({ type: "notice", level: "error", message: "Licença requerida. Ative a licença para gerar código." });
       return;
     }
+    // RF-063: identidade obrigatória quando não há coleta automática do e-mail.
+    if (this.resolveIdentity().emailRequired) {
+      this.post({ type: "notice", level: "error", message: "Informe seu e-mail na configuração inicial antes de gerar código." });
+      await this.postState();
+      return;
+    }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
       this.post({ type: "notice", level: "error", message: "Nenhum provedor configurado." });
@@ -545,8 +581,10 @@ export class Controller {
   // gateway transforma em atributos do trace no Langfuse (userId = login).
   private buildTraceHeaders(activatedSkills: string[], modelId: string, providerType: string): Record<string, string> {
     const meta = this.context.globalState.get<{ org: string; subject: string }>(GS_LICENSE_META);
+    const identity = this.resolveIdentity();
     return {
-      "x-forge-login": osLogin(),
+      "x-forge-email": identity.email ?? "", // identidade principal (userId no Langfuse)
+      "x-forge-login": osLogin(), // metadado secundário
       "x-forge-session": this.sessionId,
       "x-forge-org": meta?.org ?? "",
       "x-forge-subject": meta?.subject ?? "",

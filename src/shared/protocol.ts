@@ -75,6 +75,7 @@ export interface ForgeState {
   provider: ProviderView;
   network: { internalOnly: boolean; allowedHosts: string[] };
   observability: { traceActive: boolean; managedByAdmin: boolean; login: string };
+  identity: { email: string | null; emailRequired: boolean; source: "license" | "manual" | "none" };
   mcp: McpServerView[];
   skills: SkillView[];
   rag: RagView;
@@ -128,6 +129,7 @@ export type ExtToWebview =
 export type WebviewToExt =
   | { type: "ready" }
   | { type: "license/submit"; key: string }
+  | { type: "identity/setEmail"; email: string }
   | { type: "provider/setup"; setup: ProviderSetup }
   | { type: "provider/test"; setup: ProviderSetup }
   | { type: "provider/openSettings" }

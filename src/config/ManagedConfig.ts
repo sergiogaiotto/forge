@@ -74,6 +74,10 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("telemetry.enabled", false);
   }
 
+  requireEmail(): boolean {
+    return this.cfg().get<boolean>("identity.requireEmail", false);
+  }
+
   onChange(listener: () => void): vscode.Disposable {
     return vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("forge")) listener();

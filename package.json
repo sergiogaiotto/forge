@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, licença Ed25519, observabilidade e MCP in-network.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -312,6 +312,11 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Telemetria de produto opt-in (distinta da observabilidade do admin via gateway/Langfuse)."
+        },
+        "forge.identity.requireEmail": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Exige que o dev informe o **e-mail** no setup inicial (vira o `userId` do trace no Langfuse). Use `true` quando as licenças são compartilhadas/genéricas. Mesmo com `false`, o e-mail é solicitado se o `subject` da licença não for um e-mail válido."
         }
       }
     }

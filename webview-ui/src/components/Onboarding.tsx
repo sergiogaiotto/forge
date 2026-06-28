@@ -23,6 +23,8 @@ export function Onboarding({ state, dispatch }: { state: UIState; dispatch: Reac
   const forge = state.forge!;
   const licenseActive = forge.license.active;
   const [licenseKey, setLicenseKey] = useState("");
+  const [email, setEmail] = useState("");
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const presets = forge.presets;
   const [presetId, setPresetId] = useState<string>(presets.find((p) => p.id === "hubgpu-120b")?.id ?? presets[0]?.id ?? "");
   const preset: ProviderPreset | undefined = useMemo(() => presets.find((p) => p.id === presetId), [presets, presetId]);
@@ -88,10 +90,42 @@ export function Onboarding({ state, dispatch }: { state: UIState; dispatch: Reac
             Cole a chave fornecida pelo admin. A assinatura é verificada localmente (Ed25519) e confirmada no servidor.
           </div>
           {licenseActive ? (
-            <div className="ok-note">
-              <Icon name="shield-check" size={14} /> Assinatura válida · org {forge.license.org ?? "—"} · expira em{" "}
-              {fmtExpiry(forge.license.expiry) || "—"}
-            </div>
+            <>
+              <div className="ok-note">
+                <Icon name="shield-check" size={14} /> Assinatura válida · org {forge.license.org ?? "—"} · expira em{" "}
+                {fmtExpiry(forge.license.expiry) || "—"}
+              </div>
+              {forge.identity.emailRequired ? (
+                <div style={{ marginTop: 11 }}>
+                  <div className="label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Icon name="users" size={13} color="#e0a85a" /> Seu e-mail corporativo (obrigatório)
+                  </div>
+                  <input
+                    className="field"
+                    style={{ color: "#9cdcfe" }}
+                    placeholder="voce@claro.com.br"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && emailOk && post({ type: "identity/setEmail", email: email.trim() })}
+                    spellCheck={false}
+                  />
+                  <div className="muted-note">
+                    <Icon name="info-circle" size={12} /> A licença não identifica você automaticamente. O e-mail é usado como sua
+                    identidade na observabilidade (Langfuse).
+                  </div>
+                  <div className="actions" style={{ marginTop: 9, marginBottom: 0, justifyContent: "flex-end" }}>
+                    <button className="btn p" disabled={!emailOk} onClick={() => post({ type: "identity/setEmail", email: email.trim() })}>
+                      <Icon name="check" size={13} /> Confirmar e-mail
+                    </button>
+                  </div>
+                </div>
+              ) : forge.identity.email ? (
+                <div className="ok-note" style={{ marginTop: 8 }}>
+                  <Icon name="users" size={13} /> Identificado como {forge.identity.email}
+                  {forge.identity.source === "manual" ? " (informado)" : ""}
+                </div>
+              ) : null}
+            </>
           ) : (
             <>
               <input
@@ -183,7 +217,12 @@ export function Onboarding({ state, dispatch }: { state: UIState; dispatch: Reac
               <Icon name={state.providerTest?.pending ? "refresh" : "plug"} size={13} className={state.providerTest?.pending ? "spin" : ""} />{" "}
               Testar conexão
             </button>
-            <button className="btn p" onClick={() => post({ type: "provider/setup", setup: buildSetup() })} disabled={!modelId.trim()}>
+            <button
+              className="btn p"
+              onClick={() => post({ type: "provider/setup", setup: buildSetup() })}
+              disabled={!modelId.trim() || forge.identity.emailRequired}
+              title={forge.identity.emailRequired ? "Informe seu e-mail antes de concluir" : "Concluir"}
+            >
               <Icon name="check" size={13} /> Concluir configuração
             </button>
           </div>
