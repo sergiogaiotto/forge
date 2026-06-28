@@ -1,0 +1,342 @@
+{
+  "name": "forge",
+  "displayName": "FORGE — Codegen Claro",
+  "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, licença Ed25519, observabilidade e MCP in-network.",
+  "version": "1.0.0",
+  "publisher": "claro-data-platform",
+  "license": "Apache-2.0",
+  "icon": "media/forge-icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Data Science",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "codegen",
+    "data",
+    "claro",
+    "hubgpu",
+    "skills",
+    "agent"
+  ],
+  "galleryBanner": {
+    "color": "#181818",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://git.interno.claro.com.br/data-platform/forge"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "forge-activitybar",
+          "title": "FORGE",
+          "icon": "media/flame.svg"
+        }
+      ]
+    },
+    "views": {
+      "forge-activitybar": [
+        {
+          "type": "webview",
+          "id": "forge.sidebar",
+          "name": "FORGE",
+          "icon": "media/flame.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "forge.focus",
+        "title": "Abrir painel",
+        "category": "FORGE",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "forge.newTask",
+        "title": "Nova tarefa",
+        "category": "FORGE",
+        "icon": "$(add)"
+      },
+      {
+        "command": "forge.activateLicense",
+        "title": "Ativar licença",
+        "category": "FORGE"
+      },
+      {
+        "command": "forge.setupProvider",
+        "title": "Configurar provedor",
+        "category": "FORGE"
+      },
+      {
+        "command": "forge.reindexSkills",
+        "title": "Reindexar skills",
+        "category": "FORGE",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "forge.reindexCodebase",
+        "title": "Reindexar codebase (RAG)",
+        "category": "FORGE",
+        "icon": "$(database)"
+      },
+      {
+        "command": "forge.signOut",
+        "title": "Sair (limpar licença e credenciais)",
+        "category": "FORGE"
+      },
+      {
+        "command": "forge.showOutput",
+        "title": "Mostrar logs",
+        "category": "FORGE",
+        "icon": "$(output)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "forge.newTask",
+          "when": "view == forge.sidebar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "forge.reindexSkills",
+          "when": "view == forge.sidebar",
+          "group": "navigation@2"
+        },
+        {
+          "command": "forge.reindexCodebase",
+          "when": "view == forge.sidebar",
+          "group": "navigation@3"
+        },
+        {
+          "command": "forge.showOutput",
+          "when": "view == forge.sidebar",
+          "group": "navigation@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "FORGE",
+      "properties": {
+        "forge.gateway.url": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "URL do **gateway in-network** que valida a licença, faz proxy da inferência e emite traces. Vazio = modo local (validação client-side apenas; ver `forge.license.mode`)."
+        },
+        "forge.license.mode": {
+          "type": "string",
+          "enum": [
+            "gateway",
+            "local"
+          ],
+          "default": "local",
+          "markdownDescription": "`gateway`: validação autoritativa server-side (recomendado em produção). `local`: apenas verificação Ed25519 no cliente (dev/PoC)."
+        },
+        "forge.skills.managedDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Diretório do catálogo de skills **gerido pelo admin**. Vazio = usa o catálogo empacotado com a extensão."
+        },
+        "forge.skills.retrievalThreshold": {
+          "type": "number",
+          "default": 15,
+          "markdownDescription": "Acima deste número de skills habilitadas, o discovery passa a selecionar top-K por relevância (RF-037)."
+        },
+        "forge.skills.topK": {
+          "type": "number",
+          "default": 8,
+          "markdownDescription": "Número de skills injetadas no discovery quando o retrieval por relevância está ativo."
+        },
+        "forge.egress.allowExternal": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Permitir egress para a internet pública. **Padrão: false** (deny-by-default, RNF-014). Não altere sem aprovação de segurança."
+        },
+        "forge.egress.allowedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "hub-gpus.claro.com.br"
+          ],
+          "markdownDescription": "Hosts in-network permitidos (provedor, gateway, Langfuse, MCP, licença). Qualquer destino fora desta lista é bloqueado e registrado."
+        },
+        "forge.mcp.catalog": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Catálogo de MCP servers **gerido pelo admin** (managed setting). Cada item segue o schema `McpServerEntry`.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "transport": {
+                "type": "string",
+                "enum": [
+                  "stdio",
+                  "streamableHttp"
+                ]
+              },
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "url": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "readonly",
+                  "readwrite"
+                ]
+              },
+              "autoApprove": {
+                "type": "boolean"
+              },
+              "credentialRef": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "forge.validation.gateBlocksApply": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Quando uma skill define um validador como *gate*, falha na validação bloqueia o **Aplicar** do diff (RF-039)."
+        },
+        "forge.rag.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Habilita a recuperação de contexto do codebase (RAG) por busca semântica/lexical (RF-041)."
+        },
+        "forge.rag.embeddings.url": {
+          "type": "string",
+          "default": "https://hub-gpus.claro.com.br/embed06b/v1",
+          "markdownDescription": "Base do endpoint **in-network** de embeddings OpenAI-compatible (termina em `/v1`). **Não inclua `/embeddings`** — esse sufixo é adicionado pelo client. Ex.: `https://hub-gpus.claro.com.br/embed06b/v1`. Vazio = recuperação **lexical** (BM25), sem embeddings (RF-079)."
+        },
+        "forge.rag.embeddings.model": {
+          "type": "string",
+          "default": "Qwen/Qwen3-Embedding-0.6B",
+          "markdownDescription": "Modelo de embeddings (hub interno Claro). Ex.: `Qwen/Qwen3-Embedding-0.6B`."
+        },
+        "forge.rag.embeddings.dimensions": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "Densidade do vetor (MRL/Matryoshka). **0 = padrão do modelo** (1024 no Qwen3-Embedding-0.6B). Mudar a densidade exige reindexação do codebase (FORGE: Reindexar codebase)."
+        },
+        "forge.rag.maxChunks": {
+          "type": "number",
+          "default": 8,
+          "markdownDescription": "Número máximo de trechos do codebase injetados no contexto por geração."
+        },
+        "forge.rag.maxFileSizeKb": {
+          "type": "number",
+          "default": 512,
+          "markdownDescription": "Arquivos maiores que isto (KB) são ignorados na indexação."
+        },
+        "forge.rag.include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/*.py",
+            "**/*.ipynb",
+            "**/*.sql",
+            "**/*.r",
+            "**/*.scala",
+            "**/*.java",
+            "**/*.ts",
+            "**/*.js",
+            "**/*.md",
+            "**/*.yaml",
+            "**/*.yml",
+            "**/*.toml"
+          ],
+          "markdownDescription": "Globs de arquivos incluídos na indexação do codebase."
+        },
+        "forge.rag.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/__pycache__/**",
+            "**/.ipynb_checkpoints/**",
+            "**/target/**",
+            "**/.forge/**"
+          ],
+          "markdownDescription": "Globs de arquivos/pastas excluídos da indexação."
+        },
+        "forge.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Telemetria de produto opt-in (distinta da observabilidade do admin via gateway/Langfuse)."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "scripts": {
+    "build": "npm run build:webview && npm run build:ext",
+    "build:ext": "node esbuild.mjs",
+    "build:webview": "vite build",
+    "watch:ext": "node esbuild.mjs --watch",
+    "watch:webview": "vite build --watch",
+    "typecheck": "tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.webview.json --noEmit",
+    "test": "tsx --test src/test/*.test.ts",
+    "keygen": "node admin-cli/forge-admin.mjs keygen",
+    "license:issue": "node admin-cli/forge-admin.mjs issue",
+    "package": "npm run build && vsce package --allow-missing-repository --skip-license --baseContentUrl https://git.interno.claro.com.br/data-platform/forge --baseImagesUrl https://git.interno.claro.com.br/data-platform/forge",
+    "publish:vsce": "vsce publish",
+    "publish:ovsx": "ovsx publish",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "ovsx": "^0.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

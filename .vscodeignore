@@ -1,0 +1,28 @@
+# Source and tooling — only ship the bundled output.
+src/**
+webview-ui/**
+admin-cli/**
+gateway/**
+node_modules/**
+.vscode/**
+.github/**
+.gitlab-ci.yml
+**/*.ts
+**/*.map
+**/tsconfig*.json
+esbuild.mjs
+vite.config.ts
+.gitignore
+.eslintrc*
+**/.DS_Store
+
+# Keep the runtime bits: dist/**, the icon, the skills catalog, docs.
+!dist/**
+!skills/**
+!media/forge-icon.png
+!media/flame.svg
+
+# …but never the icon generator or any keys.
+media/gen-icon.mjs
+**/keys/**
+**/*.pem

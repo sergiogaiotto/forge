@@ -1,0 +1,26 @@
+FORGE — Codegen Claro
+Copyright 2026 Claro / claro-data-platform
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------
+Attribution and design lineage
+------------------------------------------------------------------------------
+FORGE is an independent VSCode extension whose architecture is informed by the
+open-source Cline project (https://github.com/cline/cline, Apache-2.0) — in
+particular the OpenAI-compatible provider model and an agentic harness — and by
+the open "Agent Skills" standard (SKILL.md with progressive disclosure,
+including the `.claude/skills/` layout).
+
+No "Cline" trademark, name, or branding is used in this product. The FORGE name,
+flame icon, and branding are project-specific.
+
+------------------------------------------------------------------------------
+Third-party components (bundled)
+------------------------------------------------------------------------------
+- js-yaml (MIT)            — YAML frontmatter parsing
+- react, react-dom (MIT)  — webview UI
+- (build only) esbuild (MIT), vite (MIT), typescript (Apache-2.0), tsx (MIT)
+
+Each third-party component remains under its own license. This NOTICE file is
+provided in compliance with Section 4 of the Apache License 2.0.
