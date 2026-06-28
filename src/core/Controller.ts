@@ -39,6 +39,7 @@ import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemProm
 import { appendRule, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
+import { Role, resolveRole, roleGuidance, setRole, stripFrontmatter } from "../util/roleDefaults";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -237,22 +238,23 @@ export class Controller {
 
   // ---- perfil do projeto (.forge/project.md) ---------------------------------
 
-  // Lê o perfil com precedência usuário → workspace (workspace tem a palavra final ao concatenar).
-  // Tolerante a ausência. O admin pode semear padrões via managedSkillsDir (onda futura).
-  private async loadProjectProfileText(): Promise<string> {
+  // Lê os perfis na ordem de precedência usuário → workspace (workspace tem a palavra final), como
+  // documentos SEPARABLES — para que papel e frontmatter sejam resolvidos por documento, não no blob
+  // mesclado. Tolerante a ausência. O admin pode semear padrões via managedSkillsDir (onda futura).
+  private async loadProfileSources(): Promise<string[]> {
     const candidates = [path.join(os.homedir(), PROFILE_RELPATH)];
     const ws = this.workspaceRoot();
     if (ws) candidates.push(path.join(ws, PROFILE_RELPATH));
-    const parts: string[] = [];
+    const out: string[] = [];
     for (const p of candidates) {
       try {
         const t = (await fs.readFile(p, "utf8")).trim();
-        if (t) parts.push(t);
+        if (t) out.push(t);
       } catch {
         /* arquivo ausente — ok */
       }
     }
-    return parts.join("\n\n");
+    return out;
   }
 
   // Lê os arquivos-âncora da raiz e devolve a stack detectada (linguagem, gerenciador, lint/tipos/
@@ -311,6 +313,36 @@ export class Controller {
       await fs.writeFile(abs, defaultProfileSkeleton(), "utf8");
     }
     await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: false });
+  }
+
+  // Seletor nativo de papel: grava o `papel:` no frontmatter do .forge/project.md, que passa a
+  // ajustar o estilo/defaults injetados no prompt.
+  async pickProjectRole(): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para definir o papel do projeto." });
+      return;
+    }
+    const items: { label: string; role: Role }[] = [
+      { label: "Cientista de dados", role: "cientista-de-dados" },
+      { label: "Engenheiro de dados", role: "engenheiro-de-dados" },
+      { label: "Engenheiro de ML", role: "engenheiro-de-ml" },
+      { label: "Engenheiro de software", role: "engenheiro-de-software" },
+    ];
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: "Seu papel no projeto — ajusta o estilo e os defaults do FORGE",
+    });
+    if (!pick) return;
+    const abs = path.join(ws, PROFILE_RELPATH);
+    let existing = "";
+    try {
+      existing = await fs.readFile(abs, "utf8");
+    } catch {
+      existing = defaultProfileSkeleton();
+    }
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, setRole(existing, pick.role), "utf8");
+    this.post({ type: "notice", level: "info", message: `Papel definido: ${pick.label}.` });
   }
 
   // ---- estado ----------------------------------------------------------------
@@ -511,6 +543,9 @@ export class Controller {
       case "profile/open":
         await this.openProjectProfile();
         break;
+      case "profile/pickRole":
+        await this.pickProjectRole();
+        break;
       case "signOut":
         await this.signOut();
         break;
@@ -693,9 +728,14 @@ export class Controller {
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
     const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
-    // Combina a stack detectada (sempre fresca, sem drift) com o perfil editado pelo time.
-    const [stack, profileFile] = await Promise.all([this.detectWorkspaceStack(), this.loadProjectProfileText()]);
-    const projectProfile = renderProfileBlock([renderStackBlock(stack), profileFile].filter((s) => s.trim()).join("\n\n"));
+    // Combina a stack detectada (sempre fresca), a orientação do papel (workspace vence) e os corpos
+    // dos perfis. Papel e frontmatter resolvidos POR DOCUMENTO (não no blob) para honrar precedência
+    // e não vazar o frontmatter do segundo arquivo na prosa.
+    const [stack, sources] = await Promise.all([this.detectWorkspaceStack(), this.loadProfileSources()]);
+    const body = sources.map(stripFrontmatter).filter((s) => s.trim()).join("\n\n");
+    const projectProfile = renderProfileBlock(
+      [renderStackBlock(stack), roleGuidance(resolveRole(sources)), body].filter((s) => s.trim()).join("\n\n")
+    );
     const assembled = this.assembler.assemble({
       basePrompt,
       projectProfile,
