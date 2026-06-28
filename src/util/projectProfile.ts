@@ -50,12 +50,15 @@ export function renderProfileBlock(text: string | undefined, maxChars = 4000): s
 }
 
 // Esqueleto inicial do arquivo, criado na primeira regra adicionada / ao abrir o perfil.
+// A stack NÃO é gravada aqui de propósito: ela é detectada do repositório e injetada ao vivo a cada
+// geração (sempre fresca, sem drift). Este arquivo é para o que o código não revela: papel e regras.
 export function defaultProfileSkeleton(): string {
   return [
     "# Perfil do projeto (FORGE)",
     "",
-    "Arquivo versionado e injetado em todo prompt do FORGE. Edite à vontade:",
-    "papel, stack, bibliotecas preferidas e convenções do time.",
+    "Arquivo versionado e injetado em todo prompt do FORGE.",
+    "A stack (linguagem, libs, lint/tipos/testes) é detectada automaticamente do repositório —",
+    "use este arquivo para o papel, as bibliotecas preferidas e as convenções/regras do time.",
     "",
     RULES_SECTION,
     "",
