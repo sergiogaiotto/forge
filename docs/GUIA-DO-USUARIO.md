@@ -160,6 +160,22 @@ O painel do FORGE tem três áreas:
 
 **Na barra inferior (status):** veja a [legenda na seção 6](#a-barra-de-status-explicada).
 
+### 🪟 Colocar o FORGE na direita da janela
+Por padrão o FORGE abre na **lateral esquerda**. Se você prefere ele na **direita** (deixando o
+explorador de arquivos à esquerda), mova-o uma única vez — o VSCode lembra da posição:
+
+- **Arrastando:** abra a barra da direita com `Ctrl+Alt+B` (menu *View → Appearance → Secondary
+  Side Bar*) e **arraste o ícone 🔥 FORGE** da esquerda para a área da direita.
+- **Pelo comando:** `Ctrl+Shift+P` → **"View: Move View"** → escolha **FORGE** → escolha
+  **Secondary Side Bar**.
+- **Clique direito** no título "FORGE" → **Move View** → **Secondary Side Bar**.
+
+Depois de mover, use o atalho **FORGE: Abrir na direita** (`Ctrl+Shift+P`) — ou o botão de barra
+lateral no topo do painel — para abrir o FORGE na direita sempre que precisar.
+
+> Isso coloca **só o FORGE** na direita; o explorador de arquivos continua na esquerda. (Não
+> confunda com mover *toda* a barra lateral para a direita.)
+
 ---
 
 ## 6. Recursos do dia a dia
@@ -237,6 +253,7 @@ Tecle `Ctrl+Shift+P` (abre a "paleta de comandos"), digite **"FORGE"** e escolha
 | Comando | O que faz |
 |---|---|
 | **FORGE: Abrir painel** | abre o painel do FORGE |
+| **FORGE: Abrir na direita (barra secundária)** | abre/foca o painel na lateral direita |
 | **FORGE: Nova tarefa** | foca o painel para uma nova pergunta |
 | **FORGE: Ativar licença** | reabre a tela de licença |
 | **FORGE: Configurar provedor** | troca a IA / ajusta o provedor |

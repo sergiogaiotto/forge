@@ -23,6 +23,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("forge.newTask", async () => {
       await focusView();
     }),
+    vscode.commands.registerCommand("forge.openOnRight", async () => {
+      // Revela a Barra Lateral Secundária (direita) e foca o painel do FORGE.
+      // Obs.: na 1ª vez é preciso mover o FORGE para a barra direita (arrastar ou
+      // "View: Move View"); depois este comando sempre o traz à direita.
+      await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      await focusView();
+    }),
     vscode.commands.registerCommand("forge.activateLicense", focusView),
     vscode.commands.registerCommand("forge.setupProvider", focusView),
     vscode.commands.registerCommand("forge.reindexSkills", async () => {

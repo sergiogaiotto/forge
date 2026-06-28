@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, licença Ed25519, observabilidade e MCP in-network.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -64,6 +64,12 @@
         "icon": "$(flame)"
       },
       {
+        "command": "forge.openOnRight",
+        "title": "Abrir na direita (barra secundária)",
+        "category": "FORGE",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
         "command": "forge.newTask",
         "title": "Nova tarefa",
         "category": "FORGE",
@@ -109,6 +115,11 @@
           "command": "forge.newTask",
           "when": "view == forge.sidebar",
           "group": "navigation@1"
+        },
+        {
+          "command": "forge.openOnRight",
+          "when": "view == forge.sidebar",
+          "group": "navigation@5"
         },
         {
           "command": "forge.reindexSkills",

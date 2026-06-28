@@ -3,6 +3,14 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.0.1] — 2026-06-28
+
+### Added
+- Comando **FORGE: Abrir na direita (barra secundária)** e botão na barra de título do painel,
+  para abrir/focar o FORGE na lateral direita do VSCode. Guia do Usuário documenta como mover o
+  painel para a Barra Lateral Secundária (a posição é persistida pelo VSCode).
+- Guias **docs/GUIA-DO-USUARIO.md** e **docs/GUIA-DO-ADMIN.md** (pt-BR, para leigos).
+
 ## [1.0.0] — 2026-06-27
 
 Initial release. Implements the v1.0 scope of `SPEC-codegen-vscode.md`.
