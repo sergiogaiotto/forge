@@ -120,6 +120,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         )}
       </div>
 
+      {/* Definição de Pronto (DoD) */}
+      <DodBar state={state} dispatch={dispatch} />
+
       {/* Compositor */}
       <div className="composer">
         <div className="composer-box">
@@ -382,6 +385,64 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+type DodStatus = "ok" | "fail" | "pending";
+
+function runStatus(r: RunResultData | null): DodStatus {
+  if (!r || r.skippedReason) return "pending";
+  return r.ok ? "ok" : "fail";
+}
+
+function DodBar({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element | null {
+  const proposals = state.messages.flatMap((m) => m.proposals);
+  if (proposals.length === 0) return null;
+
+  const appliedList = proposals.filter((p) => p.status === "applied");
+  const lastApplied = appliedList[appliedList.length - 1];
+  const applied: DodStatus = appliedList.length ? "ok" : "pending";
+  const gate: DodStatus = lastApplied ? (lastApplied.validation ? (lastApplied.validation.gateOk ? "ok" : "fail") : "ok") : "pending";
+  const run = runStatus(state.lastFileRun);
+  const tests = runStatus(state.lastTestRun);
+  const review: DodStatus = state.reviewed ? "ok" : "pending";
+
+  const ready = applied === "ok" && gate === "ok" && tests === "ok" && review === "ok";
+
+  const runLastApplied = () => {
+    if (lastApplied) post({ type: "run/file", filePath: lastApplied.proposal.filePath, proposalId: lastApplied.proposal.id });
+  };
+  const doReview = () => {
+    dispatch({ kind: "pushUser", text: "Revisar minhas alterações (git diff)." });
+    post({ type: "review/changes" });
+  };
+
+  const items: { key: string; label: string; status: DodStatus; onClick?: () => void; title: string }[] = [
+    { key: "aplicado", label: "Aplicado", status: applied, title: "Há alteração aplicada ao arquivo" },
+    { key: "gate", label: "Gate", status: gate, title: "Validação local (lint/tipos) da última alteração aplicada" },
+    { key: "executa", label: "Executa", status: run, onClick: runLastApplied, title: "Executar o último arquivo aplicado" },
+    { key: "testes", label: "Testes", status: tests, onClick: () => post({ type: "tests/run" }), title: "Rodar a suíte de testes" },
+    { key: "revisao", label: "Revisão", status: review, onClick: doReview, title: "Revisar as alterações (IA in-network)" },
+  ];
+
+  return (
+    <div className={`dod ${ready ? "ready" : ""}`}>
+      <span className="dod-title">
+        <Icon name={ready ? "circle-check" : "list-check"} size={13} color={ready ? "#3fb950" : "#8b8b8b"} />
+        {ready ? "Pronto" : "Definição de Pronto"}
+      </span>
+      {items.map((it) => (
+        <span
+          key={it.key}
+          className={`dod-chip ${it.status} ${it.onClick && it.status !== "ok" ? "clickable" : ""}`}
+          title={it.title}
+          onClick={it.onClick && it.status !== "ok" ? it.onClick : undefined}
+        >
+          <Icon name={it.status === "ok" ? "check" : it.status === "fail" ? "x" : "circle"} size={11} />
+          {it.label}
+        </span>
+      ))}
     </div>
   );
 }

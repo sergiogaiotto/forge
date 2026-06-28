@@ -3,6 +3,16 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.3.0] — 2026-06-28
+
+### Added — Fase D: painel "Definição de Pronto" (DoD)
+- **Checklist de DoD** acima do compositor, consolidando o ciclo num só lugar:
+  **Aplicado · Gate · Executa · Testes · Revisão**, cada um com estado
+  (✓ ok · ✗ falhou · ○ pendente). Os pendentes acionáveis (Executa/Testes/Revisão)
+  rodam com um clique. Quando tudo fica verde, o painel exibe **✅ Pronto**.
+- Aplicar uma nova alteração reabre o item **Revisão** (a mudança precisa ser
+  revisada de novo).
+
 ## CI — FORGE Review na PR — 2026-06-28 (Fase C; não altera o `.vsix`)
 
 ### Added

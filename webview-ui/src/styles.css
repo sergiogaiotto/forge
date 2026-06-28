@@ -419,6 +419,55 @@ body {
   color: var(--muted-2);
 }
 
+/* ---- Definição de Pronto (DoD) -------------------------------------------- */
+.dod {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-deep);
+}
+.dod.ready {
+  background: #14210f;
+}
+.dod-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.dod.ready .dod-title {
+  color: var(--green-soft);
+}
+.dod-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border-2);
+  color: var(--muted-2);
+}
+.dod-chip.ok {
+  color: var(--green-soft);
+  border-color: #2f5236;
+}
+.dod-chip.fail {
+  color: #d98989;
+  border-color: #522f2f;
+}
+.dod-chip.clickable {
+  cursor: pointer;
+}
+.dod-chip.clickable:hover {
+  border-color: var(--accent);
+  color: var(--accent-soft);
+}
+
 /* ---- Composer ------------------------------------------------------------- */
 .composer {
   border-top: 1px solid var(--border);

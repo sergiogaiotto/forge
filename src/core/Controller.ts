@@ -796,6 +796,7 @@ export class Controller {
     });
     this.currentTask = task;
     await task.run();
+    this.post({ type: "review/done" }); // alimenta o checklist "Definição de Pronto"
   }
 
   // git diff (working tree vs HEAD); fallback: conteúdo do editor ativo.

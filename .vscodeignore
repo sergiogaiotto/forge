@@ -3,6 +3,7 @@ src/**
 webview-ui/**
 admin-cli/**
 gateway/**
+ci/**
 node_modules/**
 .vscode/**
 .github/**
@@ -13,8 +14,20 @@ node_modules/**
 esbuild.mjs
 vite.config.ts
 .gitignore
+.gitattributes
 .eslintrc*
 **/.DS_Store
+
+# Artefatos Python e arquivos de teste gerados no workspace (nunca empacotar)
+.venv/**
+**/.venv/**
+**/__pycache__/**
+**/*.py
+*.py
+cobrinha.py
+**/.pytest_cache/**
+**/.mypy_cache/**
+**/.ruff_cache/**
 
 # Keep the runtime bits: dist/**, the icon, the skills catalog, docs.
 !dist/**

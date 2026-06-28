@@ -122,6 +122,7 @@ export type ExtToWebview =
   | { type: "validation/result"; proposalId: string; results: ValidatorResult[]; gateOk: boolean; running: boolean }
   | { type: "proposal/applied"; proposalId: string }
   | { type: "proposal/discarded"; proposalId: string }
+  | { type: "review/done" }
   | {
       type: "run/result";
       proposalId?: string;
