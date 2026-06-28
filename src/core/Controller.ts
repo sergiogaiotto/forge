@@ -37,6 +37,7 @@ import { log } from "../util/logger";
 import { exec } from "node:child_process";
 import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { appendRule, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
+import { detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -232,6 +233,23 @@ export class Controller {
       }
     }
     return parts.join("\n\n");
+  }
+
+  // Lê os arquivos-âncora da raiz e devolve o bloco "Stack detectada" (ou "" se nada/sem workspace).
+  private async detectStackBlock(): Promise<string> {
+    const ws = this.workspaceRoot();
+    if (!ws) return "";
+    const files: Record<string, string | undefined> = {};
+    await Promise.all(
+      STACK_PROBE_FILES.map(async (name) => {
+        try {
+          files[name] = await fs.readFile(path.join(ws, name), "utf8");
+        } catch {
+          files[name] = undefined;
+        }
+      })
+    );
+    return renderStackBlock(detectStack(files));
   }
 
   async addProjectRule(rule: string): Promise<void> {
@@ -653,7 +671,9 @@ export class Controller {
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
     const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
-    const projectProfile = renderProfileBlock(await this.loadProjectProfileText());
+    // Combina a stack detectada (sempre fresca, sem drift) com o perfil editado pelo time.
+    const [stackBlock, profileFile] = await Promise.all([this.detectStackBlock(), this.loadProjectProfileText()]);
+    const projectProfile = renderProfileBlock([stackBlock, profileFile].filter((s) => s.trim()).join("\n\n"));
     const assembled = this.assembler.assemble({
       basePrompt,
       projectProfile,
