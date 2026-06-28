@@ -152,6 +152,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             </div>
           </>
         )}
+        <ProfileSuggestion messages={state.messages} />
         <div className="composer-box">
           {state.attachments.length > 0 && (
             <div className="attach-chips">
@@ -198,6 +199,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             </span>
             <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>
               <Icon name="terminal" size={14} color="#86c98e" /> Testes
+            </span>
+            <span className="pill" title="Perfil do projeto (.forge/project.md) — convenções do time" onClick={() => post({ type: "profile/open" })}>
+              <Icon name="list-check" size={14} /> Perfil
             </span>
             <span className="pill" title={forge.provider.modelId}>
               <Icon name="cpu" size={14} /> {forge.provider.modelId}
@@ -535,6 +539,45 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Heurística conservadora: mensagens em tom de diretiva (proibição/preferência) são candidatas a
+// virar regra do projeto. Evita perguntas e tarefas longas; foca em "nunca/sempre/evite/prefira…".
+function looksLikeRule(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length > 200 || t.includes("?")) return false;
+  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use)\b/i.test(t);
+}
+
+// "Promover correção a regra": quando a última mensagem do usuário soa como diretiva, oferece
+// salvá-la no perfil do projeto com um clique. Dismissível e nunca bloqueante.
+function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element | null {
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUser || dismissed.has(lastUser.id)) return null;
+  const rule = lastUser.text.replace(/^\[TDD\]\s*/, "").trim();
+  if (!looksLikeRule(rule)) return null;
+  const close = () => setDismissed((s) => new Set(s).add(lastUser.id));
+  return (
+    <div className="profile-suggest">
+      <Icon name="list-check" size={13} />
+      <span>Salvar como regra do projeto?</span>
+      <span className="rule-preview" title={rule}>“{rule.length > 60 ? rule.slice(0, 60) + "…" : rule}”</span>
+      <div className="spacer" />
+      <button
+        className="btn p"
+        onClick={() => {
+          post({ type: "profile/addRule", rule });
+          close();
+        }}
+      >
+        <Icon name="check" size={12} /> Salvar
+      </button>
+      <button className="icon-btn" title="Dispensar" onClick={close}>
+        <Icon name="x" size={13} />
+      </button>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { SkillMeta } from "./types";
 
 export interface AssembleInput {
   basePrompt: string;
+  projectProfile?: string; // perfil do projeto (.forge/project.md) — convenções/regras do time
   discoverySkills: SkillMeta[]; // nível 1: name + description
   activatedSkills: { meta: SkillMeta; body: string }[]; // nível 2: corpo completo
   retrievedContext: string; // contexto de RAG / arquivo aberto
@@ -23,6 +24,12 @@ export interface AssembleOutput {
 export class ContextAssembler {
   assemble(input: AssembleInput): AssembleOutput {
     const parts: string[] = [input.basePrompt];
+
+    // Perfil do projeto logo após o base: alta prioridade e, por ficar no topo, sobrevive ao
+    // corte por orçamento (que trunca a cauda do prompt montado).
+    if (input.projectProfile && input.projectProfile.trim().length > 0) {
+      parts.push(`# Perfil do projeto (convenções do time — siga à risca)\n${input.projectProfile.trim()}`);
+    }
 
     if (input.discoverySkills.length > 0) {
       const lines = input.discoverySkills

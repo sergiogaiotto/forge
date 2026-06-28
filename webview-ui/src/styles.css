@@ -603,6 +603,26 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.profile-suggest {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--accent-soft);
+  background: #2a2113;
+  border: 1px solid #4a3a1c;
+  border-radius: 8px;
+  padding: 6px 9px;
+  margin-bottom: 7px;
+}
+.profile-suggest .rule-preview {
+  color: var(--muted);
+  font-style: italic;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
 .composer-box {
   background: var(--surface);
   border: 1px solid var(--border-3);
