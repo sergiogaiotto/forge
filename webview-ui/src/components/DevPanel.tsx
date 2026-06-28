@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
-import type { Action, MessageVM, ProposalVM, RunResultData, UIState } from "../state";
+import type { Action, MessageVM, PartialFileBlock, ProposalVM, RunResultData, UIState } from "../state";
+import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
 import { DiffView } from "./DiffView";
 
@@ -272,7 +273,18 @@ function UserBubble({ m }: { m: MessageVM }): JSX.Element {
 
 function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatch<Action> }): JSX.Element {
   const [showReasoning, setShowReasoning] = useState(false);
-  const thinking = m.streaming && !m.text && !m.proposals.length;
+  // Cartões "ao vivo" só fazem sentido DURANTE a geração: quando o stream termina (sucesso, abort
+  // ou erro), os blocos válidos já viraram propostas concretas (e o reducer removeu sua cerca do
+  // texto). Fora do streaming não fabricamos preview nem removemos cerca — evita cartão-zumbi e
+  // perda de conteúdo se a geração for interrompida (o texto cru reaparece, sem travar a UI).
+  const proposedPaths = new Set(m.proposals.map((p) => p.proposal.filePath));
+  const previews = m.streaming
+    ? parsePartialFileBlocks(m.text).filter((b) => !proposedPaths.has(b.path))
+    : [];
+  const displayText = m.streaming ? stripFileBlocksFromText(m.text) : m.text;
+  const liveBlock = previews.some((b) => !b.closed); // algum bloco ainda chegando
+  const hasCards = previews.length > 0 || m.proposals.length > 0;
+  const thinking = m.streaming && !displayText && !hasCards;
   return (
     <div className="assistant">
       {m.skills.map((s) => (
@@ -294,17 +306,20 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
           {showReasoning && <div className="reasoning">{m.reasoning}</div>}
         </div>
       )}
-      {m.text && (
+      {displayText && (
         <div className="assistant-text">
-          {m.text}
-          {m.streaming && !m.proposals.length && <span className="blink">▏</span>}
+          {displayText}
+          {m.streaming && !liveBlock && !m.proposals.length && <span className="blink">▏</span>}
         </div>
       )}
-      {!m.text && !m.reasoning && m.streaming && (
+      {!displayText && !m.reasoning && m.streaming && !hasCards && (
         <div className="assistant-text" style={{ color: "#7a7a7a" }}>
           <Icon name="refresh" size={13} className="spin" /> gerando…
         </div>
       )}
+      {previews.map((b, idx) => (
+        <PreviewCard key={`pv_${b.path || idx}`} block={b} />
+      ))}
       {m.proposals.map((p) => (
         <ProposalCard key={p.proposal.id} p={p} dispatch={dispatch} />
       ))}
@@ -317,13 +332,59 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
   );
 }
 
+// Cartão "ao vivo" enquanto o modelo ainda está gerando um arquivo: mostra o caminho e o código
+// que vai chegando, com a ação primária já visível (desabilitada até a geração concluir). Só é
+// renderizado durante o streaming; quando a proposta concreta — com diff e validação — chega, ela
+// toma seu lugar. `block.closed` indica que ESTE arquivo já terminou (mesmo com o stream seguindo
+// em outro bloco/prosa), então paramos de exibir "gerando…" e o cursor neste cartão.
+function PreviewCard({ block }: { block: PartialFileBlock }): JSX.Element {
+  const live = !block.closed;
+  const codeRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    codeRef.current?.scrollTo({ top: codeRef.current.scrollHeight });
+  }, [block.content]);
+  return (
+    <div>
+      <div className="diff-card">
+        <div className="diff-head">
+          <span className="left">
+            <Icon name="file-code" size={13} color="#4ec9b0" /> {block.path || "novo arquivo…"}
+          </span>
+          {live ? (
+            <span className="gen-pill">
+              <Icon name="refresh" size={12} className="spin" /> gerando…
+            </span>
+          ) : (
+            <span className="gen-pill" style={{ color: "var(--green-soft)" }}>
+              <Icon name="check" size={12} /> pronto
+            </span>
+          )}
+        </div>
+        <pre className="preview-code" ref={codeRef}>
+          {block.content}
+          {live && <span className="blink">▏</span>}
+        </pre>
+      </div>
+      <div className="actions">
+        <button className="btn p" disabled title="Disponível assim que a geração concluir">
+          <Icon name="check" size={13} /> Aplicar e abrir
+        </button>
+        <button className="btn" disabled>
+          <Icon name="git-compare" size={13} /> Ver diff
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch<Action> }): JSX.Element {
   const v = p.validation;
   const gateFailed = v && !v.running && !v.gateOk;
   const labels = v?.results.map((r) => r.label).join(" + ") || "validação";
   const skipped = v?.results.filter((r) => r.status === "skipped").map((r) => r.label) ?? [];
   const cell = p.proposal.cell;
-  const applyLabel = cell ? (cell.op === "add" ? "Inserir célula" : `Substituir célula [${cell.index}]`) : "Aplicar";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const applyLabel = cell ? (cell.op === "add" ? "Inserir célula" : `Substituir célula [${cell.index}]`) : "Aplicar e abrir";
 
   return (
     <div>
@@ -333,7 +394,7 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             <Icon name={cell ? "terminal" : "code"} size={13} color="#4ec9b0" />{" "}
             {cell ? `célula · ${p.proposal.filePath} · ${p.proposal.summary}` : `diff · ${p.proposal.filePath}`}
           </span>
-          <Icon name="copy" size={13} />
+          <span className="diff-lang">{p.proposal.language}</span>
         </div>
         <DiffView original={p.proposal.original} modified={p.proposal.modified} />
       </div>
@@ -384,7 +445,13 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
           <button
             className="btn p"
             disabled={!!(v && (v.running || gateFailed))}
-            title={gateFailed ? "Quality gate reprovado — corrija antes de aplicar" : "Aplicar"}
+            title={
+              gateFailed
+                ? "Quality gate reprovado — corrija antes de aplicar"
+                : cell
+                ? "Aplicar a célula e abrir o notebook"
+                : "Gravar o arquivo e abri-lo no editor"
+            }
             onClick={() => post({ type: "proposal/apply", proposalId: p.proposal.id })}
           >
             <Icon name="check" size={13} /> {applyLabel}
@@ -392,9 +459,35 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
           <button className="btn" onClick={() => post({ type: "proposal/viewDiff", proposalId: p.proposal.id })}>
             <Icon name="git-compare" size={13} /> Ver diff
           </button>
-          <button className="btn" onClick={() => post({ type: "proposal/discard", proposalId: p.proposal.id })}>
-            <Icon name="x" size={13} /> Descartar
-          </button>
+          <div className="spacer" />
+          <div className="ovf">
+            <button className="btn ovf-btn" title="Mais ações" onClick={() => setMenuOpen((vv) => !vv)}>
+              <Icon name="dots" size={14} />
+            </button>
+            {menuOpen && (
+              <>
+                <div className="ovf-backdrop" onClick={() => setMenuOpen(false)} />
+                <div className="ovf-menu">
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      post({ type: "proposal/copy", proposalId: p.proposal.id });
+                    }}
+                  >
+                    <Icon name="copy" size={13} /> Copiar conteúdo
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      post({ type: "proposal/discard", proposalId: p.proposal.id });
+                    }}
+                  >
+                    <Icon name="x" size={13} /> Descartar
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 

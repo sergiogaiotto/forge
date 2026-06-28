@@ -128,6 +128,13 @@ const PATHS: Record<string, React.ReactNode> = {
     </>
   ),
   "player-play": <path d="M7 4l12 8-12 8z" />,
+  dots: <path d="M5 12h.01M12 12h.01M19 12h.01" />,
+  "file-code": (
+    <>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+      <path d="M5 12V5a2 2 0 0 1 2-2h7l5 5v3M9 16l-2 2 2 2M15 16l2 2-2 2" />
+    </>
+  ),
   terminal: (
     <>
       <path d="M5 7l5 5-5 5" />

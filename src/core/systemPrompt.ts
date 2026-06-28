@@ -1,7 +1,9 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-export const FORGE_FILE_BLOCK_LANG = "forge-file";
-export const FORGE_CELL_BLOCK_LANG = "forge-cell";
+import { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
+
+// Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
+export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
 
 export function buildBasePrompt(workspaceName: string): string {
   return `IDIOMA (OBRIGATÓRIO): responda SEMPRE em português do Brasil (pt-BR). TODO o texto que você

@@ -359,6 +359,9 @@ export class Controller {
       case "proposal/viewDiff":
         await this.viewDiff(msg.proposalId);
         break;
+      case "proposal/copy":
+        await this.copyProposal(msg.proposalId);
+        break;
       case "run/file":
         await this.runFile(msg.filePath, msg.proposalId);
         break;
@@ -879,6 +882,16 @@ export class Controller {
       output: text || "(sem saída capturada — veja a célula no notebook)",
       durationMs: 0,
     });
+  }
+
+  async copyProposal(proposalId: string): Promise<void> {
+    const entry = this.currentTask?.getProposal(proposalId);
+    if (!entry) {
+      this.post({ type: "notice", level: "warn", message: "Proposta não encontrada (expirada)." });
+      return;
+    }
+    await vscode.env.clipboard.writeText(entry.proposal.modified);
+    this.post({ type: "notice", level: "info", message: `Conteúdo de ${entry.proposal.filePath} copiado.` });
   }
 
   async viewDiff(proposalId: string): Promise<void> {

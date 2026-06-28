@@ -245,6 +245,32 @@ body {
   align-items: center;
   gap: 6px;
 }
+.diff-lang {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted-2);
+  text-transform: lowercase;
+}
+.gen-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--accent-soft);
+}
+.preview-code {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  background: #1c1c1c;
+  color: #d4d4d4;
+  padding: 6px 9px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .diff-body {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -387,6 +413,49 @@ body {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.ovf {
+  position: relative;
+  display: inline-flex;
+}
+.ovf-btn {
+  padding: 4px 7px;
+}
+.ovf-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+.ovf-menu {
+  position: absolute;
+  bottom: 30px;
+  right: 0;
+  z-index: 21;
+  background: var(--surface);
+  border: 1px solid var(--border-3);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  box-shadow: 0 8px 24px #0009;
+}
+.ovf-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--sans);
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ovf-menu button:hover {
+  background: #ffffff10;
 }
 .status-applied {
   font-size: 11px;

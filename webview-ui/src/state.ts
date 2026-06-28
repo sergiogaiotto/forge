@@ -1,5 +1,9 @@
 import type { DiffProposal, ExtToWebview, ForgeState, ValidatorResult } from "../../src/shared/protocol";
 
+// Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
+export { parsePartialFileBlocks, stripFileBlocksFromText } from "../../src/util/fileBlocks";
+export type { PartialFileBlock } from "../../src/util/fileBlocks";
+
 export interface RunResultData {
   filePath: string;
   label?: string;
