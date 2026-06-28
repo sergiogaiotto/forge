@@ -9,8 +9,12 @@ gateway/.env
 .DS_Store
 Thumbs.db
 
-# Arquivos gerados ao testar a extensão neste próprio repo
-/cobrinha.py
+# Arquivos gerados ao testar a extensão neste próprio repo.
+# Esta extensão é 100% TypeScript/JS — qualquer .py aqui é artefato de teste do FORGE,
+# não código-fonte. (Teste o FORGE numa PASTA SEPARADA para evitar isso.)
+/*.py
+src/**/*.py
+data/
 
 # Artefatos Python (ambientes/caches gerados ao testar a extensão aqui)
 .venv/
