@@ -4,8 +4,8 @@
 
 **Geração de código assistida por IA para times de dados e IA, dentro do VSCode.**
 
-Multi-provedor (HubGPU · OpenAI · Anthropic) · Skills governadas · Licença Ed25519 ·
-Quality gates locais · MCP in-network · Observabilidade no gateway · Operação offline-da-internet.
+Multi-provedor (HubGPU · OpenAI · Anthropic) · Skills governadas · Perfil de projeto ·
+Quality gates locais · MCP in-network · Observabilidade (gateway + cliente) · Operação offline-da-internet.
 
 </div>
 
@@ -29,13 +29,15 @@ Ed25519 com validação autoritativa server-side, **MCP governado** restrito à 
 | **Presets HubGPU** | `gpt-oss-120b` / `gpt-oss-20b` prontos, header de auth configurável | RF-022 |
 | **Skills** | descoberta, validação de frontmatter, disclosure em 3 níveis, toggle, retrieval lexical | RF-030–038 |
 | **RAG do codebase** | chunking semântico, embeddings in-network com degradação para BM25 lexical, reindex incremental | RF-041, RF-079, RNF-009 |
-| **Quality gates locais** | skill pode anexar `ruff`/`mypy`/`sqlfluff`/scripts; gate reprova bloqueia o *Aplicar* | RF-039 |
+| **Quality gates locais** | skill pode anexar `ruff`/`mypy`/`sqlfluff`/scripts **e** convenções-como-validators derivadas da stack; gate reprova bloqueia o *Aplicar* | RF-039 |
+| **Perfil de projeto** | `.forge/project.md` versionado: **stack auto-detectada**, **papel** do dev e **regras** injetados no prompt; "promover correção a regra"; camada **admin**; painel "Perfil" | — |
+| **UX de geração** | cartão de proposta **ao vivo** durante o stream, **Aplicar e abrir** no editor, *Ver diff*, overflow ⋯ | — |
 | **10 skills de dados** | pandas, polars, SQL, dbt, Airflow, Spark, PyTorch, MLOps, data-quality, EDA | RF-051 |
 | **Licença Ed25519** | verificação local + validação autoritativa no gateway + sessão renovável + revogação | RF-010–017 |
 | **Segredos** | tudo em SecretStorage; nada em `settings.json`/logs | RF-014/024, RNF-001/003 |
 | **Egress deny-by-default** | allowlist in-network; destinos externos bloqueados e logados | RF-072/073, RNF-014/016 |
 | **MCP governado** | catálogo do admin, aprovação por ferramenta, auditoria, in-network | RF-070–077 |
-| **Observabilidade** | trace + `generation` no gateway; `secretKey` só no servidor; fail-open | RF-060–069, RNF-010–013 |
+| **Observabilidade** | **gateway** (trace + `generation`, `secretKey` server-side) **e/ou cliente** (geração + workflow: aplicar/descartar/gate/testes/revisão) → Langfuse; máscara de PII/segredos; fail-open | RF-060–069, RNF-010–013 |
 
 ## 🚀 Começando (do zero ao funcionando)
 
@@ -45,7 +47,7 @@ Pré-requisitos: **Node ≥ 18** (testado em 22), VSCode ≥ 1.90.
 npm install          # instala dependências
 npm run keygen       # gera o par Ed25519 do admin e embute a chave PÚBLICA no cliente
 npm run build        # compila a webview (Vite) e a extensão (esbuild) → dist/
-npm test             # roda a suíte de testes (29 testes)
+npm test             # roda a suíte de testes (126 testes)
 ```
 
 Emita uma licença de teste (já feito por `keygen` em `admin-cli/keys/SAMPLE_LICENSE.txt`):
