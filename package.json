@@ -125,6 +125,11 @@
         "title": "Mostrar logs",
         "category": "FORGE",
         "icon": "$(output)"
+      },
+      {
+        "command": "forge.setupObservability",
+        "title": "Configurar observabilidade (Langfuse)",
+        "category": "FORGE"
       }
     ],
     "menus": {
@@ -385,6 +390,41 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Caminho para um **perfil de projeto gerido pelo admin** (markdown — padrões/convenções da organização). Quando definido, é injetado em todo prompt como camada de **menor precedência**: o `.forge/project.md` do workspace ainda tem a palavra final. Vazio = sem camada admin."
+        },
+        "forge.observability.langfuse.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Habilita a **observabilidade direta** (cliente → Langfuse) da geração de código e do workflow ao redor (skill, aplicar/descartar, gate, execução, testes, revisão). Modo pessoal/PoC — a secretKey fica no cliente. Para garantia/governança do Admin, use o **gateway-relay** (secret server-side). Defina a secretKey via comando `FORGE: Configurar observabilidade (Langfuse)`."
+        },
+        "forge.observability.langfuse.baseUrl": {
+          "type": "string",
+          "default": "https://cloud.langfuse.com",
+          "markdownDescription": "Base do Langfuse (ex.: `https://cloud.langfuse.com`, `https://us.cloud.langfuse.com` ou seu self-hosted). O host precisa estar em `forge.egress.allowedHosts`."
+        },
+        "forge.observability.langfuse.publicKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Public key do projeto Langfuse (`pk-lf-…`). A secret key fica no SecretStorage (comando `FORGE: Configurar observabilidade (Langfuse)`)."
+        },
+        "forge.observability.langfuse.env": {
+          "type": "string",
+          "default": "development",
+          "markdownDescription": "Valor de `environment` nos traces (ex.: `development`, `production`)."
+        },
+        "forge.observability.langfuse.sampleRate": {
+          "type": "number",
+          "default": 1.0,
+          "markdownDescription": "Fração de gerações amostradas (0 a 1). 1.0 = todas."
+        },
+        "forge.observability.langfuse.capture": {
+          "type": "string",
+          "enum": [
+            "full",
+            "masked",
+            "metadata-only"
+          ],
+          "default": "masked",
+          "markdownDescription": "Quanto do prompt/saída capturar: `full` (cru), `masked` (redige segredos/PII — padrão) ou `metadata-only` (sem conteúdo)."
         }
       }
     }

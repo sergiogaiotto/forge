@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { EgressPolicy } from "../net/EgressEnforcer";
 import { McpServerEntry } from "../mcp/types";
+import { CaptureMode, ObsConfig } from "../obs/types";
 
 export interface RagConfig {
   enabled: boolean;
@@ -107,6 +108,21 @@ export class ManagedConfig {
       server: c.get<string>("search.server", "").trim(),
       tool: c.get<string>("search.tool", "search"),
       queryArg: c.get<string>("search.queryArg", "query"),
+    };
+  }
+
+  // Config da observabilidade do cliente (sink direto Langfuse). A secretKey NÃO vem daqui —
+  // fica no SecretStorage (RNF-010). Em produção governada, prefira o gateway-relay.
+  observability(): ObsConfig {
+    const c = this.cfg();
+    const cap = c.get<string>("observability.langfuse.capture", "masked");
+    return {
+      enabled: c.get<boolean>("observability.langfuse.enabled", false),
+      baseUrl: c.get<string>("observability.langfuse.baseUrl", "https://cloud.langfuse.com").trim(),
+      publicKey: c.get<string>("observability.langfuse.publicKey", "").trim(),
+      environment: c.get<string>("observability.langfuse.env", "development").trim() || "development",
+      sampleRate: c.get<number>("observability.langfuse.sampleRate", 1.0),
+      capture: (cap === "full" || cap === "metadata-only" ? cap : "masked") as CaptureMode,
     };
   }
 

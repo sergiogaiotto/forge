@@ -7,6 +7,7 @@ import { log } from "../util/logger";
 export class SecretsStore {
   static readonly KEY_SESSION_TOKEN = "forge.session.token";
   static readonly KEY_LICENSE = "forge.license.key";
+  static readonly KEY_LANGFUSE_SECRET = "forge.observability.langfuse.secretKey";
   static readonly providerApiKey = (id: string) => `forge.provider.${id}.apiKey`;
   static readonly mcpCredential = (ref: string) => `forge.mcp.${ref}`;
 
