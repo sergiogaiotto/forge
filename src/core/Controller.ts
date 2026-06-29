@@ -40,6 +40,8 @@ import { appendRule, collectRules, defaultProfileSkeleton, PROFILE_RELPATH, rend
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
 import { Role, resolveRole, roleGuidance, roleLabel, setRole, stripFrontmatter } from "../util/roleDefaults";
+import { Observability } from "../obs/Observability";
+import { LangfuseDirectSink } from "../obs/LangfuseDirectSink";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -70,6 +72,7 @@ export class Controller {
   private readonly approvalGate: ToolApprovalGate;
   private readonly mcp: McpManager;
   private readonly rag: CodebaseIndex;
+  private readonly obs: Observability;
 
   private readonly sessionId = crypto.randomUUID(); // id de sessão p/ correlação no Langfuse
   private skills: SkillMeta[] = [];
@@ -100,6 +103,11 @@ export class Controller {
     this.mcp = new McpManager(this.registry, this.egress, this.approvalGate, this.auditor, this.secrets);
     this.rag = new CodebaseIndex(this.egress, () => this.config.rag(), () => this.workspaceRoot());
     this.rag.setOnChange(() => void this.postState()); // atualiza o indicador de RAG ao vivo
+    this.obs = new Observability(
+      () => this.config.observability(),
+      new LangfuseDirectSink(() => this.config.observability(), () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET), this.egress),
+      { onError: (m) => log.warn(m) }
+    );
 
     context.subscriptions.push(
       this.config.onChange(() => {
@@ -116,6 +124,9 @@ export class Controller {
     await this.reindexSkills();
     await this.restoreSession();
     this.setupWatchers();
+    // Drena os eventos de observabilidade em lote; flush final ao desativar.
+    const obsTimer = setInterval(() => void this.obs.flush(), 4000);
+    this.context.subscriptions.push({ dispose: () => { clearInterval(obsTimer); void this.obs.flush(); } });
     // Indexação do codebase em background — não bloqueia a ativação.
     void this.rag.build();
     log.info(`FORGE inicializado. Licença ${this.sessionToken ? "ativa" : "ausente"}; ${this.skills.length} skills.`);
@@ -324,6 +335,7 @@ export class Controller {
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, updated, "utf8");
     this.post({ type: "notice", level: "info", message: `Regra adicionada ao perfil do projeto (${PROFILE_RELPATH}).` });
+    this.obs.record({ type: "profile.ruleAdded" });
     void this.postProfileState();
   }
 
@@ -371,7 +383,27 @@ export class Controller {
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, setRole(existing, pick.role), "utf8");
     this.post({ type: "notice", level: "info", message: `Papel definido: ${pick.label}.` });
+    this.obs.record({ type: "profile.roleSet", role: pick.role });
     void this.postProfileState();
+  }
+
+  // Configura a observabilidade direta (sink Langfuse): guarda a secretKey no SecretStorage
+  // (nunca em settings, RNF-010). baseUrl/publicKey/enabled ficam em forge.observability.langfuse.*.
+  async setupObservability(): Promise<void> {
+    const secret = await vscode.window.showInputBox({
+      prompt: "Langfuse secret key (sk-lf-…) — guardada no SecretStorage, nunca em settings",
+      password: true,
+      placeHolder: "sk-lf-...",
+      ignoreFocusOut: true,
+    });
+    if (secret === undefined) return;
+    await this.secrets.set(SecretsStore.KEY_LANGFUSE_SECRET, secret.trim());
+    this.post({
+      type: "notice",
+      level: "info",
+      message:
+        "Secret do Langfuse salva. Habilite forge.observability.langfuse.enabled, defina baseUrl/publicKey e adicione o host do Langfuse em forge.egress.allowedHosts.",
+    });
   }
 
   // ---- estado ----------------------------------------------------------------
@@ -514,9 +546,12 @@ export class Controller {
       case "proposal/apply":
         await this.applyProposal(msg.proposalId);
         break;
-      case "proposal/discard":
+      case "proposal/discard": {
+        const fp = this.currentTask?.getProposal(msg.proposalId)?.proposal.filePath ?? "";
         this.post({ type: "proposal/discarded", proposalId: msg.proposalId });
+        this.obs.record({ type: "proposal.discarded", filePath: fp });
         break;
+      }
       case "proposal/viewDiff":
         await this.viewDiff(msg.proposalId);
         break;
@@ -800,6 +835,15 @@ export class Controller {
       // RF-063: propaga identidade do dev (login), sessão, modelo e skills ao
       // gateway para a observabilidade — nunca segredos.
       extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type),
+      emit: (e) => this.obs.record(e),
+      obsMeta: {
+        mode,
+        model: runtime.modelId,
+        provider: runtime.type,
+        sessionId: this.sessionId,
+        userId: this.resolveIdentity().email ?? "",
+        org: this.context.globalState.get<{ org?: string }>(GS_LICENSE_META)?.org,
+      },
       post: (m) => this.post(m),
     });
     this.currentTask = task;
@@ -988,7 +1032,10 @@ export class Controller {
     // Edição de célula de notebook (.ipynb) — aplica via NotebookEdit, preservando o resto.
     if (entry.proposal.cell) {
       const ok = await this.applyCellProposal(proposalId, entry);
-      if (ok) this.post({ type: "proposal/applied", proposalId });
+      if (ok) {
+        this.post({ type: "proposal/applied", proposalId });
+        this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath });
+      }
       return;
     }
 
@@ -997,6 +1044,7 @@ export class Controller {
     await fs.writeFile(abs, entry.proposal.modified, "utf8");
     this.history.push({ role: "assistant", content: `Apliquei a alteração em ${entry.proposal.filePath}.` });
     this.post({ type: "proposal/applied", proposalId });
+    this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath });
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
   }
@@ -1069,6 +1117,7 @@ export class Controller {
       output: text || "(sem saída capturada — veja a célula no notebook)",
       durationMs: 0,
     });
+    this.obs.record({ type: "run.result", filePath: entry.proposal.filePath, label: `célula [${index}]`, ok: !isError, exitCode: isError ? 1 : 0, durationMs: 0 });
   }
 
   async copyProposal(proposalId: string): Promise<void> {
@@ -1137,6 +1186,7 @@ export class Controller {
       durationMs: result.durationMs,
       skippedReason: result.skippedReason,
     });
+    this.obs.record({ type: "run.result", filePath: relPath, ok: result.ok, exitCode: result.exitCode, durationMs: result.durationMs });
   }
 
   // Roda a suíte de testes (pytest por padrão) — TDD / quality gate de testes.
@@ -1164,6 +1214,7 @@ export class Controller {
       durationMs: result.durationMs,
       skippedReason: result.skippedReason,
     });
+    this.obs.record({ type: "run.result", filePath: "", label: "testes", ok: result.ok, exitCode: result.exitCode, durationMs: result.durationMs });
   }
 
   // ---- revisão de código (in-network) ----------------------------------------
@@ -1202,11 +1253,21 @@ export class Controller {
       workspaceRoot: this.workspaceRoot(),
       timeoutMs: runtime.timeoutSeconds * 1000,
       extraHeaders: this.buildTraceHeaders(["review"], runtime.modelId, runtime.type),
+      emit: (e) => this.obs.record(e),
+      obsMeta: {
+        mode: "review",
+        model: runtime.modelId,
+        provider: runtime.type,
+        sessionId: this.sessionId,
+        userId: this.resolveIdentity().email ?? "",
+        org: this.context.globalState.get<{ org?: string }>(GS_LICENSE_META)?.org,
+      },
       post: (m) => this.post(m),
     });
     this.currentTask = task;
     await task.run();
     this.post({ type: "review/done" }); // alimenta o checklist "Definição de Pronto"
+    this.obs.record({ type: "review.done" });
   }
 
   // git diff (working tree vs HEAD); fallback: conteúdo do editor ativo.

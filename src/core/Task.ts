@@ -4,6 +4,7 @@ import { LLMProvider } from "../api/types";
 import { ChatMessage } from "../api/types";
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { SkillValidatorSpec } from "../skills/types";
+import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
 import { parseFileBlocks } from "../util/fileBlocks";
@@ -23,6 +24,8 @@ export interface TaskDeps {
   timeoutMs: number;
   extraHeaders?: Record<string, string>;
   post: (msg: ExtToWebview) => void;
+  emit?: (e: ObsEvent) => void; // observabilidade (geração + workflow)
+  obsMeta?: { mode: "normal" | "tdd" | "review"; model: string; provider: string; sessionId: string; userId: string; org?: string };
 }
 
 const LANG_BY_EXT: Record<string, string> = {
@@ -51,10 +54,28 @@ export class Task {
 
   async run(): Promise<void> {
     const d = this.deps;
+    const started = Date.now();
+    const model = d.obsMeta?.model ?? "";
+    const input = d.messages[d.messages.length - 1]?.content ?? "";
     d.post({ type: "stream/start", taskId: d.taskId });
-    for (const s of d.activatedSkillNames) d.post({ type: "stream/skill", taskId: d.taskId, skill: s });
+    d.emit?.({
+      type: "generation.start",
+      taskId: d.taskId,
+      mode: d.obsMeta?.mode ?? "normal",
+      model,
+      provider: d.obsMeta?.provider ?? "",
+      skills: d.activatedSkillNames,
+      sessionId: d.obsMeta?.sessionId ?? "",
+      userId: d.obsMeta?.userId ?? "",
+      org: d.obsMeta?.org,
+    });
+    for (const s of d.activatedSkillNames) {
+      d.post({ type: "stream/skill", taskId: d.taskId, skill: s });
+      d.emit?.({ type: "skill.activated", skill: s });
+    }
 
     let full = "";
+    let usage: { inputTokens?: number; outputTokens?: number } | undefined;
     try {
       for await (const chunk of d.provider.createMessage(d.systemPrompt, d.messages, {
         timeoutMs: d.timeoutMs,
@@ -71,14 +92,18 @@ export class Task {
             break;
           case "error":
             d.post({ type: "stream/error", taskId: d.taskId, message: chunk.message });
+            d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: 0, error: chunk.message });
             return;
           case "usage":
+            usage = { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens };
+            break;
           case "tool_call":
             break;
         }
       }
     } catch (err) {
       d.post({ type: "stream/error", taskId: d.taskId, message: (err as Error).message });
+      d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: 0, error: (err as Error).message });
       return;
     }
 
@@ -88,6 +113,7 @@ export class Task {
       const proposal = await this.makeProposal(block.path, block.content);
       this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
       d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
+      d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: proposal.original ? "edição" : "novo", language: proposal.language });
       void this.validateProposal(proposal);
     }
 
@@ -96,8 +122,10 @@ export class Task {
       const proposal = await this.makeCellProposal(cb);
       this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
       d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
+      d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: "célula", language: proposal.language });
     }
 
+    d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: this.proposals.size });
     d.post({ type: "stream/end", taskId: d.taskId });
   }
 
@@ -163,6 +191,7 @@ export class Task {
         entry.gateOk = gateOk;
       }
       d.post({ type: "validation/result", proposalId: proposal.id, results, gateOk, running: false });
+      d.emit?.({ type: "validation.result", filePath: proposal.filePath, gateOk, validators: results.map((r) => ({ id: r.id, status: r.status })) });
     } catch (err) {
       log.warn("Validação falhou", err);
       d.post({ type: "validation/result", proposalId: proposal.id, results: [], gateOk: true, running: false });
