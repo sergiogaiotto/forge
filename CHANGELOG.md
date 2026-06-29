@@ -3,7 +3,7 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [Unreleased]
+## [1.8.0] — 2026-06-29
 
 ### Added — Execução ao vivo no terminal
 - **"Executar" agora roda no terminal integrado** (área central), visível, com a saída transmitida
