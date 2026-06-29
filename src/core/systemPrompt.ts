@@ -40,6 +40,9 @@ ${FORGE_FENCE}
   \`\`\`bash … \`\`\`): com quatro crases externas, as de três crases internas NÃO encerram o bloco.
 - A cerca de fechamento (\`${FORGE_FENCE}\`) deve ficar SOZINHA em sua própria linha, com o MESMO número
   de crases da abertura. Se, por acaso, o conteúdo já tiver uma cerca de quatro crases, use cinco.
+- SEMPRE feche o bloco. Abertura e fechamento têm de casar (mesmo número de crases) e o fechamento não
+  pode faltar: sem a cerca de fechamento correta, o arquivo NÃO vira uma proposta aplicável com um
+  clique — vira texto solto no chat. Confira a cerca de fechamento antes de finalizar a resposta.
 - O bloco deve conter o conteúdo COMPLETO do arquivo resultante (não apenas o trecho alterado),
   para que o editor gere um diff correto e o usuário possa aplicar com um clique.
 - Escreva uma breve explicação em texto antes do bloco. Não coloque vários arquivos no mesmo bloco.

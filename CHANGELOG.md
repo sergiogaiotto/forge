@@ -3,6 +3,23 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [Unreleased]
+
+### Fixed
+- **Cartão "Aplicar" de `forge-file` quando o modelo erra a cerca.** Um arquivo cujo bloco vinha com
+  cerca de fechamento **descasada** (abre com 3 crases, fecha com 4) ou **ausente** (truncado) virava
+  texto cru no chat, sem cartão para aplicar (visto com modelos menores ao gerar um `requirements.txt`).
+  O parser final agora **recupera** esse bloco de forma conservadora (delimitado pela cerca solta ou
+  pela abertura do próximo bloco), preservando a coerência entre o cartão e a remoção da cerca da prosa.
+- **Sem proposta-amálgama.** Um bloco nunca atravessa a abertura do bloco seguinte (`forge-file` ou
+  `forge-cell`): quando o modelo esquece o fechamento do 1º arquivo, os dois viram propostas separadas
+  em vez de o 1º engolir o 2º.
+- **Garantia das 4 crases preservada.** Um bloco bem-formado que documenta o protocolo no corpo
+  (um `forge-file`/`forge-cell` interno de 3 crases) não é mais truncado. Abertura e fechamento exigem
+  **coluna 0** (simétrico), evitando que um bloco indentado engula a própria cerca.
+- Reforço no protocolo do system prompt: a cerca de fechamento é obrigatória e tem de casar a contagem
+  de crases da abertura.
+
 ## [1.7.0] — 2026-06-28
 
 ### Added — Perfil de projeto (governança de contexto)
