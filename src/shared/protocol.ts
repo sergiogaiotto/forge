@@ -81,6 +81,20 @@ export interface RagView {
   dimensions: number; // 0 = padrão do modelo
 }
 
+// Visão do perfil do projeto para o painel da webview (stack detectada + papel + regras).
+export interface ProfileView {
+  stack: {
+    language?: string;
+    packaging?: string;
+    lintFormat: string[];
+    types: string[];
+    tests?: string;
+    libs: string[];
+  };
+  role?: string; // rótulo legível (ex.: "Engenheiro de dados") ou ausente
+  rules: string[];
+}
+
 export interface ForgeState {
   stage: "onboarding-license" | "onboarding-provider" | "ready" | "blocked";
   license: LicenseView;
@@ -151,7 +165,8 @@ export type ExtToWebview =
       durationMs: number;
       skippedReason?: string;
     }
-  | { type: "mcp/approvalRequest"; requestId: string; server: string; tool: string; scope: string; argsPreview: string };
+  | { type: "mcp/approvalRequest"; requestId: string; server: string; tool: string; scope: string; argsPreview: string }
+  | { type: "profile/state"; profile: ProfileView };
 
 // ---- Webview → Host da extensão ------------------------------------------------
 
@@ -173,6 +188,7 @@ export type WebviewToExt =
   | { type: "profile/addRule"; rule: string }
   | { type: "profile/open" }
   | { type: "profile/pickRole" }
+  | { type: "profile/refresh" }
   | { type: "run/file"; filePath: string; proposalId?: string }
   | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }

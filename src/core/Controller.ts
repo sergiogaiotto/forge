@@ -36,10 +36,10 @@ import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/i
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
 import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
-import { appendRule, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
+import { appendRule, collectRules, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
-import { Role, resolveRole, roleGuidance, setRole, stripFrontmatter } from "../util/roleDefaults";
+import { Role, resolveRole, roleGuidance, roleLabel, setRole, stripFrontmatter } from "../util/roleDefaults";
 import { Runner } from "./Runner";
 import { Task } from "./Task";
 
@@ -281,6 +281,28 @@ export class Controller {
     return detectStack(files);
   }
 
+  // Computa e envia ao painel a visão do perfil: stack detectada (ao vivo) + papel + regras.
+  async postProfileState(): Promise<void> {
+    const [stack, sources] = await Promise.all([this.detectWorkspaceStack(), this.loadProfileSources()]);
+    const role = resolveRole(sources);
+    const rules = collectRules(sources.map(stripFrontmatter));
+    this.post({
+      type: "profile/state",
+      profile: {
+        stack: {
+          language: stack.language,
+          packaging: stack.packaging,
+          lintFormat: stack.lintFormat,
+          types: stack.types,
+          tests: stack.tests,
+          libs: stack.libs,
+        },
+        role: role ? roleLabel(role) : undefined,
+        rules,
+      },
+    });
+  }
+
   async addProjectRule(rule: string): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
@@ -302,6 +324,7 @@ export class Controller {
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, updated, "utf8");
     this.post({ type: "notice", level: "info", message: `Regra adicionada ao perfil do projeto (${PROFILE_RELPATH}).` });
+    void this.postProfileState();
   }
 
   async openProjectProfile(): Promise<void> {
@@ -348,6 +371,7 @@ export class Controller {
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, setRole(existing, pick.role), "utf8");
     this.post({ type: "notice", level: "info", message: `Papel definido: ${pick.label}.` });
+    void this.postProfileState();
   }
 
   // ---- estado ----------------------------------------------------------------
@@ -550,6 +574,9 @@ export class Controller {
         break;
       case "profile/pickRole":
         await this.pickProjectRole();
+        break;
+      case "profile/refresh":
+        await this.postProfileState();
         break;
       case "signOut":
         await this.signOut();

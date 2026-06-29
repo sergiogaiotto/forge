@@ -42,6 +42,40 @@ export function appendRule(existing: string | undefined, rawRule: string): strin
   return base.slice(0, afterHeader + 1) + bullet + "\n" + base.slice(afterHeader + 1);
 }
 
+// Extrai as regras (bullets) da seção "## Regras do projeto" — para o painel do perfil.
+export function parseRules(text: string | undefined): string[] {
+  const base = text ?? "";
+  const idx = base.indexOf(RULES_SECTION);
+  if (idx === -1) return [];
+  const after = base.slice(idx + RULES_SECTION.length);
+  const out: string[] = [];
+  for (const line of after.split("\n")) {
+    const t = line.trim();
+    if (t.startsWith("## ")) break; // próxima seção encerra
+    const m = /^[-*]\s+(.+)$/.exec(t);
+    if (m) out.push(m[1].trim());
+  }
+  return out;
+}
+
+// Agrega as regras de VÁRIOS perfis (admin/usuário/workspace), por documento, deduplicando
+// (case-insensitive, preservando a ordem). parseRules sozinho é single-section — sobre o blob
+// mesclado ele pararia na 2ª seção; por isso o painel deve agregar por documento, não no blob.
+export function collectRules(bodies: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const b of bodies) {
+    for (const r of parseRules(b)) {
+      const k = r.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(r);
+      }
+    }
+  }
+  return out;
+}
+
 // Prepara o texto do perfil para injeção no prompt: trim + teto de tamanho (defensivo).
 export function renderProfileBlock(text: string | undefined, maxChars = 4000): string {
   const t = (text ?? "").trim();

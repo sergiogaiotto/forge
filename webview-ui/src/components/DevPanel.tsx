@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
-import type { Action, MessageVM, PartialFileBlock, ProposalVM, RunResultData, UIState } from "../state";
+import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
 import { DiffView } from "./DiffView";
@@ -10,6 +10,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [input, setInput] = useState("");
   const [tdd, setTdd] = useState(false);
   const [attachMenu, setAttachMenu] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -200,7 +201,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>
               <Icon name="terminal" size={14} color="#86c98e" /> Testes
             </span>
-            <span className="pill" title="Perfil do projeto (.forge/project.md) — convenções do time" onClick={() => post({ type: "profile/open" })}>
+            <span
+              className="pill"
+              title="Perfil do projeto — stack, papel e convenções"
+              onClick={() => {
+                dispatch({ kind: "clearProfile" }); // força "carregando…" e evita dados stale ao reabrir
+                setShowProfile(true);
+                post({ type: "profile/refresh" });
+              }}
+            >
               <Icon name="list-check" size={14} /> Perfil
             </span>
             <span className="pill" title="Definir seu papel no projeto — ajusta o estilo/defaults" onClick={() => post({ type: "profile/pickRole" })}>
@@ -268,6 +277,75 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         <div className="spacer" />
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
           timeout {forge.provider.timeoutSeconds ?? 300}s
+        </div>
+      </div>
+
+      {showProfile && <ProfilePanel profile={state.profile} onClose={() => setShowProfile(false)} />}
+    </div>
+  );
+}
+
+function ProfilePanel({ profile, onClose }: { profile: ProfileView | null; onClose: () => void }): JSX.Element {
+  const s = profile?.stack;
+  const stackRows: [string, string | undefined][] = [
+    ["Linguagem", s?.language],
+    ["Pacotes", s?.packaging],
+    ["Lint/format", s?.lintFormat.join(", ") || undefined],
+    ["Tipos", s?.types.join(", ") || undefined],
+    ["Testes", s?.tests],
+    ["Libs", s?.libs.slice(0, 12).join(", ") || undefined],
+  ];
+  const detected = stackRows.filter(([, v]) => v);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="card-title">
+          <Icon name="list-check" size={15} color="#4ec9b0" /> Perfil do projeto
+          <div className="spacer" />
+          <span className="icon-btn" title="Fechar" onClick={onClose}>
+            <Icon name="x" size={15} />
+          </span>
+        </div>
+
+        <div className="profile-sec">Stack detectada · automática</div>
+        {!profile ? (
+          <div className="profile-empty">carregando…</div>
+        ) : detected.length === 0 ? (
+          <div className="profile-empty">nada detectado neste workspace</div>
+        ) : (
+          <div className="profile-stack">
+            {detected.map(([k, v]) => (
+              <div key={k} className="profile-kv">
+                <span className="k">{k}</span>
+                <span className="v">{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="profile-sec">Papel</div>
+        <div className="profile-row">
+          <span style={{ color: profile?.role ? "#cfcfcf" : "#7a7a7a" }}>{profile?.role ?? "não definido"}</span>
+          <div className="spacer" />
+          <button className="btn" onClick={() => post({ type: "profile/pickRole" })}>
+            <Icon name="users" size={12} /> {profile?.role ? "Alterar" : "Definir"}
+          </button>
+        </div>
+
+        <div className="profile-sec">Regras · {profile?.rules.length ?? 0}</div>
+        <div className="profile-rules">
+          {profile && profile.rules.length === 0 && <div className="profile-empty">nenhuma regra ainda</div>}
+          {(profile?.rules ?? []).map((r, i) => (
+            <div key={i} className="profile-rule">
+              <Icon name="point" size={13} /> {r}
+            </div>
+          ))}
+        </div>
+
+        <div className="actions" style={{ marginTop: 12, marginBottom: 0, justifyContent: "flex-end" }}>
+          <button className="btn p" onClick={() => post({ type: "profile/open" })}>
+            <Icon name="code" size={13} /> Editar arquivo
+          </button>
         </div>
       </div>
     </div>
