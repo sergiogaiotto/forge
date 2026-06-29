@@ -513,13 +513,17 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             <button className="btn" title="Executar esta célula (captura a saída)" onClick={() => post({ type: "cell/run", proposalId: p.proposal.id })}>
               <Icon name="player-play" size={12} /> Executar célula
             </button>
+          ) : p.run?.running ? (
+            <button className="btn" disabled title="Execução em andamento">
+              <Icon name="refresh" size={12} className="spin" /> Executando…
+            </button>
           ) : (
             <button
               className="btn"
-              title="Executar este arquivo (com auto-cura)"
+              title="Executar este arquivo no terminal (com auto-cura)"
               onClick={() => post({ type: "run/file", filePath: p.proposal.filePath, proposalId: p.proposal.id })}
             >
-              <Icon name="player-play" size={12} /> Executar
+              <Icon name="player-play" size={12} /> {p.run ? "Reexecutar" : "Executar"}
             </button>
           )}
         </div>
@@ -541,6 +545,16 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
           >
             <Icon name="check" size={13} /> {applyLabel}
           </button>
+          {!cell && (
+            <button
+              className="btn"
+              disabled={!!(v && (v.running || gateFailed))}
+              title="Aplicar o arquivo e executá-lo no terminal"
+              onClick={() => post({ type: "proposal/applyAndRun", proposalId: p.proposal.id })}
+            >
+              <Icon name="player-play" size={13} /> Aplicar e executar
+            </button>
+          )}
           <button className="btn" onClick={() => post({ type: "proposal/viewDiff", proposalId: p.proposal.id })}>
             <Icon name="git-compare" size={13} /> Ver diff
           </button>
@@ -582,43 +596,85 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
 }
 
 function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispatch<Action> }): JSX.Element {
-  const [open, setOpen] = useState(!run.ok);
-  const status = run.skippedReason ? "skip" : run.ok ? "ok" : "fail";
+  const running = !!run.running;
+  const [open, setOpen] = useState(running || !run.ok);
+  const [elapsed, setElapsed] = useState(0);
+  const outRef = useRef<HTMLPreElement>(null);
+
+  // Cronômetro ao vivo enquanto executa, para o cartão nunca parecer travado.
+  useEffect(() => {
+    if (!running) return;
+    setOpen(true);
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Date.now() - t0), 200);
+    return () => clearInterval(id);
+  }, [running]);
+  // Auto-scroll da saída que vai chegando.
+  useEffect(() => {
+    if (running) outRef.current?.scrollTo({ top: outRef.current.scrollHeight });
+  }, [run.output, running]);
+
+  const status = running ? "run" : run.skippedReason ? "skip" : run.ok ? "ok" : "fail";
   const isTests = run.label === "testes";
   const title = run.label ? run.label : run.command || "execução";
+  const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
   const fixText = isTests
     ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
     : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
   return (
     <div className="run-card">
-      <div className={`run-head ${status}`} onClick={() => setOpen((v) => !v)}>
-        <Icon name={status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle"} size={13} />
+      <div className={`run-head ${status}`} onClick={() => !running && setOpen((v) => !v)}>
+        <Icon name={headIcon} size={13} className={running ? "spin" : ""} />
         <span style={{ fontFamily: "var(--mono)" }}>{title}</span>
         <div className="spacer" />
-        {run.skippedReason ? (
+        {running ? (
+          <span>
+            {run.where === "terminal" ? "no terminal" : "executando"} · {(elapsed / 1000).toFixed(1)}s
+          </span>
+        ) : run.skippedReason ? (
           <span>indisponível</span>
         ) : (
           <span>
             {run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
           </span>
         )}
-        <Icon name="chevron-down" size={12} style={{ transform: open ? "none" : "rotate(-90deg)", transition: "transform .12s" }} />
+        {!running && (
+          <Icon name="chevron-down" size={12} style={{ transform: open ? "none" : "rotate(-90deg)", transition: "transform .12s" }} />
+        )}
       </div>
-      {open && (run.skippedReason || run.output) && (
-        <pre className="run-output">{run.skippedReason ? run.skippedReason : run.output || "(sem saída)"}</pre>
+      {open && (run.skippedReason || run.output || running) && (
+        <pre className="run-output" ref={outRef}>
+          {run.skippedReason ? run.skippedReason : run.output || (running ? "iniciando…" : "(sem saída)")}
+        </pre>
       )}
-      {status === "fail" && (
+      {running ? (
         <div className="actions" style={{ marginTop: 7 }}>
-          <button
-            className="btn p"
-            onClick={() => {
-              dispatch({ kind: "pushUser", text: fixText });
-              post({ type: "chat/send", text: fixText });
-            }}
-          >
-            <Icon name="refresh" size={12} /> Corrigir com FORGE
-          </button>
+          {run.where === "terminal" && run.runId && (
+            <button className="btn" title="Focar o terminal de execução" onClick={() => post({ type: "run/focusTerminal", runId: run.runId! })}>
+              <Icon name="terminal" size={12} /> Ver no terminal
+            </button>
+          )}
+          <div className="spacer" />
+          {run.runId && (
+            <button className="btn" title="Interromper a execução" onClick={() => post({ type: "run/cancel", runId: run.runId! })}>
+              <Icon name="x" size={12} /> Cancelar
+            </button>
+          )}
         </div>
+      ) : (
+        status === "fail" && (
+          <div className="actions" style={{ marginTop: 7 }}>
+            <button
+              className="btn p"
+              onClick={() => {
+                dispatch({ kind: "pushUser", text: fixText });
+                post({ type: "chat/send", text: fixText });
+              }}
+            >
+              <Icon name="refresh" size={12} /> Corrigir com FORGE
+            </button>
+          </div>
+        )
       )}
     </div>
   );

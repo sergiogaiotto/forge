@@ -364,6 +364,17 @@ body {
 .run-head.skip {
   color: var(--muted);
 }
+.run-head.run {
+  color: var(--blue, #6cb6ff);
+  cursor: default;
+  background: linear-gradient(90deg, var(--surface) 0%, rgba(108, 182, 255, 0.07) 50%, var(--surface) 100%);
+  background-size: 200% 100%;
+  animation: run-shimmer 1.4s linear infinite;
+}
+@keyframes run-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .run-output {
   margin: 0;
   padding: 8px 10px;

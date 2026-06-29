@@ -5,6 +5,19 @@ All notable changes to FORGE are documented here. Format based on
 
 ## [Unreleased]
 
+### Added — Execução ao vivo no terminal
+- **"Executar" agora roda no terminal integrado** (área central), visível, com a saída transmitida
+  **ao vivo**. Usa a *shell integration* do VSCode para capturar saída + exit code (mantém o loop de
+  auto-cura "Corrigir com FORGE"); cai automaticamente para um **painel lateral com streaming** quando
+  o shell não tem *shell integration*.
+- **Botão trava durante a execução** ("Executando…", desabilitado) e vira **"Reexecutar"** ao concluir.
+  Cartão ao vivo com **cronômetro**, auto-scroll, **Cancelar** e **Ver no terminal**.
+- **Cancelamento e timeout matam a árvore de processos** (não deixam o processo-neto órfão no Windows).
+- **Uma execução por vez** (o terminal é compartilhado) e o botão nunca fica preso: o resultado é
+  sempre emitido, mesmo em erro/cancelamento.
+- Nova ação **"Aplicar e executar"** (aplica o diff, abre o arquivo e executa em um clique).
+- Requer **VSCode ≥ 1.93** (shell integration estável).
+
 ### Fixed
 - **Cartão "Aplicar" de `forge-file` quando o modelo erra a cerca.** Um arquivo cujo bloco vinha com
   cerca de fechamento **descasada** (abre com 3 crases, fecha com 4) ou **ausente** (truncado) virava

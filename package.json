@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.93.0"
   },
   "categories": [
     "AI",
@@ -453,7 +453,7 @@
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "^1.93.0",
     "@vitejs/plugin-react": "^4.3.3",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.0",
