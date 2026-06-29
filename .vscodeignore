@@ -1,5 +1,6 @@
 # Source and tooling — only ship the bundled output.
 src/**
+.claude/**
 webview-ui/**
 admin-cli/**
 gateway/**
@@ -29,8 +30,9 @@ cobrinha.py
 **/.mypy_cache/**
 **/.ruff_cache/**
 
-# Keep the runtime bits: dist/**, the icon, the skills catalog, docs.
-!dist/**
+# Keep the runtime bits: o bundle (dist/extension.js e dist/webview/* entram por padrão),
+# o ícone, o catálogo de skills, docs. Os source maps ficam de fora (via **/*.map acima):
+# não precisam em runtime e não devem vazar a fonte.
 !skills/**
 !media/forge-icon.png
 !media/flame.svg

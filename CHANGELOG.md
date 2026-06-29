@@ -3,6 +3,30 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [1.7.0] — 2026-06-28
+
+### Added — Perfil de projeto (governança de contexto)
+- **`.forge/project.md` versionado**, injetado em todo prompt: **stack auto-detectada**
+  (linguagem, gerenciador, lint/tipos/testes, libs), **papel** do dev (ajusta estilo/defaults)
+  e **regras** do time. Gesto **"promover correção a regra"** (1 clique). **Camada admin**
+  (`forge.project.managedProfile`) — governança em 3 camadas admin → usuário → workspace.
+- **Painel "Perfil"** no compositor: stack + papel + regras + editar.
+- **Convenções-como-validators**: as ferramentas detectadas viram validadores do quality gate.
+
+### Added — Observabilidade do cliente (Langfuse)
+- Instrumenta a geração **e o workflow ao redor** (skill, aplicar/descartar, gate, execução,
+  testes, revisão, perfil) — o que o gateway não vê. Sink **plugável** (direto agora;
+  gateway-relay governado depois). Máscara de PII/segredos; `userId` hasheado; fail-open.
+  Config `forge.observability.langfuse.*` + comando *Configurar observabilidade*.
+
+### Added — UX de geração (magic buttons)
+- **Cartão de proposta ao vivo** durante o stream (some a cerca crua do chat).
+- **Aplicar e abrir** no editor, *Ver diff*, overflow ⋯ (Copiar/Descartar).
+
+### Fixed
+- Saída do runner em **UTF-8** (acentos no Windows) e proibição de **emojis** no código gerado.
+- Blocos `forge-file`/`forge-cell` com **cerca de 4 crases** (suporta ``` aninhada em README/docstrings).
+
 ## [1.6.0] — 2026-06-28
 
 ### Added — Busca interna governada (substitui a "web")
