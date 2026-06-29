@@ -153,8 +153,13 @@ export type ExtToWebview =
   | { type: "proposal/applied"; proposalId: string }
   | { type: "proposal/discarded"; proposalId: string }
   | { type: "review/done" }
+  // Ciclo de vida da execução de arquivo: start (botão trava, cartão ao vivo) → output (streaming) →
+  // result (final). `where` indica onde a execução acontece: terminal central ou painel lateral.
+  | { type: "run/start"; runId: string; proposalId?: string; filePath: string; label?: string; command: string; where: "terminal" | "panel" }
+  | { type: "run/output"; runId: string; delta: string }
   | {
       type: "run/result";
+      runId?: string;
       proposalId?: string;
       filePath: string;
       label?: string; // ex.: "testes" — quando não é a execução de um arquivo
@@ -190,6 +195,9 @@ export type WebviewToExt =
   | { type: "profile/pickRole" }
   | { type: "profile/refresh" }
   | { type: "run/file"; filePath: string; proposalId?: string }
+  | { type: "proposal/applyAndRun"; proposalId: string }
+  | { type: "run/cancel"; runId: string }
+  | { type: "run/focusTerminal"; runId: string }
   | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }
   | { type: "context/pickWorkspaceFile" }

@@ -43,6 +43,7 @@ import { Role, resolveRole, roleGuidance, roleLabel, setRole, stripFrontmatter }
 import { Observability } from "../obs/Observability";
 import { LangfuseDirectSink } from "../obs/LangfuseDirectSink";
 import { Runner } from "./Runner";
+import { RunService } from "./RunService";
 import { Task } from "./Task";
 
 const GS_PROVIDER = "forge.provider";
@@ -82,6 +83,7 @@ export class Controller {
   private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
   private attachmentSeq = 0;
   private currentTask: Task | undefined;
+  private readonly runService: RunService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   private poster: ((msg: ExtToWebview) => void) | undefined;
@@ -108,6 +110,13 @@ export class Controller {
       new LangfuseDirectSink(() => this.config.observability(), () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET), this.egress),
       { onError: (m) => log.warn(m) }
     );
+    this.runService = new RunService({
+      post: (msg) => this.post(msg),
+      workspaceRoot: () => this.workspaceRoot(),
+      runConfig: () => this.config.run(),
+      onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
+    });
+    context.subscriptions.push(this.runService);
 
     context.subscriptions.push(
       this.config.onChange(() => {
@@ -546,6 +555,9 @@ export class Controller {
       case "proposal/apply":
         await this.applyProposal(msg.proposalId);
         break;
+      case "proposal/applyAndRun":
+        await this.applyAndRun(msg.proposalId);
+        break;
       case "proposal/discard": {
         const fp = this.currentTask?.getProposal(msg.proposalId)?.proposal.filePath ?? "";
         this.post({ type: "proposal/discarded", proposalId: msg.proposalId });
@@ -559,7 +571,13 @@ export class Controller {
         await this.copyProposal(msg.proposalId);
         break;
       case "run/file":
-        await this.runFile(msg.filePath, msg.proposalId);
+        await this.runService.runFile(msg.filePath, msg.proposalId);
+        break;
+      case "run/cancel":
+        this.runService.cancel(msg.runId);
+        break;
+      case "run/focusTerminal":
+        this.runService.focusTerminal();
         break;
       case "cell/run":
         await this.runCell(msg.proposalId);
@@ -1009,11 +1027,11 @@ export class Controller {
 
   // ---- propostas -------------------------------------------------------------
 
-  async applyProposal(proposalId: string): Promise<void> {
+  async applyProposal(proposalId: string): Promise<boolean> {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry) {
       this.post({ type: "notice", level: "warn", message: "Proposta não encontrada (expirada)." });
-      return;
+      return false;
     }
     if (this.config.gateBlocksApply() && !entry.gateOk) {
       this.post({
@@ -1021,12 +1039,12 @@ export class Controller {
         level: "error",
         message: "Quality gate reprovado: corrija os problemas apontados pelos validadores antes de aplicar.",
       });
-      return;
+      return false;
     }
     const ws = this.workspaceRoot();
     if (!ws) {
       this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para aplicar mudanças." });
-      return;
+      return false;
     }
 
     // Edição de célula de notebook (.ipynb) — aplica via NotebookEdit, preservando o resto.
@@ -1036,7 +1054,7 @@ export class Controller {
         this.post({ type: "proposal/applied", proposalId });
         this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath });
       }
-      return;
+      return ok;
     }
 
     const abs = path.join(ws, entry.proposal.filePath);
@@ -1047,6 +1065,7 @@ export class Controller {
     this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath });
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
+    return true;
   }
 
   // Aplica uma proposta de célula no notebook ao vivo e registra o índice final
@@ -1158,35 +1177,18 @@ export class Controller {
     }
     await editor.document.save();
     const rel = path.relative(ws, editor.document.uri.fsPath).split(path.sep).join("/");
-    await this.runFile(rel);
+    await this.runService.runFile(rel);
     await vscode.commands.executeCommand("forge.sidebar.focus");
   }
 
-  async runFile(relPath: string, proposalId?: string): Promise<void> {
-    const cfg = this.config.run();
-    if (!cfg.enabled) {
-      this.post({ type: "notice", level: "warn", message: "Execução desabilitada (forge.run.enabled = false)." });
-      return;
+  // Aplica a proposta e, se aplicada (e não for célula), executa o arquivo logo em seguida — do diff
+  // ao "rodando" em um clique. A execução transmite o ciclo de vida (start/output/result) pela webview.
+  async applyAndRun(proposalId: string): Promise<void> {
+    const entry = this.currentTask?.getProposal(proposalId);
+    const applied = await this.applyProposal(proposalId);
+    if (applied && entry && !entry.proposal.cell) {
+      await this.runService.runFile(entry.proposal.filePath, proposalId);
     }
-    const ws = this.workspaceRoot();
-    if (!ws) {
-      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para executar." });
-      return;
-    }
-    const runner = new Runner(ws);
-    const result = await runner.run(relPath, cfg.commands, cfg.timeoutSeconds * 1000);
-    this.post({
-      type: "run/result",
-      proposalId,
-      filePath: relPath,
-      command: result.command,
-      ok: result.ok,
-      exitCode: result.exitCode,
-      output: result.output,
-      durationMs: result.durationMs,
-      skippedReason: result.skippedReason,
-    });
-    this.obs.record({ type: "run.result", filePath: relPath, ok: result.ok, exitCode: result.exitCode, durationMs: result.durationMs });
   }
 
   // Roda a suíte de testes (pytest por padrão) — TDD / quality gate de testes.

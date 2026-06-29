@@ -7,6 +7,7 @@ export type { PartialFileBlock } from "../../src/util/fileBlocks";
 import { stripFileBlockOfPath } from "../../src/util/fileBlocks";
 
 export interface RunResultData {
+  runId?: string;
   filePath: string;
   label?: string;
   command: string;
@@ -15,6 +16,8 @@ export interface RunResultData {
   output: string;
   durationMs: number;
   skippedReason?: string;
+  running?: boolean; // true entre run/start e run/result (cartão ao vivo + botão travado)
+  where?: "terminal" | "panel"; // onde a execução acontece (mostra "Ver no terminal" só no terminal)
 }
 
 export interface ProposalVM {
@@ -93,6 +96,7 @@ export type Action =
 
 let toastSeq = 0;
 let runSeq = 0;
+const RUN_OUTPUT_CAP = 20_000; // tail de saída ao vivo guardada no estado (evita estado gigante)
 
 function lastAssistant(messages: MessageVM[]): MessageVM | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -185,8 +189,27 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...state, profile: msg.profile };
     case "proposal/discarded":
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "discarded" }));
+    case "run/start": {
+      const live: RunResultData = {
+        runId: msg.runId,
+        filePath: msg.filePath,
+        label: msg.label,
+        command: msg.command,
+        ok: false,
+        exitCode: null,
+        output: "",
+        durationMs: 0,
+        running: true,
+        where: msg.where,
+      };
+      if (msg.proposalId) return mapProposals(state, msg.proposalId, (p) => ({ ...p, run: live }));
+      return { ...state, runs: [...state.runs, { ...live, id: msg.runId }] };
+    }
+    case "run/output":
+      return updateRunByRunId(state, msg.runId, (r) => ({ ...r, output: (r.output + msg.delta).slice(-RUN_OUTPUT_CAP) }));
     case "run/result": {
       const data: RunResultData = {
+        runId: msg.runId,
         filePath: msg.filePath,
         label: msg.label,
         command: msg.command,
@@ -195,10 +218,15 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         output: msg.output,
         durationMs: msg.durationMs,
         skippedReason: msg.skippedReason,
+        running: false,
       };
       const last = data.label === "testes" ? { lastTestRun: data } : { lastFileRun: data };
+      // Se já existe um cartão ao vivo (criado pelo run/start), finaliza-o no lugar (preserva `where`).
+      if (msg.runId && hasRunWithId(state, msg.runId)) {
+        return { ...updateRunByRunId(state, msg.runId, (r) => ({ ...data, where: r.where })), ...last };
+      }
       if (msg.proposalId) return { ...mapProposals(state, msg.proposalId, (p) => ({ ...p, run: data })), ...last };
-      return { ...state, runs: [...state.runs, { ...data, id: `run_${++runSeq}` }], ...last };
+      return { ...state, runs: [...state.runs, { ...data, id: msg.runId ?? `run_${++runSeq}` }], ...last };
     }
     case "stream/end":
       return { ...state, busy: false, messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false } : m)) };
@@ -226,5 +254,23 @@ function mapProposals(state: UIState, proposalId: string, fn: (p: ProposalVM) =>
       ...m,
       proposals: m.proposals.map((p) => (p.proposal.id === proposalId ? fn(p) : p)),
     })),
+  };
+}
+
+// Há algum cartão de execução (em uma proposta ou na lista solta) com este runId?
+function hasRunWithId(state: UIState, runId: string): boolean {
+  if (state.runs.some((r) => r.runId === runId)) return true;
+  return state.messages.some((m) => m.proposals.some((p) => p.run?.runId === runId));
+}
+
+// Atualiza o cartão de execução com este runId onde quer que ele esteja (proposta ou lista solta).
+function updateRunByRunId(state: UIState, runId: string, fn: (r: RunResultData) => RunResultData): UIState {
+  return {
+    ...state,
+    messages: state.messages.map((m) => ({
+      ...m,
+      proposals: m.proposals.map((p) => (p.run && p.run.runId === runId ? { ...p, run: fn(p.run) } : p)),
+    })),
+    runs: state.runs.map((r) => (r.runId === runId ? { ...fn(r), id: r.id } : r)),
   };
 }
