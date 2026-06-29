@@ -47,6 +47,18 @@ const GUIDANCE: Record<Role, string> = {
     "Engenheiro de Software — priorize testes (de preferência primeiro), tipos estáticos, fronteiras/SOLID, tratamento de erros explícito e APIs claras; evite acoplamento desnecessário.",
 };
 
+const LABELS: Record<Role, string> = {
+  "cientista-de-dados": "Cientista de dados",
+  "engenheiro-de-dados": "Engenheiro de dados",
+  "engenheiro-de-ml": "Engenheiro de ML",
+  "engenheiro-de-software": "Engenheiro de software",
+};
+
+// Rótulo legível do papel (para o painel/notices).
+export function roleLabel(role: Role): string {
+  return LABELS[role];
+}
+
 export function roleGuidance(role: Role | undefined): string {
   if (!role) return "";
   return `## Papel e padrões (oriente o estilo e os defaults por este papel)\n- ${GUIDANCE[role]}`;

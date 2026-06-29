@@ -1,4 +1,5 @@
-import type { DiffProposal, ExtToWebview, ForgeState, ValidatorResult } from "../../src/shared/protocol";
+import type { DiffProposal, ExtToWebview, ForgeState, ProfileView, ValidatorResult } from "../../src/shared/protocol";
+export type { ProfileView } from "../../src/shared/protocol";
 
 // Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
 export { parsePartialFileBlocks, stripFileBlocksFromText } from "../../src/util/fileBlocks";
@@ -61,6 +62,7 @@ export interface UIState {
   lastFileRun: RunResultData | null;
   lastTestRun: RunResultData | null;
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
+  profile: ProfileView | null;
 }
 
 export const initialState: UIState = {
@@ -76,6 +78,7 @@ export const initialState: UIState = {
   lastFileRun: null,
   lastTestRun: null,
   attachments: [],
+  profile: null,
 };
 
 export type Action =
@@ -85,6 +88,7 @@ export type Action =
   | { kind: "embeddingsTestPending" }
   | { kind: "newConversation" }
   | { kind: "clearApproval" }
+  | { kind: "clearProfile" }
   | { kind: "clearToast" };
 
 let toastSeq = 0;
@@ -103,6 +107,8 @@ export function reducer(state: UIState, action: Action): UIState {
       return { ...state, toast: null };
     case "clearApproval":
       return { ...state, approval: null };
+    case "clearProfile":
+      return { ...state, profile: null };
     case "newConversation":
       return { ...state, messages: [], runs: [], busy: false, reviewed: false, lastFileRun: null, lastTestRun: null };
     case "providerTestPending":
@@ -175,6 +181,8 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...state, reviewed: true };
     case "context/attachments":
       return { ...state, attachments: msg.items };
+    case "profile/state":
+      return { ...state, profile: msg.profile };
     case "proposal/discarded":
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "discarded" }));
     case "run/result": {
