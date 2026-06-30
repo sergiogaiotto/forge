@@ -148,6 +148,9 @@ export type ExtToWebview =
   | { type: "stream/proposal"; taskId: string; proposal: DiffProposal }
   | { type: "stream/end"; taskId: string }
   | { type: "stream/error"; taskId: string; message: string }
+  // Aviso NÃO-fatal ancorado à resposta (ex.: truncamento por limite de tokens). Fica visível no
+  // balão do assistente — diferente do `notice`, que é um toast efêmero (some em segundos).
+  | { type: "stream/notice"; taskId: string; level: "warn" | "info"; message: string }
   | { type: "context/attachments"; items: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[] }
   | { type: "validation/result"; proposalId: string; results: ValidatorResult[]; gateOk: boolean; running: boolean }
   | { type: "proposal/applied"; proposalId: string }

@@ -408,6 +408,11 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
       {m.proposals.map((p) => (
         <ProposalCard key={p.proposal.id} p={p} dispatch={dispatch} />
       ))}
+      {m.warning && (
+        <div className="assistant-warning" style={{ marginTop: 4 }}>
+          <Icon name="alert-triangle" size={14} /> {m.warning}
+        </div>
+      )}
       {m.error && (
         <div className="validation fail" style={{ marginTop: 4 }}>
           <Icon name="alert-triangle" size={14} /> {m.error}

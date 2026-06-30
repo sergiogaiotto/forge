@@ -39,3 +39,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 ];
 
 export const DEFAULT_TIMEOUT_SECONDS = 300;
+
+// Teto de tokens de SAÍDA padrão dos provedores OpenAI-compatíveis (HubGPU/gpt-oss). Generoso de
+// propósito: um "arquivo completo" pode passar de vários milhares de tokens, e sem este teto o
+// gateway aplicaria um default baixo (1024/4096) e truncaria a resposta silenciosamente.
+// gpt-oss-120b tem janela de 128k, então 16k de saída é seguro com folga.
+export const DEFAULT_MAX_TOKENS = 16384;

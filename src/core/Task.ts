@@ -90,6 +90,12 @@ export class Task {
             full += chunk.text;
             d.post({ type: "stream/text", taskId: d.taskId, delta: chunk.text });
             break;
+          case "warning":
+            // Aviso não-fatal (ex.: truncamento por limite de tokens). NÃO interrompe o stream:
+            // o texto parcial segue acumulado em `full` e as propostas ainda são parseadas abaixo.
+            // Ancorado à resposta (stream/notice) para ficar visível no balão, não um toast volátil.
+            d.post({ type: "stream/notice", taskId: d.taskId, level: "warn", message: chunk.message });
+            break;
           case "error":
             d.post({ type: "stream/error", taskId: d.taskId, message: chunk.message });
             d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: 0, error: chunk.message });

@@ -5,6 +5,16 @@ import { FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG } from "../sh
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
 
+// Regra anti-omissão compartilhada pelo prompt base e pelo de revisão: força o modelo a emitir o
+// arquivo INTEIRO, sem reticências/placeholders. (O protocolo de notebooks tem a sua, por célula.)
+// Sem isto, gpt-oss tende a abreviar com "# ... (restante do código)" e a proposta vira inaplicável.
+const NO_ELLIPSIS_RULE =
+  'PROIBIDO resumir, abreviar ou omitir partes do arquivo. NUNCA use reticências nem comentários de ' +
+  'omissão como "# ... (restante do código)", "# resto igual", "// ... existing code ...", ' +
+  '"<inalterado>", "(demais métodos permanecem)" ou equivalentes. Reescreva o arquivo do INÍCIO ao ' +
+  "FIM, linha por linha, INCLUSIVE as partes que não mudaram. Um bloco com qualquer omissão NÃO é " +
+  "aplicável e será rejeitado — mesmo que o arquivo seja longo, emita-o inteiro.";
+
 export function buildBasePrompt(workspaceName: string): string {
   return `IDIOMA (OBRIGATÓRIO): responda SEMPRE em português do Brasil (pt-BR). TODO o texto que você
 produzir — o raciocínio/análise, as explicações, títulos, listas e mensagens ao usuário — DEVE estar
@@ -45,6 +55,7 @@ ${FORGE_FENCE}
   clique — vira texto solto no chat. Confira a cerca de fechamento antes de finalizar a resposta.
 - O bloco deve conter o conteúdo COMPLETO do arquivo resultante (não apenas o trecho alterado),
   para que o editor gere um diff correto e o usuário possa aplicar com um clique.
+- ${NO_ELLIPSIS_RULE}
 - Escreva uma breve explicação em texto antes do bloco. Não coloque vários arquivos no mesmo bloco.
 - Se a tarefa não exigir mudança de arquivo (ex.: explicação), responda normalmente sem bloco.
 
@@ -67,7 +78,9 @@ ${FORGE_FENCE}
 
 - Use o índice absoluto exato do contexto. Uma célula por bloco. O usuário aplica e executa a célula.
 - A regra das crases é a mesma do protocolo de arquivos: o fechamento (\`${FORGE_FENCE}\`) fica sozinho na
-  linha, com o mesmo número de crases da abertura, e quatro crases preservam cercas de três no código.`;
+  linha, com o mesmo número de crases da abertura, e quatro crases preservam cercas de três no código.
+- Cada célula deve vir COMPLETA: proibido reticências ou comentários de omissão ("# ... resto da célula")
+  dentro do código da célula — emita o conteúdo inteiro da célula.`;
 }
 
 // Prompt do Modo TDD (test-first): o modelo escreve os testes antes da
@@ -120,5 +133,5 @@ ${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG} path=caminho/relativo/arquivo.py
 ${FORGE_FENCE}
 
 O fechamento (\`${FORGE_FENCE}\`) fica sozinho na linha; quatro crases preservam cercas de três que o
-conteúdo porventura tenha. Caso contrário, apenas descreva a correção.`;
+conteúdo porventura tenha. ${NO_ELLIPSIS_RULE} Caso contrário, apenas descreva a correção.`;
 }

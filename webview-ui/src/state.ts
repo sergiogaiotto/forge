@@ -36,6 +36,7 @@ export interface MessageVM {
   proposals: ProposalVM[];
   streaming: boolean;
   error?: string;
+  warning?: string; // aviso não-fatal ancorado (ex.: truncamento por limite de tokens)
 }
 
 export interface Toast {
@@ -235,6 +236,14 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         ...state,
         busy: false,
         messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false, error: msg.message } : m)),
+      };
+    case "stream/notice":
+      // Aviso não-fatal: anexa ao balão da resposta sem encerrar o streaming. Acumula se houver mais de um.
+      return {
+        ...state,
+        messages: state.messages.map((m) =>
+          m.id === msg.taskId ? { ...m, warning: m.warning ? `${m.warning}\n${msg.message}` : msg.message } : m
+        ),
       };
     default:
       return state;

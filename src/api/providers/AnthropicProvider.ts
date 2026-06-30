@@ -1,5 +1,6 @@
 import { EgressEnforcer } from "../../net/EgressEnforcer";
 import { combineSignals, HttpError, sseLines } from "../../util/http";
+import { DEFAULT_MAX_TOKENS } from "../presets";
 import { ChatMessage, CreateMessageOptions, LLMProvider, ProviderRuntimeConfig, StreamChunk, ToolDefinition } from "../types";
 
 // RF-026/027: formato Messages nativo da Anthropic (não Chat Completions). O uso de ferramentas
@@ -27,7 +28,9 @@ export class AnthropicProvider implements LLMProvider {
 
     const body: Record<string, unknown> = {
       model: this.cfg.modelId,
-      max_tokens: 8192,
+      // Mesmo teto generoso dos demais provedores (ver DEFAULT_MAX_TOKENS): evita que o "arquivo
+      // completo" seja cortado. cfg.maxTokens permite override por configuração.
+      max_tokens: this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
       stream: true,
       system: systemPrompt,
       messages: messages.map(toAnthropicMessage),
@@ -97,6 +100,15 @@ export class AnthropicProvider implements LLMProvider {
         case "message_delta":
           if (evt.usage?.output_tokens !== undefined) {
             yield { kind: "usage", inputTokens, outputTokens: evt.usage.output_tokens };
+          }
+          // Truncamento por atingir o teto de tokens: a Anthropic sinaliza com stop_reason
+          // "max_tokens". Aviso NÃO-fatal, preservando o conteúdo parcial (espelha o OpenAI-compat).
+          if (evt.delta?.stop_reason === "max_tokens") {
+            const cap = this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS;
+            yield {
+              kind: "warning",
+              message: `Resposta truncada por atingir o limite de ${cap} tokens de saída. O arquivo pode estar incompleto — peça a continuação ou aumente o limite de tokens.`,
+            };
           }
           break;
       }

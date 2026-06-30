@@ -18,6 +18,9 @@ export type StreamChunk =
   | { kind: "text"; text: string }
   | { kind: "tool_call"; id: string; name: string; arguments: string }
   | { kind: "usage"; inputTokens: number; outputTokens: number }
+  // Aviso NÃO-fatal (ex.: resposta truncada por limite de tokens). Diferente de `error`,
+  // não aborta o stream nem descarta o conteúdo parcial já recebido.
+  | { kind: "warning"; message: string }
   | { kind: "error"; message: string };
 
 export interface CreateMessageOptions {
@@ -46,6 +49,11 @@ export interface ProviderRuntimeConfig {
   apiKey?: string;
   authHeader?: string; // "Nome-Do-Header: valor"
   timeoutSeconds: number;
+  // Teto de tokens de SAÍDA. Sem isso, gateways OpenAI-compatíveis (HubGPU/vLLM) aplicam um
+  // default baixo e cortam o "arquivo completo" no meio (finish_reason: "length"). Ausente =
+  // usa DEFAULT_MAX_TOKENS. Hoje sempre cai no default; reservado para configuração futura
+  // (ex.: ajuste por nível de reasoning effort), que ainda não existe.
+  maxTokens?: number;
 }
 
 export function buildAuthHeaders(cfg: ProviderRuntimeConfig): Record<string, string> {

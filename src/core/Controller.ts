@@ -724,6 +724,8 @@ export class Controller {
       authHeader: setup.authHeader,
       apiKey: setup.apiKey || "not-needed",
       timeoutSeconds: Math.min(setup.timeoutSeconds || 30, 30),
+      // O ping só precisa de "ok"; teto mínimo evita custo e o 400 por exceder a janela em modelos pequenos.
+      maxTokens: 16,
     };
     const started = Date.now();
     try {
@@ -739,7 +741,7 @@ export class Controller {
           this.post({ type: "providerTestResult", ok: false, message: chunk.message });
           return;
         }
-        if (chunk.kind === "text" || chunk.kind === "usage" || chunk.kind === "reasoning") {
+        if (chunk.kind === "text" || chunk.kind === "usage" || chunk.kind === "reasoning" || chunk.kind === "warning") {
           gotSomething = true;
           break;
         }

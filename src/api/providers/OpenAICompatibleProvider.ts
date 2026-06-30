@@ -1,6 +1,7 @@
 import { EgressEnforcer } from "../../net/EgressEnforcer";
 import { ProviderType } from "../../shared/protocol";
 import { combineSignals, HttpError, sseLines } from "../../util/http";
+import { DEFAULT_MAX_TOKENS } from "../presets";
 import { buildAuthHeaders, ChatMessage, CreateMessageOptions, LLMProvider, ProviderRuntimeConfig, StreamChunk, ToolDefinition } from "../types";
 
 // Adaptador universal (ADR-4). HubGPU, vLLM, Ollama e LM Studio falam todos o
@@ -30,6 +31,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       model: this.cfg.modelId,
       stream: true,
       stream_options: { include_usage: true },
+      // Teto explícito de saída: sem ele o gateway corta o "arquivo completo" no meio. Ver
+      // DEFAULT_MAX_TOKENS. cfg.maxTokens permite override por configuração quando definido.
+      max_tokens: this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages: [{ role: "system", content: systemPrompt }, ...messages.map(toOpenAIMessage)],
     };
     if (opts.tools && opts.tools.length > 0) {
@@ -58,11 +62,19 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok) {
       const text = await safeText(res);
-      throw new HttpError(res.status, `Provedor retornou ${res.status}: ${text.slice(0, 500)}`);
+      // 400 costuma significar prompt + max_tokens acima da janela do modelo no gateway. Damos uma
+      // dica acionável em pt-BR em vez de só repassar o corpo cru (que é técnico e em inglês).
+      const hint =
+        res.status === 400
+          ? ` (verifique se o limite de tokens de saída somado ao contexto não excede a janela do modelo no gateway)`
+          : "";
+      throw new HttpError(res.status, `Provedor retornou ${res.status}${hint}: ${text.slice(0, 500)}`);
     }
 
     // Acumula os fragmentos de chamada de ferramenta do streaming por índice.
     const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+    // Garante que o aviso de truncamento seja emitido no máximo uma vez por resposta.
+    let warnedLength = false;
 
     for await (const data of sseLines(res.body)) {
       let json: any;
@@ -105,6 +117,18 @@ export class OpenAICompatibleProvider implements LLMProvider {
           yield { kind: "tool_call", id: acc.id, name: acc.name, arguments: acc.args };
         }
         toolAcc.clear();
+      }
+      // Resposta cortada por atingir o teto de tokens de saída. Aviso NÃO-fatal: o conteúdo
+      // parcial já recebido é preservado (não viramos `error`, que abortaria o parse das propostas).
+      // Nota: tool_calls truncadas por "length" ficam com `args` (JSON) incompleto e são
+      // intencionalmente descartadas — emiti-las entregaria argumentos inválidos a quem as consome.
+      if (choice.finish_reason === "length" && !warnedLength) {
+        warnedLength = true;
+        const cap = this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS;
+        yield {
+          kind: "warning",
+          message: `Resposta truncada por atingir o limite de ${cap} tokens de saída. O arquivo pode estar incompleto — peça a continuação ou aumente o limite de tokens.`,
+        };
       }
     }
   }
