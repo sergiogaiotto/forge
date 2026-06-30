@@ -95,6 +95,41 @@ test("envia max_tokens no corpo da requisição (evita truncamento pelo default 
   }
 });
 
+test("envia reasoning_effort no corpo quando configurado; omite quando ausente", async () => {
+  let body: any;
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      body = JSON.parse(raw);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const egress = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, () => undefined);
+    const withEffort = new OpenAICompatibleProvider(
+      { type: "openai-compatible", modelId: "openai/gpt-oss-120b", baseUrl: `http://127.0.0.1:${port}`, apiKey: "not-needed", timeoutSeconds: 30, reasoningEffort: "high" },
+      egress
+    );
+    await collect(withEffort.createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000 }));
+    assert.equal(body.reasoning_effort, "high");
+    body = undefined;
+    const noEffort = new OpenAICompatibleProvider(
+      { type: "openai-compatible", modelId: "m", baseUrl: `http://127.0.0.1:${port}`, apiKey: "not-needed", timeoutSeconds: 30 },
+      egress
+    );
+    await collect(noEffort.createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000 }));
+    assert.ok(body && !("reasoning_effort" in body), "sem reasoningEffort configurado, não deve enviar o campo");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("emite warning NÃO-fatal quando finish_reason é 'length' (truncamento)", async () => {
   const srv = await sseServer([
     JSON.stringify({ choices: [{ delta: { content: "início do arquivo…" } }] }),
