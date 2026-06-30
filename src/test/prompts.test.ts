@@ -25,3 +25,17 @@ test("prompt de revisão é multi-lente e em pt-BR", () => {
 test("prompt base exige pt-BR", () => {
   assert.match(buildBasePrompt("x"), /pt-BR/);
 });
+
+test("prompt base proíbe elipses/omissões para forçar o arquivo completo", () => {
+  const p = buildBasePrompt("x");
+  assert.match(p, /PROIBIDO/);
+  assert.match(p, /restante do código/); // veta o placeholder exato observado no print
+  assert.match(p, /linha por linha/);
+});
+
+test("prompt de revisão também proíbe omissões no bloco corrigido", () => {
+  const p = buildReviewPrompt();
+  // mesma regra compartilhada (NO_ELLIPSIS_RULE) que o prompt base
+  assert.match(p, /PROIBIDO/);
+  assert.match(p, /restante do código/);
+});

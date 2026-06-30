@@ -331,6 +331,18 @@ body {
   border: 1px solid #2f3f52;
   color: var(--blue);
 }
+/* Aviso não-fatal ancorado ao balão do assistente (ex.: resposta truncada). Âmbar, persistente. */
+.assistant-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 11px;
+  background: #2a2616;
+  border: 1px solid #524a2f;
+  color: #d8c98a;
+}
 .validation .sep {
   color: #5f8a66;
 }
