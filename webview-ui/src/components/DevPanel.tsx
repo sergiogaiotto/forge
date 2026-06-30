@@ -4,6 +4,7 @@ import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunR
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
 import { DiffView } from "./DiffView";
+import { Markdown } from "./Markdown";
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
@@ -366,7 +367,10 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
   const previews = m.streaming
     ? parsePartialFileBlocks(m.text).filter((b) => !proposedPaths.has(b.path))
     : [];
-  const displayText = m.streaming ? stripFileBlocksFromText(m.text) : m.text;
+  // Sempre remove as cercas forge-file/forge-cell do texto exibido — inclusive fora do streaming.
+  // No caminho de erro/abort o reducer não chega a transformar o bloco em proposta (nem a removê-lo),
+  // então sem este strip a cerca crua "vazaria" como uma caixa de código enganosa no Markdown.
+  const displayText = stripFileBlocksFromText(m.text);
   const liveBlock = previews.some((b) => !b.closed); // algum bloco ainda chegando
   const hasCards = previews.length > 0 || m.proposals.length > 0;
   const thinking = m.streaming && !displayText && !hasCards;
@@ -388,13 +392,20 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
             {thinking ? "Raciocinando…" : "Raciocínio"}
             {thinking && <Icon name="refresh" size={11} className="spin" style={{ marginLeft: 2 }} />}
           </button>
-          {showReasoning && <div className="reasoning">{m.reasoning}</div>}
+          {showReasoning && (
+            <div className="reasoning">
+              <Markdown text={m.reasoning} />
+            </div>
+          )}
         </div>
       )}
       {displayText && (
         <div className="assistant-text">
-          {displayText}
-          {m.streaming && !liveBlock && !m.proposals.length && <span className="blink">▏</span>}
+          <Markdown
+            text={displayText}
+            streaming={m.streaming}
+            trailing={m.streaming && !liveBlock && !m.proposals.length ? <span className="blink">▏</span> : undefined}
+          />
         </div>
       )}
       {!displayText && !m.reasoning && m.streaming && !hasCards && (
