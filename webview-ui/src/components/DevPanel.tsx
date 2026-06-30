@@ -4,6 +4,10 @@ import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunR
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
 import { DiffView } from "./DiffView";
+import { Markdown } from "./Markdown";
+import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
+
+const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "baixo", medium: "médio", high: "alto" };
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
@@ -275,8 +279,21 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           </div>
         )}
         <div className="spacer" />
+        {forge.provider.supportsReasoningEffort && (
+          <button
+            className="sb-item sb-btn"
+            title="Esforço de raciocínio do gpt-oss — clique para alternar (baixo → médio → alto). Esforço maior raciocina mais e eleva o timeout automaticamente."
+            onClick={() => {
+              const cur = forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+              const next = REASONING_EFFORTS[(REASONING_EFFORTS.indexOf(cur) + 1) % REASONING_EFFORTS.length];
+              post({ type: "provider/setEffort", effort: next });
+            }}
+          >
+            <Icon name="cpu" size={13} /> esforço: {EFFORT_LABEL[forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT]}
+          </button>
+        )}
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
-          timeout {forge.provider.timeoutSeconds ?? 300}s
+          timeout {forge.provider.timeoutSeconds ?? effectiveTimeoutSeconds(forge.provider.reasoningEffort)}s
         </div>
       </div>
 
@@ -366,7 +383,10 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
   const previews = m.streaming
     ? parsePartialFileBlocks(m.text).filter((b) => !proposedPaths.has(b.path))
     : [];
-  const displayText = m.streaming ? stripFileBlocksFromText(m.text) : m.text;
+  // Sempre remove as cercas forge-file/forge-cell do texto exibido — inclusive fora do streaming.
+  // No caminho de erro/abort o reducer não chega a transformar o bloco em proposta (nem a removê-lo),
+  // então sem este strip a cerca crua "vazaria" como uma caixa de código enganosa no Markdown.
+  const displayText = stripFileBlocksFromText(m.text);
   const liveBlock = previews.some((b) => !b.closed); // algum bloco ainda chegando
   const hasCards = previews.length > 0 || m.proposals.length > 0;
   const thinking = m.streaming && !displayText && !hasCards;
@@ -388,13 +408,20 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
             {thinking ? "Raciocinando…" : "Raciocínio"}
             {thinking && <Icon name="refresh" size={11} className="spin" style={{ marginLeft: 2 }} />}
           </button>
-          {showReasoning && <div className="reasoning">{m.reasoning}</div>}
+          {showReasoning && (
+            <div className="reasoning">
+              <Markdown text={m.reasoning} />
+            </div>
+          )}
         </div>
       )}
       {displayText && (
         <div className="assistant-text">
-          {displayText}
-          {m.streaming && !liveBlock && !m.proposals.length && <span className="blink">▏</span>}
+          <Markdown
+            text={displayText}
+            streaming={m.streaming}
+            trailing={m.streaming && !liveBlock && !m.proposals.length ? <span className="blink">▏</span> : undefined}
+          />
         </div>
       )}
       {!displayText && !m.reasoning && m.streaming && !hasCards && (

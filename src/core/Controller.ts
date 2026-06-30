@@ -24,12 +24,16 @@ import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector"
 import { SkillValidator } from "../skills/SkillValidator";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
+  DEFAULT_REASONING_EFFORT,
+  effectiveTimeoutSeconds,
   ExtToWebview,
   ForgeState,
   LicenseView,
   ProviderSetup,
   ProviderView,
+  ReasoningEffort,
   SkillView,
+  supportsReasoningEffort,
   WebviewToExt,
 } from "../shared/protocol";
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
@@ -58,6 +62,7 @@ interface ProviderPersisted {
   authHeader?: string;
   timeoutSeconds: number;
   label?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export class Controller {
@@ -504,13 +509,19 @@ export class Controller {
   private providerView(): ProviderView {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     if (!p) return { configured: false };
+    const effort = p.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+    const supports = supportsReasoningEffort(p.type, p.modelId);
     return {
       configured: true,
       type: p.type,
       modelId: p.modelId,
       baseUrl: p.baseUrl,
-      timeoutSeconds: p.timeoutSeconds,
+      // timeout EFETIVO: para gpt-oss o esforço eleva o piso (mantendo um override maior do
+      // onboarding); para os demais, o valor configurado no onboarding é preservado intacto.
+      timeoutSeconds: supports ? Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(effort)) : p.timeoutSeconds,
       label: p.label ?? `${p.type} · ${p.modelId}`,
+      reasoningEffort: effort,
+      supportsReasoningEffort: supports,
     };
   }
 
@@ -536,6 +547,9 @@ export class Controller {
         break;
       case "provider/test":
         await this.testProvider(msg.setup);
+        break;
+      case "provider/setEffort":
+        await this.setReasoningEffort(msg.effort);
         break;
       case "provider/openSettings":
         void vscode.commands.executeCommand("workbench.action.openSettings", "forge");
@@ -696,6 +710,7 @@ export class Controller {
     if (setup.apiKey !== undefined) {
       await this.secrets.set(SecretsStore.providerApiKey("default"), setup.apiKey);
     }
+    const existing = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     const persisted: ProviderPersisted = {
       type: setup.type,
       modelId: setup.modelId,
@@ -703,9 +718,20 @@ export class Controller {
       authHeader: setup.authHeader,
       timeoutSeconds: setup.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS,
       label: `${setup.type === "openai-compatible" ? "HubGPU/compat" : setup.type} · ${setup.modelId}`,
+      // preserva o esforço já escolhido pelo usuário num re-setup; senão usa o default.
+      reasoningEffort: setup.reasoningEffort ?? existing?.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
     };
     await this.context.globalState.update(GS_PROVIDER, persisted);
     this.post({ type: "notice", level: "info", message: "Provedor configurado." });
+    await this.postState();
+  }
+
+  // Troca o esforço de raciocínio (low/medium/high) pelo seletor do rodapé. Persiste e re-emite o
+  // estado — o timeout efetivo passa a derivar do novo esforço na próxima geração.
+  async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+    const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
+    if (!p) return;
+    await this.context.globalState.update(GS_PROVIDER, { ...p, reasoningEffort: effort });
     await this.postState();
   }
 
@@ -713,7 +739,15 @@ export class Controller {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     if (!p) return undefined;
     const apiKey = (await this.secrets.get(SecretsStore.providerApiKey("default"))) ?? "not-needed";
-    return { ...p, apiKey };
+    if (!supportsReasoningEffort(p.type, p.modelId)) {
+      // Provedores sem esforço (Anthropic/OpenAI/Llama): preserva o timeout do onboarding e não
+      // envia reasoning_effort.
+      return { ...p, apiKey, reasoningEffort: undefined };
+    }
+    const reasoningEffort = p.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+    // gpt-oss: o esforço eleva o piso de timeout (esforços maiores levam mais tempo), mas um override
+    // maior do onboarding é respeitado — evita cortar respostas longas (arquivo completo) no meio.
+    return { ...p, apiKey, reasoningEffort, timeoutSeconds: Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(reasoningEffort)) };
   }
 
   async testProvider(setup: ProviderSetup): Promise<void> {
@@ -726,6 +760,11 @@ export class Controller {
       timeoutSeconds: Math.min(setup.timeoutSeconds || 30, 30),
       // O ping só precisa de "ok"; teto mínimo evita custo e o 400 por exceder a janela em modelos pequenos.
       maxTokens: 16,
+      // Exercita o MESMO corpo da geração real: se o gateway recusar reasoning_effort, o erro aparece
+      // já no "Testar conexão", não silenciosamente na primeira geração.
+      reasoningEffort: supportsReasoningEffort(setup.type, setup.modelId)
+        ? setup.reasoningEffort ?? DEFAULT_REASONING_EFFORT
+        : undefined,
     };
     const started = Date.now();
     try {
@@ -854,7 +893,7 @@ export class Controller {
       timeoutMs: runtime.timeoutSeconds * 1000,
       // RF-063: propaga identidade do dev (login), sessão, modelo e skills ao
       // gateway para a observabilidade — nunca segredos.
-      extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type),
+      extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type, runtime.reasoningEffort),
       emit: (e) => this.obs.record(e),
       obsMeta: {
         mode,
@@ -881,7 +920,12 @@ export class Controller {
 
   // Headers x-forge-* propagados ao gateway (RF-063/064). Apenas metadados — o
   // gateway transforma em atributos do trace no Langfuse (userId = login).
-  private buildTraceHeaders(activatedSkills: string[], modelId: string, providerType: string): Record<string, string> {
+  private buildTraceHeaders(
+    activatedSkills: string[],
+    modelId: string,
+    providerType: string,
+    reasoningEffort?: ReasoningEffort
+  ): Record<string, string> {
     const meta = this.context.globalState.get<{ org: string; subject: string }>(GS_LICENSE_META);
     const identity = this.resolveIdentity();
     return {
@@ -893,6 +937,7 @@ export class Controller {
       "x-forge-provider": providerType,
       "x-forge-model": modelId,
       "x-forge-skills": activatedSkills.join(","),
+      "x-forge-effort": reasoningEffort ?? "", // esforço de raciocínio aplicado (vazio quando N/A)
     };
   }
 
@@ -1256,7 +1301,7 @@ export class Controller {
       skillValidator: new SkillValidator(this.workspaceRoot()),
       workspaceRoot: this.workspaceRoot(),
       timeoutMs: runtime.timeoutSeconds * 1000,
-      extraHeaders: this.buildTraceHeaders(["review"], runtime.modelId, runtime.type),
+      extraHeaders: this.buildTraceHeaders(["review"], runtime.modelId, runtime.type, runtime.reasoningEffort),
       emit: (e) => this.obs.record(e),
       obsMeta: {
         mode: "review",

@@ -1,4 +1,4 @@
-import { ProviderType } from "../shared/protocol";
+import { ProviderType, ReasoningEffort } from "../shared/protocol";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "tool";
@@ -51,9 +51,10 @@ export interface ProviderRuntimeConfig {
   timeoutSeconds: number;
   // Teto de tokens de SAÍDA. Sem isso, gateways OpenAI-compatíveis (HubGPU/vLLM) aplicam um
   // default baixo e cortam o "arquivo completo" no meio (finish_reason: "length"). Ausente =
-  // usa DEFAULT_MAX_TOKENS. Hoje sempre cai no default; reservado para configuração futura
-  // (ex.: ajuste por nível de reasoning effort), que ainda não existe.
+  // usa DEFAULT_MAX_TOKENS.
   maxTokens?: number;
+  // Esforço de raciocínio (gpt-oss/OpenAI-compatível). Enviado como `reasoning_effort` no corpo.
+  reasoningEffort?: ReasoningEffort;
 }
 
 export function buildAuthHeaders(cfg: ProviderRuntimeConfig): Record<string, string> {
