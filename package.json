@@ -347,6 +347,11 @@
           "default": false,
           "markdownDescription": "Exige que o dev informe o **e-mail** no setup inicial (vira o `userId` do trace no Langfuse). Use `true` quando as licenças são compartilhadas/genéricas. Mesmo com `false`, o e-mail é solicitado se o `subject` da licença não for um e-mail válido."
         },
+        "forge.provider.maxOutput": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "Override do **teto de tokens de saída** por geração. **0 = usa o catálogo de modelos** (ex.: 32k para gpt-oss-120b). Defina manualmente apenas se o gateway HubGPU/vLLM aceitar um teto diferente. Valores muito altos podem ser recusados pelo gateway (HTTP 400)."
+        },
         "forge.run.enabled": {
           "type": "boolean",
           "default": true,
