@@ -98,6 +98,36 @@ export type Action =
 let toastSeq = 0;
 let runSeq = 0;
 const RUN_OUTPUT_CAP = 20_000; // tail de saída ao vivo guardada no estado (evita estado gigante)
+const RUN_CARDS_CAP = 8; // teto de cartões de execução retidos (rede de segurança contra acúmulo)
+
+// A suíte de testes é um SINGLETON: um único cartão "testes" substituído a cada execução, em vez de
+// empilhar um novo a cada rodada (o que multiplicava os botões "Corrigir com FORGE" — exit 5/3/3...).
+// Demais execuções: append normal. Preserva o `id` do cartão substituído (key estável no React).
+// Cobre o caminho atual (run/result de testes sem runId, vindo de Controller.runTests). Se um dia os
+// testes ganharem ciclo ao vivo (run/start com runId), o singleton precisa ser estendido ao run/start.
+function upsertRun(
+  runs: (RunResultData & { id: string })[],
+  incoming: RunResultData & { id: string }
+): (RunResultData & { id: string })[] {
+  if (incoming.label === "testes") {
+    const idx = runs.findIndex((r) => r.label === "testes");
+    if (idx >= 0) {
+      const next = runs.slice();
+      next[idx] = { ...incoming, id: runs[idx].id };
+      return next;
+    }
+  }
+  return [...runs, incoming];
+}
+
+// Rede de segurança contra crescimento ilimitado em sessões longas: mantém os últimos N cartões,
+// mas nunca descarta um cartão ao vivo (running) que ficaria fora da janela.
+function capRuns(runs: (RunResultData & { id: string })[]): (RunResultData & { id: string })[] {
+  if (runs.length <= RUN_CARDS_CAP) return runs;
+  const tail = runs.slice(-RUN_CARDS_CAP);
+  const keptRunning = runs.slice(0, -RUN_CARDS_CAP).filter((r) => r.running);
+  return [...keptRunning, ...tail];
+}
 
 function lastAssistant(messages: MessageVM[]): MessageVM | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -204,7 +234,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         where: msg.where,
       };
       if (msg.proposalId) return mapProposals(state, msg.proposalId, (p) => ({ ...p, run: live }));
-      return { ...state, runs: [...state.runs, { ...live, id: msg.runId }] };
+      return { ...state, runs: capRuns([...state.runs, { ...live, id: msg.runId }]) };
     }
     case "run/output":
       return updateRunByRunId(state, msg.runId, (r) => ({ ...r, output: (r.output + msg.delta).slice(-RUN_OUTPUT_CAP) }));
@@ -227,7 +257,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         return { ...updateRunByRunId(state, msg.runId, (r) => ({ ...data, where: r.where })), ...last };
       }
       if (msg.proposalId) return { ...mapProposals(state, msg.proposalId, (p) => ({ ...p, run: data })), ...last };
-      return { ...state, runs: [...state.runs, { ...data, id: msg.runId ?? `run_${++runSeq}` }], ...last };
+      // Fallback de id com prefixo LOCAL: o host usa `run_${seq}` para runId; um prefixo distinto
+      // evita colidir a key do React entre um cartão de teste (sem runId) e um de arquivo (com runId).
+      return { ...state, runs: capRuns(upsertRun(state.runs, { ...data, id: msg.runId ?? `local_run_${++runSeq}` })), ...last };
     }
     case "stream/end":
       return { ...state, busy: false, messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false } : m)) };
