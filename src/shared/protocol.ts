@@ -4,6 +4,24 @@
 
 export type ProviderType = "openai" | "anthropic" | "openai-compatible";
 
+// Esforço de raciocínio do modelo (gpt-oss e afins). Mais esforço = raciocínio mais longo e melhor,
+// porém mais lento — por isso o timeout é elevado automaticamente junto (ver TIMEOUT_BY_EFFORT).
+export type ReasoningEffort = "low" | "medium" | "high";
+export const REASONING_EFFORTS: ReasoningEffort[] = ["low", "medium", "high"];
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
+// Timeout (segundos) por nível. `medium` = 300s preserva o default histórico; `high` dá ao
+// gpt-oss-120b o tempo de concluir respostas longas (arquivo completo) sem cortar por timeout.
+export const TIMEOUT_BY_EFFORT: Record<ReasoningEffort, number> = { low: 120, medium: 300, high: 600 };
+export function effectiveTimeoutSeconds(effort: ReasoningEffort | undefined): number {
+  return TIMEOUT_BY_EFFORT[effort ?? DEFAULT_REASONING_EFFORT];
+}
+// Só o gpt-oss (servido OpenAI-compatível, ex.: HubGPU) entende reasoning_effort. Restringir por
+// modelId evita enviar o campo a outros modelos OpenAI-compatíveis (Llama, etc.) e mostrar o seletor
+// onde ele não faz efeito.
+export function supportsReasoningEffort(type: ProviderType | undefined, modelId: string | undefined): boolean {
+  return type === "openai-compatible" && /gpt-oss/i.test(modelId ?? "");
+}
+
 // Linguagens das cercas de código que o modelo emite e a extensão faz parse em propostas.
 // Ficam AQUI (módulo sem dependências) para que tanto o host quanto a webview possam importá-las
 // sem arrastar o systemPrompt/node para o bundle do navegador.
@@ -33,6 +51,7 @@ export interface ProviderSetup {
   apiKey?: string; // enviada uma vez no setup, depois armazenada no SecretStorage e nunca devolvida
   authHeader?: string;
   timeoutSeconds: number;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ProviderView {
@@ -40,8 +59,10 @@ export interface ProviderView {
   type?: ProviderType;
   modelId?: string;
   baseUrl?: string;
-  timeoutSeconds?: number;
+  timeoutSeconds?: number; // timeout EFETIVO (derivado do esforço) — o que será aplicado na geração
   label?: string;
+  reasoningEffort?: ReasoningEffort;
+  supportsReasoningEffort?: boolean; // true só para provedores OpenAI-compatíveis (gpt-oss)
 }
 
 export interface LicenseView {
@@ -184,6 +205,7 @@ export type WebviewToExt =
   | { type: "identity/setEmail"; email: string }
   | { type: "provider/setup"; setup: ProviderSetup }
   | { type: "provider/test"; setup: ProviderSetup }
+  | { type: "provider/setEffort"; effort: ReasoningEffort }
   | { type: "provider/openSettings" }
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }

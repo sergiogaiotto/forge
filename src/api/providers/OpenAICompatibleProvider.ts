@@ -36,6 +36,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
       max_tokens: this.cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages: [{ role: "system", content: systemPrompt }, ...messages.map(toOpenAIMessage)],
     };
+    // gpt-oss e afins aceitam `reasoning_effort` (low/medium/high) no corpo Chat Completions.
+    if (this.cfg.reasoningEffort) body.reasoning_effort = this.cfg.reasoningEffort;
     if (opts.tools && opts.tools.length > 0) {
       body.tools = opts.tools.map(toOpenAITool);
       body.tool_choice = "auto";
@@ -62,12 +64,17 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok) {
       const text = await safeText(res);
-      // 400 costuma significar prompt + max_tokens acima da janela do modelo no gateway. Damos uma
-      // dica acionável em pt-BR em vez de só repassar o corpo cru (que é técnico e em inglês).
-      const hint =
-        res.status === 400
-          ? ` (verifique se o limite de tokens de saída somado ao contexto não excede a janela do modelo no gateway)`
-          : "";
+      // Damos uma dica acionável em pt-BR conforme a causa provável do 400, em vez de só repassar o
+      // corpo cru (técnico, em inglês). A dica é específica: reasoning_effort não aceito vs. janela de tokens.
+      let hint = "";
+      if (res.status === 400) {
+        const low = text.toLowerCase();
+        if (low.includes("reasoning_effort") || low.includes("unknown") || low.includes("unexpected") || low.includes("parameter")) {
+          hint = " (o gateway pode não aceitar o parâmetro reasoning_effort — reduza/ajuste o esforço de raciocínio)";
+        } else if (low.includes("token") || low.includes("context") || low.includes("length")) {
+          hint = " (o limite de tokens de saída somado ao contexto pode exceder a janela do modelo no gateway)";
+        }
+      }
       throw new HttpError(res.status, `Provedor retornou ${res.status}${hint}: ${text.slice(0, 500)}`);
     }
 

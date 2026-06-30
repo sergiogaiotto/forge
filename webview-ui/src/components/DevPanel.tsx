@@ -5,6 +5,9 @@ import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
+import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
+
+const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "baixo", medium: "médio", high: "alto" };
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
@@ -276,8 +279,21 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           </div>
         )}
         <div className="spacer" />
+        {forge.provider.supportsReasoningEffort && (
+          <button
+            className="sb-item sb-btn"
+            title="Esforço de raciocínio do gpt-oss — clique para alternar (baixo → médio → alto). Esforço maior raciocina mais e eleva o timeout automaticamente."
+            onClick={() => {
+              const cur = forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+              const next = REASONING_EFFORTS[(REASONING_EFFORTS.indexOf(cur) + 1) % REASONING_EFFORTS.length];
+              post({ type: "provider/setEffort", effort: next });
+            }}
+          >
+            <Icon name="cpu" size={13} /> esforço: {EFFORT_LABEL[forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT]}
+          </button>
+        )}
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
-          timeout {forge.provider.timeoutSeconds ?? 300}s
+          timeout {forge.provider.timeoutSeconds ?? effectiveTimeoutSeconds(forge.provider.reasoningEffort)}s
         </div>
       </div>
 

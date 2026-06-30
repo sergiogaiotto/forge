@@ -1020,6 +1020,18 @@ h6.md-h {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* Item interativo do rodapé (ex.: seletor de esforço de raciocínio) */
+.sb-btn {
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  color: var(--accent-soft);
+}
+.sb-btn:hover {
+  color: var(--accent);
+  background: #2a2113;
+}
 
 /* ---- Toast / approval ----------------------------------------------------- */
 .toast {
