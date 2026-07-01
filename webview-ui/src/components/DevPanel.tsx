@@ -3,18 +3,29 @@ import { Icon } from "../icons";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
-import { isRenderablePath } from "../../../src/shared/protocol";
+import {
+  isRenderablePath,
+  PROJECT_ARCHITECTURES,
+  PROJECT_LANGUAGES,
+  ProjectArchitecture,
+  ProjectLanguage,
+} from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
 
 const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "baixo", medium: "médio", high: "alto" };
+const PROJ_LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript", java: "Java", go: "Go" };
+const PROJ_ARCH_LABEL: Record<ProjectArchitecture, string> = { hexagonal: "Hexagonal", clean: "Clean", layered: "Camadas", mvc: "MVC" };
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
   const [input, setInput] = useState("");
   const [tdd, setTdd] = useState(false);
+  const [projectMode, setProjectMode] = useState(false);
+  const [language, setLanguage] = useState<ProjectLanguage>("python");
+  const [architecture, setArchitecture] = useState<ProjectArchitecture>("hexagonal");
   const [attachMenu, setAttachMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -30,8 +41,13 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const send = () => {
     const text = input.trim();
     if (!text || state.busy) return;
-    dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
-    post({ type: "chat/send", text, tdd });
+    if (projectMode) {
+      dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}] ${text}` });
+      post({ type: "project/start", text, language, architecture });
+    } else {
+      dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
+      post({ type: "chat/send", text, tdd });
+    }
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
   };
@@ -199,11 +215,43 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             <span
               className="pill"
               title="Modo TDD: escreve o teste primeiro, depois a implementação"
-              onClick={() => setTdd((v) => !v)}
+              onClick={() => {
+                setTdd((v) => !v);
+                setProjectMode(false);
+              }}
               style={{ color: tdd ? "#e0863c" : undefined, fontWeight: tdd ? 500 : undefined }}
             >
               <Icon name={tdd ? "circle-check" : "circle"} size={14} color={tdd ? "#e0863c" : undefined} /> TDD
             </span>
+            <span
+              className="pill"
+              title="Modo Projeto: gera um projeto COMPLETO na linguagem e arquitetura escolhidas"
+              onClick={() => {
+                setProjectMode((v) => !v);
+                setTdd(false);
+              }}
+              style={{ color: projectMode ? "#e0863c" : undefined, fontWeight: projectMode ? 500 : undefined }}
+            >
+              <Icon name={projectMode ? "circle-check" : "circle"} size={14} color={projectMode ? "#e0863c" : undefined} /> Projeto
+            </span>
+            {projectMode && (
+              <>
+                <select className="proj-select" title="Linguagem" value={language} onChange={(e) => setLanguage(e.target.value as ProjectLanguage)}>
+                  {PROJECT_LANGUAGES.map((l) => (
+                    <option key={l} value={l}>
+                      {PROJ_LANG_LABEL[l]}
+                    </option>
+                  ))}
+                </select>
+                <select className="proj-select" title="Arquitetura" value={architecture} onChange={(e) => setArchitecture(e.target.value as ProjectArchitecture)}>
+                  {PROJECT_ARCHITECTURES.map((a) => (
+                    <option key={a} value={a}>
+                      {PROJ_ARCH_LABEL[a]}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
             <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>
               <Icon name="terminal" size={14} color="#86c98e" /> Testes
             </span>
@@ -761,7 +809,7 @@ function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   if (!lastUser || dismissed.has(lastUser.id)) return null;
-  const rule = lastUser.text.replace(/^\[TDD\]\s*/, "").trim();
+  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*)\]\s*/, "").trim();
   if (!looksLikeRule(rule)) return null;
   const close = () => setDismissed((s) => new Set(s).add(lastUser.id));
   return (

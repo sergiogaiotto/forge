@@ -1,6 +1,6 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-import { FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
+import { FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -136,6 +136,66 @@ O fechamento (\`${FORGE_FENCE}\`) fica sozinho na linha; quatro crases preservam
 conteúdo porventura tenha. ${NO_ELLIPSIS_RULE} Caso contrário, apenas descreva a correção.`;
 }
 
+const LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript (Node)", java: "Java", go: "Go" };
+const ARCH_LABEL: Record<ProjectArchitecture, string> = {
+  hexagonal: "hexagonal (ports & adapters)",
+  clean: "clean architecture",
+  layered: "em camadas (layered)",
+  mvc: "MVC",
+};
+const MANIFEST: Record<ProjectLanguage, string> = {
+  python: "pyproject.toml (ou requirements.txt)",
+  typescript: "package.json e tsconfig.json",
+  java: "pom.xml (ou build.gradle)",
+  go: "go.mod",
+};
+// Mecanismo idiomático de abstração (portas/interfaces) por linguagem.
+const INTERFACE_MECH: Record<ProjectLanguage, string> = {
+  python: "typing.Protocol ou abc.ABC",
+  typescript: "interface TypeScript",
+  java: "interface Java",
+  go: "interface Go (pequena, definida no pacote que a consome)",
+};
+
+function archetypeLayers(architecture: ProjectArchitecture): string {
+  switch (architecture) {
+    case "hexagonal":
+      return "Camadas: domain (entidades e regras puras, SEM I/O) · ports (as interfaces que o domínio precisa) · adapters (implementações das ports: banco, http, fila) · application/use_cases (orquestra o domínio via ports) · composition root (wiring no main). Regra de ouro: o domínio NÃO importa adapters; os adapters implementam as ports.";
+    case "clean":
+      return "Camadas concêntricas: entities · use cases · interface adapters (controllers/presenters/gateways) · frameworks & drivers (web/db). A dependência aponta SEMPRE para dentro (regra da dependência): as camadas internas não conhecem as externas.";
+    case "layered":
+      return "Camadas: presentation (web, CLI ou API, conforme o projeto) · service/business · repository/data-access · model/entity. Cada camada só chama a de baixo; a de dados isola o acesso ao banco.";
+    case "mvc":
+      return "Model (dados e regras) · View (apresentação: web, CLI ou API, conforme o projeto) · Controller (recebe a entrada, chama o model, devolve a resposta). Controller fino, model rico.";
+  }
+}
+
+// Modo Projeto: gera um PROJETO COMPLETO na linguagem + arquitetura escolhidas, reusando o protocolo
+// forge-file (cada arquivo vira uma proposta aplicável). Herda o prompt base (idioma, protocolo, anti-elipse).
+export function buildProjectPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture): string {
+  return (
+    buildBasePrompt(workspaceName) +
+    `
+
+MODO PROJETO (OBRIGATÓRIO nesta tarefa): gere um PROJETO COMPLETO em ${LANG_LABEL[language]}, na
+arquitetura ${ARCH_LABEL[architecture]}. Siga à risca:
+1. Comece com uma LISTA ENXUTA dos arquivos (um caminho por linha), em ordem de DEPENDÊNCIA:
+   interfaces/portas primeiro, depois domínio, adaptadores, wiring e testes. Declare também os NOMES
+   exatos das portas/interfaces principais e suas assinaturas-chave. Sem parágrafos — a responsabilidade
+   de cada arquivo vai como comentário de cabeçalho DENTRO do próprio arquivo (não gaste saída aqui).
+2. Em seguida, emita CADA arquivo como um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO (protocolo acima),
+   na mesma ordem — um arquivo por bloco, com o caminho relativo correto no \`path=\`.
+3. ${archetypeLayers(architecture)}
+4. COERÊNCIA entre arquivos: REUSE exatamente os nomes de portas/interfaces declarados no passo 1 — o
+   adaptador implementa a MESMA interface (${INTERFACE_MECH[language]}) que o domínio declara; imports e
+   assinaturas casam. Não invente nomes divergentes.
+5. Inclua o manifesto de dependências (${MANIFEST[language]}) e TESTES do NÚCLEO (domínio/casos de uso).
+   Se o espaço apertar, PRIORIZE arquivos de produção completos e coerentes sobre cobertura ampla de
+   testes — nunca entregue um arquivo pela metade.
+6. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_ELLIPSIS_RULE}`
+  );
+}
+
 // Instrução (mensagem de USUÁRIO) para o modelo CONTINUAR uma resposta que foi cortada no meio de um
 // arquivo (cerca de fechamento não emitida por limite de tokens). Usada pela engine de geração
 // resiliente: costura-se a continuação ao texto acumulado até o arquivo fechar de verdade.
@@ -146,5 +206,16 @@ CONTINUE a geração EXATAMENTE do ponto onde parou, no MESMO arquivo. Regras es
 - NÃO repita nada do que já escreveu; recomece exatamente no próximo caractere que faltou.
 - NÃO reabra a cerca \`${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG}\` nem o cabeçalho \`path=\` — apenas siga o conteúdo.
 - Escreva o restante do arquivo até o fim e FECHE a cerca (\`${FORGE_FENCE}\`) corretamente.
+- ${NO_ELLIPSIS_RULE}`;
+}
+
+// Continuação quando a resposta foi cortada por limite de tokens ENTRE blocos (o último arquivo fechou,
+// mas faltam arquivos) — caso comum numa geração de PROJETO multi-arquivo. Diferente de buildContinuation,
+// não estamos no meio de um arquivo: pedimos os PRÓXIMOS arquivos.
+export function buildTailContinuation(): string {
+  return `Sua resposta anterior foi CORTADA por limite de tokens ANTES de terminar. CONTINUE de onde parou:
+- Emita o RESTANTE do que faltava — os próximos arquivos como blocos \`${FORGE_FILE_BLOCK_LANG}\` completos
+  (ou, se o último arquivo ficou aberto, feche-o primeiro).
+- NÃO repita nada do que já escreveu; NÃO reabra um bloco já fechado.
 - ${NO_ELLIPSIS_RULE}`;
 }

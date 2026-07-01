@@ -7,7 +7,7 @@ export type ObsEvent =
   | {
       type: "generation.start";
       taskId: string;
-      mode: "normal" | "tdd" | "review";
+      mode: "normal" | "tdd" | "review" | "project";
       model: string;
       provider: string;
       skills: string[];
