@@ -289,8 +289,8 @@
         },
         "forge.rag.maxChunks": {
           "type": "number",
-          "default": 8,
-          "markdownDescription": "Número máximo de trechos do codebase injetados no contexto por geração."
+          "default": 20,
+          "markdownDescription": "Número máximo de trechos do codebase injetados no contexto por geração. Com o orçamento de contexto dinâmico (janela real do modelo), vale injetar mais referências; o excedente que não couber no orçamento é cortado automaticamente."
         },
         "forge.rag.maxFileSizeKb": {
           "type": "number",
@@ -351,6 +351,11 @@
           "type": "number",
           "default": 0,
           "markdownDescription": "Override do **teto de tokens de saída** por geração. **0 = usa o catálogo de modelos** (ex.: 32k para gpt-oss-120b). Defina manualmente apenas se o gateway HubGPU/vLLM aceitar um teto diferente. Valores muito altos podem ser recusados pelo gateway (HTTP 400)."
+        },
+        "forge.provider.maxContextWindow": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "Janela de contexto **real servida pelo gateway** (`--max-model-len` do vLLM). **0 = usa a capacidade do modelo** do catálogo (ex.: 128k para gpt-oss-120b). Defina este valor se o HubGPU servir o modelo com uma janela **menor** que a nominal, para o orçamento de contexto não estourar (HTTP 400)."
         },
         "forge.run.enabled": {
           "type": "boolean",
