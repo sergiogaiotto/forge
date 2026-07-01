@@ -97,6 +97,12 @@ const PATHS: Record<string, React.ReactNode> = {
   refresh: <path d="M20 11a8 8 0 0 0-15.5-2M4 5v4h4M4 13a8 8 0 0 0 15.5 2M20 19v-4h-4" />,
   paperclip: <path d="M15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3L18 10a3 3 0 0 0-6-6l-6.5 6.5a4.5 4.5 0 0 0 9 9L21 13" />,
   code: <path d="M7 8l-4 4 4 4M17 8l4 4-4 4M14 4l-4 16" />,
+  eye: (
+    <>
+      <path d="M10 12a2 2 0 1 0 4 0 2 2 0 0 0-4 0" />
+      <path d="M21 12c-2.4 4-5.4 6-9 6s-6.6-2-9-6c2.4-4 5.4-6 9-6s6.6 2 9 6" />
+    </>
+  ),
   table: (
     <>
       <path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
