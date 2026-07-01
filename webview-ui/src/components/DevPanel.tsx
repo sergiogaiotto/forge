@@ -594,6 +594,20 @@ function CharterWizard({
                 <Icon name="code" size={13} /> abrir .md
               </button>
               <button
+                className="btn"
+                disabled={state.busy || anyDrafting || !(charter.sections.fr.trim() || charter.sections.nfr.trim())}
+                title="Gerar testes de aceitação (test-first) a partir dos Requisitos Funcionais/Não Funcionais"
+                onClick={() => {
+                  // bolha fiel: mostra no transcript os requisitos efetivamente enviados ao modelo.
+                  const reqs = [charter.sections.fr.trim(), charter.sections.nfr.trim()].filter(Boolean).join("\n\n");
+                  dispatch({ kind: "pushUser", text: `Gerar testes de aceitação a partir destes requisitos:\n\n${reqs}` });
+                  post({ type: "charter/genTests", fr: charter.sections.fr, nfr: charter.sections.nfr });
+                  onClose();
+                }}
+              >
+                <Icon name="terminal" size={13} /> Gerar testes
+              </button>
+              <button
                 className="btn p"
                 disabled={anyDrafting}
                 onClick={() => post({ type: "charter/save", sections: charter.sections })}
@@ -823,6 +837,16 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             <Icon name={cell ? "terminal" : "code"} size={13} color="#4ec9b0" />{" "}
             {cell ? `célula · ${p.proposal.filePath} · ${p.proposal.summary}` : `diff · ${p.proposal.filePath}`}
           </span>
+          {!cell && (
+            // O detector de completude (cerca-aberta/elipse) só roda em blocos forge-file; para células
+            // não há verificação, então não afirmamos completude que não checamos.
+            <span
+              className={`seal ${p.proposal.partial ? "partial" : "ok"}`}
+              title={p.proposal.partial ? "Geração parcial — o arquivo pode estar incompleto" : "Arquivo completo (sem truncamento nem elipses)"}
+            >
+              {p.proposal.partial ? "⚠ parcial" : "✓ completo"}
+            </span>
+          )}
           <span className="diff-lang">{p.proposal.language}</span>
         </div>
         <DiffView original={p.proposal.original} modified={p.proposal.modified} />

@@ -50,7 +50,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
-import { buildBasePrompt, buildCharterSystemPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildCharterSystemPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
@@ -538,6 +538,21 @@ export class Controller {
     void this.postProfileState(); // as regras podem ter mudado
   }
 
+  // Requisitos → Testes: gera testes de aceitação (modo TDD, propostas aplicáveis) a partir dos
+  // Requisitos Funcionais/Não Funcionais do charter. Recebe os requisitos ATUAIS do wizard (mesmo não
+  // salvos), evitando divergência com o project.md em disco. Reusa todo o pipeline de geração/proposta.
+  async generateAcceptanceTests(fr: string, nfr: string): Promise<void> {
+    if (!fr.trim() && !nfr.trim()) {
+      this.post({
+        type: "notice",
+        level: "warn",
+        message: "Preencha os Requisitos (funcionais/não funcionais) no Charter antes de gerar os testes de aceitação.",
+      });
+      return;
+    }
+    await this.startTask(buildAcceptanceTestsRequest(fr, nfr), "tdd");
+  }
+
   // ---- Visualizador read-only de Skills e RAG (o dev inspeciona o que é injetado) ------
 
   // Abre o inspetor: envia a lista de skills e o resumo do índice RAG (dados já em memória).
@@ -871,6 +886,9 @@ export class Controller {
         break;
       case "charter/save":
         await this.saveCharter(msg.sections);
+        break;
+      case "charter/genTests":
+        await this.generateAcceptanceTests(msg.fr, msg.nfr);
         break;
       case "inspect/open":
         await this.inspectOpen();

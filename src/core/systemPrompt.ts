@@ -221,6 +221,18 @@ const CHARTER_GUIDANCE: Record<CharterKey, string> = {
     "os REQUISITOS NÃO FUNCIONAIS como bullets verificáveis (comece cada linha com '- '), cobrindo o que fizer sentido: desempenho, segurança/LGPD, disponibilidade, observabilidade, manutenibilidade, portabilidade. Prefixe com 'RNF-01:'… se ajudar.",
 };
 
+// Requisitos → Testes: monta o PEDIDO (mensagem de usuário) para gerar testes de aceitação a partir
+// dos requisitos do charter. Roda no modo TDD (test-first) reusando o pipeline de proposta/aplicação.
+export function buildAcceptanceTestsRequest(fr: string, nfr: string): string {
+  const parts = [
+    "Gere TESTES DE ACEITAÇÃO (test-first) que verifiquem os requisitos do projeto abaixo.",
+    "Regras: um arquivo de teste por área lógica; cada caso de teste mapeia UM requisito e cita o id no nome/comentário (ex.: test_rf01_..., # RNF-02); use o framework de teste da stack detectada. NÃO implemente o código de produção agora — só os testes (se a implementação ainda não existe, deixe o teste falhar ou marque como skip com o motivo).",
+  ];
+  if (fr.trim()) parts.push("", "## Requisitos funcionais", fr.trim());
+  if (nfr.trim()) parts.push("", "## Requisitos não funcionais", nfr.trim());
+  return parts.join("\n");
+}
+
 export function buildCharterSystemPrompt(section: CharterKey): string {
   return [
     "Você é o FORGE, assistente de engenharia para times de dados/IA da Claro. Ajude a redigir o CHARTER",
