@@ -53,10 +53,11 @@ import {
 } from "../shared/protocol";
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { parseBlueprint, topoSort } from "../util/blueprint";
 import { classifyProjectIntent } from "../util/projectIntent";
+import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
@@ -1026,6 +1027,9 @@ export class Controller {
       case "context/addTerminalSelection":
         await this.addTerminalSelectionAttachment();
         break;
+      case "context/addImage":
+        await this.addImageOcrAttachment(msg.dataUrl);
+        break;
       case "context/removeAttachment":
         this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== msg.id);
         this.postAttachments();
@@ -1573,6 +1577,81 @@ export class Controller {
       return;
     }
     this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
+  }
+
+  // Ponto 6: OCR de um print colado no chat via o `tesseract` do SISTEMA (leve, sem inchar o .vsix).
+  // Grava a imagem num arquivo temporário, roda o tesseract com os idiomas disponíveis (prefere por+eng)
+  // e anexa o TEXTO extraído. Degrada com clareza quando o tesseract não está instalado.
+  private static readonly OCR_MAX_BYTES = 8 * 1024 * 1024; // prints raramente passam de 2-3 MB
+  private ocrInFlight = false; // evita N processos tesseract concorrentes em Ctrl+V repetido
+  async addImageOcrAttachment(dataUrl: string): Promise<void> {
+    const parsed = parseImageDataUrl(dataUrl);
+    if (!parsed) {
+      this.post({ type: "notice", level: "warn", message: "Não reconheci a imagem colada. Cole um print (PNG/JPG) ou o texto do log." });
+      return;
+    }
+    const buf = Buffer.from(parsed.base64, "base64");
+    if (buf.length === 0 || buf.length > Controller.OCR_MAX_BYTES) {
+      this.post({ type: "notice", level: "warn", message: "Imagem inválida ou grande demais para OCR (máx. 8 MB)." });
+      return;
+    }
+    if (this.ocrInFlight) {
+      this.post({ type: "notice", level: "info", message: "Já estou extraindo o texto de um print — aguarde terminar." });
+      return;
+    }
+    this.ocrInFlight = true;
+    const tmp = path.join(os.tmpdir(), `forge-ocr-${crypto.randomUUID()}.${parsed.ext || "png"}`);
+    let wrote = false; // distingue a falha de GRAVAR o temp da falha de RODAR o tesseract
+    try {
+      await fs.writeFile(tmp, buf);
+      wrote = true;
+      this.post({ type: "notice", level: "info", message: "Extraindo texto do print (OCR)…" });
+      const langs = pickOcrLangs(await this.listTesseractLangs());
+      const text = (await this.runTesseract(tmp, langs)).trim();
+      if (!text) {
+        this.post({ type: "notice", level: "warn", message: "Não encontrei texto legível no print. Se for um erro/log, cole o texto direto." });
+        return;
+      }
+      this.addAttachment("print (OCR)", "upload", text);
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (!wrote) {
+        this.post({ type: "notice", level: "error", message: `Não consegui preparar o print para OCR: ${err.message ?? String(err)}` });
+      } else if (err.code === "ENOENT") {
+        this.post({
+          type: "notice",
+          level: "warn",
+          message: "OCR requer o 'tesseract' instalado no sistema e no PATH (ex.: choco install tesseract-ocr). Enquanto isso, cole o texto do log direto no chat.",
+        });
+      } else {
+        this.post({ type: "notice", level: "error", message: `Falha no OCR do print: ${err.message ?? String(err)}` });
+      }
+    } finally {
+      this.ocrInFlight = false;
+      fs.unlink(tmp).catch(() => {}); // limpa o temporário haja o que houver
+    }
+  }
+
+  // Idiomas instalados no tesseract (`--list-langs`). Se o binário faltar/erro, retorna [] (o run
+  // principal surfacia o ENOENT com a mensagem de instalação). `--list-langs` costuma escrever no stderr.
+  private listTesseractLangs(): Promise<string[]> {
+    return new Promise((resolve) => {
+      execFile("tesseract", ["--list-langs"], { timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
+        resolve(err ? [] : parseTesseractLangs(`${stdout}\n${stderr}`));
+      });
+    });
+  }
+
+  // Roda o OCR: `tesseract <img> stdout [-l por+eng]`. Timeout e buffer limitados; nunca trava a extensão.
+  private runTesseract(imgPath: string, langs: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const args = [imgPath, "stdout"];
+      if (langs.length) args.push("-l", langs.join("+"));
+      execFile("tesseract", args, { timeout: 30000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
+        if (err) reject(err);
+        else resolve(stdout);
+      });
+    });
   }
 
   // Busca interna GOVERNADA via MCP — substitui a "web" pública por uma fonte
