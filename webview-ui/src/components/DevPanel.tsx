@@ -55,9 +55,10 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     // No Modo Projeto, só um PEDIDO de gerar abre o Blueprint. Pergunta/diagnóstico (ex.: logs colados
     // + "o que aconteceu?") é respondido no chat normal — sem sequestrar a mensagem para o Blueprint.
     if (projectMode && classifyProjectIntent(text) === "generate") {
-      // Fase F: planeja um BLUEPRINT aprovável antes de gerar código.
+      // Fase F: planeja um BLUEPRINT aprovável antes de gerar código. Guarda o brief (para o "Tentar
+      // de novo" caso o planejamento falhe).
       dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}] ${text}` });
-      dispatch({ kind: "project/planning" });
+      dispatch({ kind: "project/planning", brief: { text, language, architecture } });
       post({ type: "project/blueprint", text, language, architecture });
     } else {
       dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
@@ -444,6 +445,12 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
   const files: BlueprintFileView[] = bp?.files ?? [];
   const anyComplete = files.some((f) => f.status === "complete");
   const close = () => dispatch({ kind: "project/close" });
+  // Reenvia o mesmo pedido (brief retido) após uma falha do planejamento — sem redigitar.
+  const retry = () => {
+    if (!proj.brief) return;
+    dispatch({ kind: "project/planning", brief: proj.brief });
+    post({ type: "project/blueprint", ...proj.brief });
+  };
   return (
     <div className="modal-backdrop" onClick={proj.busy ? undefined : close}>
       <div className="modal plan-modal" onClick={(e) => e.stopPropagation()}>
@@ -459,11 +466,34 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
         </div>
 
         {!bp ? (
-          <div className="profile-empty">
-            <Icon name="refresh" size={13} className="spin" /> {proj.planStep ?? "Planejando o projeto…"}
-          </div>
+          proj.error ? (
+            // Falha do planejamento: modal FICA ABERTO com o erro real + "Tentar de novo" (não some).
+            <>
+              <div className="assistant-warning" style={{ marginTop: 4 }}>
+                <Icon name="alert-triangle" size={14} /> {proj.error}
+              </div>
+              <div className="actions" style={{ marginTop: 12, justifyContent: "flex-end", gap: 8 }}>
+                <button className="btn" onClick={close}>
+                  Fechar
+                </button>
+                <button className="btn p" disabled={!proj.brief} onClick={retry}>
+                  <Icon name="refresh" size={13} /> Tentar de novo
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="profile-empty">
+              <Icon name="refresh" size={13} className="spin" /> {proj.planStep ?? "Planejando o projeto…"}
+            </div>
+          )
         ) : (
           <>
+            {proj.error && (
+              // Falha na FASE DE GERAÇÃO (blueprint já existe): mostra o erro sem apagar a lista de arquivos.
+              <div className="assistant-warning" style={{ marginTop: 4 }}>
+                <Icon name="alert-triangle" size={14} /> {proj.error}
+              </div>
+            )}
             <div className="plan-hint">
               {proj.done
                 ? "Arquivos gerados. Clique em “Aplicar tudo” para gravá-los no workspace, ou feche para revisar antes."

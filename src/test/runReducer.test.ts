@@ -255,13 +255,36 @@ test("project/appliedAll incrementa appliedAllAt (seq) a cada aplicação — di
   assert.equal(s.appliedAllAt, 2);
 });
 
+const BRIEF = { text: "gerenciador de senhas", language: "python" as const, architecture: "hexagonal" as const };
+
 test("project/closed fecha o modal do projeto SEM toast de erro (diferente de blueprintError)", () => {
   // abre o modal (planning) e então recebe o fechamento silencioso do host (redirecionado ao chat)
-  let s = reducer(initialState, { kind: "project/planning" });
+  let s = reducer(initialState, { kind: "project/planning", brief: BRIEF });
   assert.ok(s.project, "modal aberto ao planejar");
   s = apply(s, { type: "project/closed" });
   assert.equal(s.project, null, "modal fechado");
   assert.equal(s.toast, null, "sem toast de erro (ao contrário de project/blueprintError)");
+});
+
+test("project/blueprintError MANTÉM o modal aberto com o erro + brief retido (não some 'sem nada')", () => {
+  let s = reducer(initialState, { kind: "project/planning", brief: BRIEF });
+  s = apply(s, { type: "project/blueprintError", message: "resposta sem blueprint válido" });
+  assert.ok(s.project, "modal continua aberto (não vira null)");
+  assert.equal(s.project?.error, "resposta sem blueprint válido");
+  assert.equal(s.project?.busy, false, "não fica travado em 'gerando'");
+  assert.deepEqual(s.project?.brief, BRIEF, "brief retido para o 'Tentar de novo'");
+  assert.equal(s.toast, null, "sem toast efêmero quando o modal está aberto");
+  // blueprint chega no retry → limpa o erro, preserva o brief
+  const bp = { ...BRIEF, brief: BRIEF.text, files: [{ path: "a.py", purpose: "", deps: [], status: "pending" as const }] };
+  s = apply(s, { type: "project/blueprint", blueprint: bp });
+  assert.equal(s.project?.error, undefined, "erro limpo ao chegar o blueprint");
+  assert.deepEqual(s.project?.brief, BRIEF, "brief preservado");
+});
+
+test("project/blueprintError sem modal ativo cai no toast (fallback)", () => {
+  const s = apply(initialState, { type: "project/blueprintError", message: "erro" });
+  assert.equal(s.project, null);
+  assert.equal(s.toast?.level, "error");
 });
 
 test("project/fileStatus patcha o status de UM arquivo (progresso um-a-um) sem tocar nos demais", () => {
@@ -284,7 +307,7 @@ test("project/fileStatus patcha o status de UM arquivo (progresso um-a-um) sem t
 });
 
 test("project/planStep narra a etapa atual do planejamento (antes do blueprint chegar)", () => {
-  let s = reducer(initialState, { kind: "project/planning" });
+  let s = reducer(initialState, { kind: "project/planning", brief: BRIEF });
   assert.equal(s.project?.planStep, undefined, "sem etapa até o host narrar");
   s = apply(s, { type: "project/planStep", label: "Analisando os requisitos…" });
   assert.equal(s.project?.planStep, "Analisando os requisitos…");
