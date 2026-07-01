@@ -7,7 +7,7 @@ import { SkillValidatorSpec } from "../skills/types";
 import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
-import { CompletenessResult, resilientGenerate } from "../util/completeness";
+import { CompletenessResult, partialFilePath, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 import { safeWorkspacePath } from "../util/safePath";
@@ -128,13 +128,10 @@ export class Task {
 
     // Faz o parse das edições de arquivo propostas e transforma cada uma em um diff revisável.
     const blocks = parseFileBlocks(full);
-    // Qual proposta marcar como parcial: a do arquivo que não fechou; se ele não virou proposta
-    // (ex.: truncou antes do corpo), marca a ÚLTIMA (candidata natural, por ordem de emissão).
-    const partialPath = wasTruncated
-      ? blocks.some((b) => b.path === completeness.path)
-        ? completeness.path
-        : blocks[blocks.length - 1]?.path
-      : undefined;
+    // Qual proposta marcar como parcial. Só há parcial quando um arquivo ficou REALMENTE incompleto
+    // (cerca aberta/elipse). Se o corte foi só ENTRE arquivos (todos fecharam; provider cortou por
+    // tokens), nenhum bloco completo é rebaixado — corrige o "Aplicar tudo" pulando o README completo.
+    const partialPath = partialFilePath(wasTruncated, completeness, full);
     for (const block of blocks) {
       const proposal = await this.makeProposal(block.path, block.content);
       if (partialPath && block.path === partialPath) proposal.partial = true;

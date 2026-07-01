@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatMessage } from "../api/types";
-import { resilientGenerate } from "../util/completeness";
+import { checkCompleteness, partialFilePath, resilientGenerate } from "../util/completeness";
 
 const FENCE = "````"; // 4 crases (FORGE_FENCE)
 const base: ChatMessage[] = [{ role: "user", content: "gere o arquivo" }];
@@ -75,4 +75,48 @@ test("resilientGenerate: fluxo normal (já completo, sem truncar) NÃO continua"
   assert.equal(r.attempts, 0);
   assert.equal(r.truncated, false);
   assert.equal(s.calls(), 1);
+});
+
+// ---- partialFilePath: qual arquivo (se algum) é PARCIAL (bug do README no "Aplicar tudo") ----
+
+// Dois arquivos, ambos FECHADOS (corte ENTRE arquivos): nenhum é parcial.
+const TWO_CLOSED = FENCE + "forge-file path=src/a.py\nx = 1\n" + FENCE + "\n" + FENCE + "forge-file path=README.md\n# Doc\n" + FENCE + "\n";
+// a.py fechado + b.py cortado no meio SEM cerca de fechamento (cerca-aberta genuína).
+const OPEN_LAST = FENCE + "forge-file path=src/a.py\nx = 1\n" + FENCE + "\n" + FENCE + "forge-file path=src/b.py\ndef f():\n    x = ";
+// README cortado no meio, mas com uma cerca SOLTA de 3 crases no fim (a abertura tem 4): o
+// BARE_FENCE_TAIL faz checkCompleteness dizer complete:true, mascarando o truncamento.
+const MASKED_TRUNC = FENCE + "forge-file path=README.md\n# Titulo\nlinha cortada no me\n```\n";
+
+test("partialFilePath: corte ENTRE arquivos (tudo fechado) NÃO marca parcial — o README completo é aplicável", () => {
+  assert.equal(partialFilePath(true, { complete: true }, TWO_CLOSED), undefined);
+});
+
+test("partialFilePath: arquivo realmente cortado (cerca aberta) é o parcial", () => {
+  assert.equal(partialFilePath(true, { complete: false, reason: "cerca-aberta", path: "src/b.py" }, OPEN_LAST), "src/b.py");
+});
+
+test("partialFilePath: path reportado FORA dos blocos → cai no ÚLTIMO bloco emitido", () => {
+  assert.equal(partialFilePath(true, { complete: false, reason: "cerca-aberta", path: "z.py" }, OPEN_LAST), "src/b.py");
+});
+
+test("partialFilePath: sem truncamento → nada parcial; sem blocos → undefined", () => {
+  assert.equal(partialFilePath(false, { complete: false, reason: "cerca-aberta", path: "x" }, OPEN_LAST), undefined);
+  assert.equal(partialFilePath(true, { complete: false, reason: "cerca-aberta", path: undefined }, "sem blocos aqui"), undefined);
+});
+
+// REGRESSÃO (revisão adversarial PR B): truncamento no meio MASCARADO por cerca solta de contagem
+// errada NÃO pode escapar — o "Aplicar tudo" gravaria um README cortado como completo.
+test("partialFilePath: truncamento mascarado por BARE_FENCE_TAIL (último bloco não fechou de fato) → parcial", () => {
+  const c = checkCompleteness(MASKED_TRUNC);
+  assert.equal(c.complete, true, "BARE_FENCE_TAIL mascara o corte como 'completo'");
+  // ...mas o último bloco não fechou de verdade → deve ser marcado parcial e PULADO pelo Aplicar tudo:
+  assert.equal(partialFilePath(true, c, MASKED_TRUNC), "README.md");
+});
+
+test("cenário do README ponta-a-ponta: 1 arquivo FECHADO com corte do provider → truncado mas NÃO parcial", async () => {
+  const s = scripted([{ text: FENCE + "forge-file path=README.md\n# Projeto\nrodar: `python -m app`\n" + FENCE + "\n", truncated: true }]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.equal(r.truncated, true, "provider sinalizou finish_reason=length");
+  assert.equal(r.completeness.complete, true, "mas o bloco do README fechou");
+  assert.equal(partialFilePath(r.truncated, r.completeness, r.full), undefined);
 });
