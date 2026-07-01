@@ -3,6 +3,33 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.0.0] — 2026-07-01
+
+### Added — Modo Projeto (Blueprint aprovável), Charter e anexos
+- **Roteamento de intenção no Modo Projeto.** Com "Projeto" ligado, uma **pergunta/diagnóstico** (colar
+  logs + "o que aconteceu?") é respondida no **chat**, não sequestrada para o Blueprint. Ao aplicar
+  todos os arquivos, o Modo Projeto **se desmarca sozinho** (fim de fluxo).
+- **UX do modal Blueprint.** O planejamento **narra o que está acontecendo** (inclui um *heartbeat* com
+  tempo decorrido durante o raciocínio do modelo, para não parecer travado); cada arquivo tem um
+  **tooltip** com objetivo + dependências; e o status vai de **"gerando…" → "gerado" um a um**.
+- **Falha do Blueprint agora é visível e acionável.** Em vez de o modal fechar com um toast efêmero, ele
+  **fica aberto com o erro real + "Tentar de novo"** — tanto no planejamento quanto na geração.
+- **Anexar seleção do terminal** ao chat (além do editor/arquivo/upload), para pedir ao FORGE que
+  avalie um erro.
+- **Colar um print no chat → OCR.** O texto do print é extraído (via o `tesseract` do **sistema** — não
+  incha o `.vsix`) e anexado. Auto-detecta o `tesseract` (PATH + locais padrão/por-usuário) e aceita
+  `forge.ocr.tesseractPath`/`forge.ocr.tessdataPath`; degrada com clareza quando não instalado.
+
+### Fixed
+- **`gpt-oss` (harmony) via HubGPU vazava o canal de raciocínio na saída final** — poluía o campo do
+  Charter ("Now final output is markdown string. Proceed.") e **quebrava o JSON do Blueprint** (o modal
+  fechava sem gerar nada). Agora o texto é saneado na camada de consumo (`stripHarmony`) e o
+  `parseBlueprint` faz **extração balanceada** robusta (imune a prosa/marcadores, com teto anti-O(n²)).
+- **"Aplicar tudo" não grava mais o último arquivo por engano.** O README (último na ordem de
+  dependência) era carimbado como "parcial" por causa de um corte por `finish_reason=length` mesmo
+  completo, e o "Aplicar tudo" o pulava. Agora só marca parcial o arquivo **de fato** truncado.
+- **"Salvar" do Charter fecha o modal** e volta à tela principal.
+
 ## [1.8.0] — 2026-06-29
 
 ### Added — Execução ao vivo no terminal
