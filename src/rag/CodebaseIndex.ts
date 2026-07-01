@@ -185,6 +185,34 @@ export class CodebaseIndex {
     return cfg.include.some((g) => g.toLowerCase().endsWith(ext)) && !cfg.exclude.some((g) => rel.includes(g.replace(/\*\*\//g, "").replace(/\/\*\*/g, "")));
   }
 
+  // ---- inspeção read-only (visualizador de índice) --------------------------
+
+  /** Teto de chunks e se o índice foi truncado por ele (para o visualizador). O `capped` é reconciliado
+   *  com a contagem atual — não fica "preso" em true depois que arquivos são removidos e o índice volta
+   *  abaixo do teto. */
+  limits(): { maxChunks: number; capped: boolean } {
+    return { maxChunks: MAX_CHUNKS, capped: this.capped && this.chunkCount() >= MAX_CHUNKS };
+  }
+
+  /** Lista os arquivos indexados (relPath, linguagem, nº de chunks), ordenados. Sem reprocessar. */
+  listIndexedFiles(): { relPath: string; language: string; chunks: number }[] {
+    return [...this.byFile.entries()]
+      .map(([relPath, chunks]) => ({ relPath, language: chunks[0]?.language ?? "?", chunks: chunks.length }))
+      .sort((a, b) => a.relPath.localeCompare(b.relPath));
+  }
+
+  /** Chunks de UM arquivo indexado (id, linhas, símbolo, se tem vetor, e o texto). Sem reprocessar. */
+  fileChunks(relPath: string): { id: string; startLine: number; endLine: number; symbol?: string; hasVector: boolean; text: string }[] {
+    return (this.byFile.get(relPath) ?? []).map((c) => ({
+      id: c.id,
+      startLine: c.startLine,
+      endLine: c.endLine,
+      symbol: c.symbol,
+      hasVector: !!c.vector,
+      text: c.text,
+    }));
+  }
+
   // ---- recuperação ----------------------------------------------------------
 
   async retrieve(query: string, k: number): Promise<RetrievalHit[]> {
