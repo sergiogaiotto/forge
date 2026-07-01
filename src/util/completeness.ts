@@ -66,7 +66,8 @@ export function stitchContinuation(prev: string, cont: string): string {
 export interface ResilientOptions {
   maxContinuations: number;
   anchorChars: number; // quanto da CAUDA do texto reenviar como âncora na continuação (não o todo)
-  buildContinuation: (path: string | undefined) => string;
+  buildContinuation: (path: string | undefined) => string; // continuar um arquivo cortado (cerca aberta)
+  buildTailContinuation: () => string; // continuar a resposta cortada ENTRE blocos (ex.: faltam arquivos)
   onContinue?: (attempt: number, path: string | undefined) => void;
   aborted?: () => boolean;
 }
@@ -75,16 +76,19 @@ export interface ResilientResult {
   full: string;
   completeness: CompletenessResult;
   attempts: number; // nº de continuações efetuadas
+  truncated: boolean; // ao final, ainda estava cortado (cerca aberta OU provider sinalizou o corte)
   error?: string;
 }
 
 // Laço de geração resiliente (puro e testável, sem dependência de vscode): executa uma passagem via
-// `streamFn`, verifica a completude, e enquanto houver TRUNCAMENTO real (cerca aberta) — dentro do teto,
-// sem stall e sem abort — re-pede a continuação reenviando apenas a CAUDA do texto como âncora, costurando
-// cada resposta ao acumulado. Para em completo / elipse / teto / stall / abort. Não faz parse nem I/O.
+// `streamFn`, verifica a completude, e enquanto houver TRUNCAMENTO — cerca de arquivo aberta OU o provider
+// tendo sinalizado corte por limite de tokens (res.truncated, cobre o corte ENTRE arquivos numa geração
+// multi-arquivo) — dentro do teto, sem stall e sem abort, re-pede a continuação reenviando só a CAUDA do
+// texto como âncora e costura ao acumulado. Sem o sinal do provider, um corte na fronteira entre blocos
+// passaria despercebido (todos os blocos "fechados") e entregaria um projeto incompleto como sucesso.
 export async function resilientGenerate(
   baseMessages: ChatMessage[],
-  streamFn: (messages: ChatMessage[]) => Promise<{ text: string; error?: string }>,
+  streamFn: (messages: ChatMessage[]) => Promise<{ text: string; error?: string; truncated?: boolean }>,
   opts: ResilientOptions
 ): Promise<ResilientResult> {
   let full = "";
@@ -93,18 +97,22 @@ export async function resilientGenerate(
   let convo = baseMessages;
   for (;;) {
     const res = await streamFn(convo);
-    if (res.error !== undefined) return { full, completeness, attempts: attempt, error: res.error };
+    if (res.error !== undefined) return { full, completeness, attempts: attempt, truncated: false, error: res.error };
     const before = full.length;
     full = attempt === 0 ? res.text : stitchContinuation(full, res.text);
     completeness = checkCompleteness(full);
+    const openFence = !completeness.complete && completeness.reason === "cerca-aberta";
+    const incomplete = openFence || res.truncated === true; // provider cortou (mesmo entre blocos fechados)
     const stalled = attempt > 0 && full.length <= before; // a continuação não avançou → não insista
-    if (completeness.complete || completeness.reason !== "cerca-aberta" || attempt >= opts.maxContinuations || stalled || opts.aborted?.()) {
-      break;
+    if (!incomplete) return { full, completeness, attempts: attempt, truncated: false };
+    if (attempt >= opts.maxContinuations || stalled || opts.aborted?.()) {
+      return { full, completeness, attempts: attempt, truncated: true }; // esgotou ainda cortado
     }
     attempt++;
     opts.onContinue?.(attempt, completeness.path);
     const anchor = full.length > opts.anchorChars ? full.slice(-opts.anchorChars) : full;
-    convo = [...baseMessages, { role: "assistant", content: anchor }, { role: "user", content: opts.buildContinuation(completeness.path) }];
+    // cerca aberta → continuar o MESMO arquivo; corte entre blocos → continuar a resposta (próximos arquivos).
+    const instruction = openFence ? opts.buildContinuation(completeness.path) : opts.buildTailContinuation();
+    convo = [...baseMessages, { role: "assistant", content: anchor }, { role: "user", content: instruction }];
   }
-  return { full, completeness, attempts: attempt };
 }
