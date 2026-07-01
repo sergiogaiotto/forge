@@ -4,6 +4,7 @@ import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunR
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
 import {
+  CharterKey,
   isRenderablePath,
   PROJECT_ARCHITECTURES,
   PROJECT_LANGUAGES,
@@ -28,6 +29,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [architecture, setArchitecture] = useState<ProjectArchitecture>("hexagonal");
   const [attachMenu, setAttachMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showCharter, setShowCharter] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -354,12 +356,108 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         </div>
       </div>
 
-      {showProfile && <ProfilePanel profile={state.profile} onClose={() => setShowProfile(false)} />}
+      {showProfile && (
+        <ProfilePanel
+          profile={state.profile}
+          onClose={() => setShowProfile(false)}
+          onWizard={() => {
+            setShowProfile(false);
+            post({ type: "charter/open" });
+            setShowCharter(true);
+          }}
+        />
+      )}
+      {showCharter && <CharterWizard state={state} dispatch={dispatch} onClose={() => setShowCharter(false)} />}
     </div>
   );
 }
 
-function ProfilePanel({ profile, onClose }: { profile: ProfileView | null; onClose: () => void }): JSX.Element {
+// Charter Wizard: redige Propósito/Regras/RF/RNF com auxílio do modelo e grava no .forge/project.md.
+// Cada seção tem um textarea (fonte da verdade no estado global) e "Redigir com IA", que envia o
+// rascunho atual como brief e substitui o conteúdo pelo texto do modelo.
+const CHARTER_UI: { key: CharterKey; label: string; rows: number; ph: string }[] = [
+  { key: "purpose", label: "Propósito", rows: 3, ph: "O que a aplicação faz, para quem e qual o valor…" },
+  { key: "rules", label: "Regras do projeto", rows: 5, ph: "- sempre use type hints\n- nunca logue segredos" },
+  { key: "fr", label: "Requisitos funcionais", rows: 6, ph: "- RF-01: o sistema deve autenticar via licença Ed25519" },
+  { key: "nfr", label: "Requisitos não funcionais", rows: 6, ph: "- RNF-01: p95 < 200ms\n- RNF-02: LGPD — sem PII em logs" },
+];
+
+function CharterWizard({
+  state,
+  dispatch,
+  onClose,
+}: {
+  state: UIState;
+  dispatch: React.Dispatch<Action>;
+  onClose: () => void;
+}): JSX.Element {
+  const charter = state.charter;
+  const anyDrafting = charter ? Object.values(charter.drafting).some(Boolean) : false;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal charter-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="card-title">
+          <Icon name="sparkles" size={15} color="#c9a26d" /> Charter do projeto
+          <div className="spacer" />
+          <span className="icon-btn" title="Fechar" onClick={onClose}>
+            <Icon name="x" size={15} />
+          </span>
+        </div>
+        <div className="charter-hint">
+          Redija com o modelo e salve — o charter vira contexto fixo (pinned) em toda geração do FORGE.
+        </div>
+        {!charter ? (
+          <div className="profile-empty">carregando…</div>
+        ) : (
+          <>
+            {CHARTER_UI.map((sec) => {
+              const drafting = charter.drafting[sec.key];
+              return (
+                <div key={sec.key} className="charter-sec">
+                  <div className="profile-sec" style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+                    {sec.label}
+                    <div className="spacer" />
+                    <button
+                      className="btn"
+                      disabled={drafting}
+                      title="Redigir/estruturar esta seção com o modelo, a partir do que você escreveu"
+                      onClick={() => post({ type: "charter/draft", section: sec.key, brief: charter.sections[sec.key] })}
+                    >
+                      <Icon name={drafting ? "refresh" : "sparkles"} size={12} className={drafting ? "spin" : ""} />{" "}
+                      {drafting ? "redigindo…" : "Redigir com IA"}
+                    </button>
+                  </div>
+                  <textarea
+                    className="charter-input"
+                    rows={sec.rows}
+                    placeholder={sec.ph}
+                    value={charter.sections[sec.key]}
+                    disabled={drafting}
+                    onChange={(e) => dispatch({ kind: "charter/edit", section: sec.key, text: e.target.value })}
+                  />
+                </div>
+              );
+            })}
+            <div className="actions" style={{ marginTop: 12, justifyContent: "flex-end", gap: 8 }}>
+              <button className="btn" title="Abrir o .forge/project.md cru no editor" onClick={() => post({ type: "profile/open" })}>
+                <Icon name="code" size={13} /> abrir .md
+              </button>
+              <button
+                className="btn p"
+                disabled={anyDrafting}
+                onClick={() => post({ type: "charter/save", sections: charter.sections })}
+              >
+                <Icon name="check" size={13} /> Salvar
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | null; onClose: () => void; onWizard: () => void }): JSX.Element {
   const s = profile?.stack;
   const stackRows: [string, string | undefined][] = [
     ["Linguagem", s?.language],
@@ -416,9 +514,12 @@ function ProfilePanel({ profile, onClose }: { profile: ProfileView | null; onClo
           ))}
         </div>
 
-        <div className="actions" style={{ marginTop: 12, marginBottom: 0, justifyContent: "flex-end" }}>
-          <button className="btn p" onClick={() => post({ type: "profile/open" })}>
-            <Icon name="code" size={13} /> Editar arquivo
+        <div className="actions" style={{ marginTop: 12, marginBottom: 0, justifyContent: "flex-end", gap: 8 }}>
+          <button className="btn" title="Abrir o .forge/project.md cru no editor" onClick={() => post({ type: "profile/open" })}>
+            <Icon name="code" size={13} /> abrir .md
+          </button>
+          <button className="btn p" title="Redigir propósito, regras e requisitos com o modelo" onClick={onWizard}>
+            <Icon name="sparkles" size={13} /> Editar com wizard
           </button>
         </div>
       </div>

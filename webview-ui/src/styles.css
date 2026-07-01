@@ -830,6 +830,40 @@ h6.md-h {
   font-size: 11px;
   cursor: pointer;
 }
+
+/* Charter Wizard */
+.charter-modal {
+  max-width: 640px;
+  width: 92%;
+}
+.charter-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 2px 0 10px;
+}
+.charter-sec {
+  margin-bottom: 10px;
+}
+.charter-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cfcfcf;
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 8px 9px;
+}
+.charter-input:focus {
+  outline: none;
+  border-color: #5a5a5a;
+}
+.charter-input:disabled {
+  opacity: 0.6;
+}
 .proj-select {
   font-size: 11px;
   font-family: var(--sans);
