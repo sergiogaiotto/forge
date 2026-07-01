@@ -424,7 +424,7 @@
         },
         "forge.observability.langfuse.sampleRate": {
           "type": "number",
-          "default": 1.0,
+          "default": 1,
           "markdownDescription": "Fração de gerações amostradas (0 a 1). 1.0 = todas."
         },
         "forge.observability.langfuse.capture": {
@@ -452,7 +452,9 @@
     "typecheck": "tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.webview.json --noEmit",
     "test": "tsx --test src/test/*.test.ts",
     "keygen": "node admin-cli/forge-admin.mjs keygen",
+    "keygen:build-exe": "node admin-cli/build-exe.mjs",
     "license:issue": "node admin-cli/forge-admin.mjs issue",
+    "license:revoke": "node admin-cli/forge-admin.mjs revoke",
     "package": "npm run build && vsce package --allow-missing-repository --skip-license --baseContentUrl https://git.interno.claro.com.br/data-platform/forge --baseImagesUrl https://git.interno.claro.com.br/data-platform/forge",
     "publish:vsce": "vsce publish",
     "publish:ovsx": "ovsx publish",
@@ -468,6 +470,7 @@
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.0",
     "ovsx": "^0.10.1",
+    "postject": "^1.0.0-alpha.6",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tsx": "^4.19.2",
