@@ -149,6 +149,13 @@ const MANIFEST: Record<ProjectLanguage, string> = {
   java: "pom.xml (ou build.gradle)",
   go: "go.mod",
 };
+// Comandos que o README DEVE documentar por linguagem — ambiente, dependências e execução.
+const SETUP_HINT: Record<ProjectLanguage, string> = {
+  python: "criar o ambiente virtual (`python -m venv .venv` e ativar), instalar dependências (`pip install -r requirements.txt`, ou `pip install -e .` se o projeto usa pyproject.toml instalável), rodar a aplicação e os testes (`pytest`)",
+  typescript: "instalar dependências (`npm install`), compilar e executar (`npm run build` / `npm start`) e rodar os testes",
+  java: "compilar/empacotar (`mvn package` ou `gradle build`), executar (`java -jar ...`) e rodar os testes",
+  go: "baixar dependências (`go mod download`), compilar/executar (`go run .` ou `go build`) e rodar os testes (`go test ./...`)",
+};
 // Mecanismo idiomático de abstração (portas/interfaces) por linguagem.
 const INTERFACE_MECH: Record<ProjectLanguage, string> = {
   python: "typing.Protocol ou abc.ABC",
@@ -192,7 +199,11 @@ arquitetura ${ARCH_LABEL[architecture]}. Siga à risca:
 5. Inclua o manifesto de dependências (${MANIFEST[language]}) e TESTES do NÚCLEO (domínio/casos de uso).
    Se o espaço apertar, PRIORIZE arquivos de produção completos e coerentes sobre cobertura ampla de
    testes — nunca entregue um arquivo pela metade.
-6. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_ELLIPSIS_RULE}`
+6. OBRIGATÓRIO: inclua um arquivo \`README.md\` COMPLETO (como um dos blocos forge-file), contendo:
+   (a) o PROPÓSITO da aplicação; (b) as FUNCIONALIDADES principais; (c) uma seção \`## Como rodar\` com
+   TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para ${SETUP_HINT[language]}.
+   Os comandos devem ser reais e consistentes com o manifesto e a estrutura que você gerou.
+7. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_ELLIPSIS_RULE}`
   );
 }
 
@@ -204,6 +215,7 @@ export function buildContinuationPrompt(filePath: string | undefined): string {
   return `Sua resposta anterior foi CORTADA no meio de ${alvo} — a cerca de fechamento não chegou.
 CONTINUE a geração EXATAMENTE do ponto onde parou, no MESMO arquivo. Regras estritas:
 - NÃO repita nada do que já escreveu; recomece exatamente no próximo caractere que faltou.
+- Responda APENAS com o conteúdo do arquivo. NADA de saudação, confirmação ("ok", "claro", "vou continuar", "will do") nem comentário sobre a tarefa (ex.: "adicionando nova linha"). O PRIMEIRO caractere da sua resposta já é a continuação do código.
 - NÃO reabra a cerca \`${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG}\` nem o cabeçalho \`path=\` — apenas siga o conteúdo.
 - Escreva o restante do arquivo até o fim e FECHE a cerca (\`${FORGE_FENCE}\`) corretamente.
 - ${NO_ELLIPSIS_RULE}`;
@@ -216,6 +228,7 @@ export function buildTailContinuation(): string {
   return `Sua resposta anterior foi CORTADA por limite de tokens ANTES de terminar. CONTINUE de onde parou:
 - Emita o RESTANTE do que faltava — os próximos arquivos como blocos \`${FORGE_FILE_BLOCK_LANG}\` completos
   (ou, se o último arquivo ficou aberto, feche-o primeiro).
+- Responda APENAS com código/blocos de arquivo. NADA de saudação, confirmação ("ok", "vou continuar", "will do") nem comentário sobre a tarefa. O PRIMEIRO caractere já é a continuação.
 - NÃO repita nada do que já escreveu; NÃO reabra um bloco já fechado.
 - ${NO_ELLIPSIS_RULE}`;
 }

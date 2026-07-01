@@ -47,6 +47,59 @@ export function checkCompleteness(text: string): CompletenessResult {
   return { complete: true };
 }
 
+// Fragmentos conversacionais que o modelo às vezes emite no INÍCIO de uma continuação, apesar de
+// instruído a só continuar o código (ex.: "Will do.", "Add newline after fence.", "Vou continuar.").
+// Se costurados crus, poluem o ARQUIVO. Padrões deliberadamente PROSA — o ramo continue/proceed exige
+// prefixo conversacional ("vou continuar", "I'll continue"), nunca a keyword crua (que é código).
+const CHAT_PREAMBLE: RegExp[] = [
+  /^(sure|ok|okay|okey|understood|got it|will do|no problem|of course)[.!…]*$/i,
+  /^(claro|certo|beleza|pronto|entendi|t[áa] bem|tudo bem|sem problema|combinado)[.!…]*$/i,
+  // prefixo conversacional OBRIGATÓRIO — evita casar a keyword de controle de fluxo crua (continue/proceed…)
+  /^(i'?ll |i will |let me |vou |deixa eu |irei |agora vou )(continu\w*|proceed\w*|prossegu\w*|resume|retomar|seguir)\b[^\n]*$/i,
+  // formas de prosa em pt que não são keyword de código
+  /^(continuando|prosseguindo|retomando|continua[çc][ãa]o)\b[^\n]*$/i,
+  /^here('?s| is)( the)? (rest|remainder|continuation|code)\b[^\n]*$/i,
+  /^(aqui (est[áa]|vai)|segue)( o| a)? ?(restante|resto|c[óo]digo|continua[çc][ãa]o)\b[^\n]*$/i,
+  /^(add(ing)?|inserting|adicion(ando|o)?|inserindo)\b[^\n]*\b(new ?line|newline|nova linha|quebra de linha|fence|cerca)\b[^\n]*$/i,
+  /^(closing|fechando|reopening|reabrindo)\b[^\n]*\b(fence|cerca|block|bloco)\b[^\n]*$/i,
+  /^continuation\s*:?\s*$/i,
+];
+
+// Guarda de segurança: uma linha que "parece código" NUNCA é tratada como preâmbulo, mesmo que
+// algum padrão a case. Bloqueia a corrupção silenciosa (ex.: apagar um `continue`/`break`/`proceed()`
+// que retoma dentro de um laço truncado). Prosa não tem pontuação de código nem keyword de fluxo.
+function looksLikeCode(t: string): boolean {
+  if (/[=;(){}\[\]<>]/.test(t)) return true; // atribuição, chamada, bloco, ponto-e-vírgula
+  if (/^(continue|break|pass|return|next|done|do|then|else|elif|fi|esac|end|yield|await|raise|throw|goto)\b/i.test(t)) return true;
+  return false;
+}
+
+// Remove um preâmbulo conversacional do INÍCIO de uma continuação. Só corta uma linha que casa
+// CHAT_PREAMBLE e NÃO parece código; linhas em branco contam apenas como "ponte" entre preâmbulos
+// (não são removidas por si sós — preserva linha em branco separadora legítima). Para na primeira
+// linha de código. Conservador e limitado às primeiras linhas (cap): nunca remove código.
+export function sanitizeContinuation(cont: string): string {
+  if (!cont) return cont;
+  const lines = cont.split("\n");
+  const cap = Math.min(lines.length, 8);
+  let cut = 0; // até onde já confirmamos remoção (exclusivo)
+  let j = 0;
+  while (j < cap) {
+    const t = lines[j].trim();
+    if (t === "") {
+      j++; // branco é ponte — só vira remoção se um preâmbulo o suceder
+      continue;
+    }
+    if (!looksLikeCode(t) && CHAT_PREAMBLE.some((re) => re.test(t))) {
+      j++;
+      cut = j; // confirma o corte até aqui (inclui brancos-ponte anteriores)
+      continue;
+    }
+    break; // primeira linha de código/prosa desconhecida → para
+  }
+  return cut === 0 ? cont : lines.slice(cut).join("\n");
+}
+
 // Costura a continuação ao texto acumulado removendo a SOBREPOSIÇÃO: a continuação quase sempre repete
 // um pedaço do fim do trecho anterior. Acha o maior sufixo de `prev` que também é prefixo de `cont`
 // (até 400 chars) e concatena sem duplicar. Sem overlap claro, concatena direto. O piso de 12 chars
@@ -99,7 +152,9 @@ export async function resilientGenerate(
     const res = await streamFn(convo);
     if (res.error !== undefined) return { full, completeness, attempts: attempt, truncated: false, error: res.error };
     const before = full.length;
-    full = attempt === 0 ? res.text : stitchContinuation(full, res.text);
+    // Continuações (attempt > 0) passam pelo higienizador: removem prosa conversacional que o modelo
+    // às vezes emite antes de retomar o código, evitando que ela seja costurada DENTRO do arquivo.
+    full = attempt === 0 ? res.text : stitchContinuation(full, sanitizeContinuation(res.text));
     completeness = checkCompleteness(full);
     const openFence = !completeness.complete && completeness.reason === "cerca-aberta";
     const incomplete = openFence || res.truncated === true; // provider cortou (mesmo entre blocos fechados)

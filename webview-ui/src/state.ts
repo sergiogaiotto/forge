@@ -93,6 +93,7 @@ export type Action =
   | { kind: "newConversation" }
   | { kind: "clearApproval" }
   | { kind: "clearProfile" }
+  | { kind: "run/dismiss"; id: string }
   | { kind: "clearToast" };
 
 let toastSeq = 0;
@@ -144,6 +145,9 @@ export function reducer(state: UIState, action: Action): UIState {
       return { ...state, approval: null };
     case "clearProfile":
       return { ...state, profile: null };
+    case "run/dismiss":
+      // Oculta um cartão de execução/teste solto da thread (remove pelo id estável do cartão).
+      return { ...state, runs: state.runs.filter((r) => r.id !== action.id) };
     case "newConversation":
       return { ...state, messages: [], runs: [], busy: false, reviewed: false, lastFileRun: null, lastTestRun: null };
     case "providerTestPending":
@@ -251,7 +255,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         skippedReason: msg.skippedReason,
         running: false,
       };
-      const last = data.label === "testes" ? { lastTestRun: data } : { lastFileRun: data };
+      // Só execução de ARQUIVO (label indefinido) alimenta lastFileRun (o chip "Executa" da DoD);
+      // "testes" vai para lastTestRun; "ambiente"/"célula [i]" e afins são neutros (não poluem a DoD).
+      const last = data.label === "testes" ? { lastTestRun: data } : data.label ? {} : { lastFileRun: data };
       // Se já existe um cartão ao vivo (criado pelo run/start), finaliza-o no lugar (preserva `where`).
       if (msg.runId && hasRunWithId(state, msg.runId)) {
         return { ...updateRunByRunId(state, msg.runId, (r) => ({ ...data, where: r.where })), ...last };

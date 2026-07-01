@@ -24,7 +24,7 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
-import { findVenvPython, resolveTestCommand } from "../util/pythonEnv";
+import { buildVenvSetupCommand, findVenvPython, resolveTestCommand } from "../util/pythonEnv";
 import { deriveBudget } from "./ContextBudget";
 import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
@@ -132,7 +132,7 @@ export class Controller {
       post: (msg) => this.post(msg),
       workspaceRoot: () => this.workspaceRoot(),
       runConfig: () => this.config.run(),
-      onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
+      onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, label: r.label, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
       openPreview: (relPath) => void this.previewService.openPreview(relPath),
     });
     context.subscriptions.push(this.runService);
@@ -395,6 +395,7 @@ export class Controller {
       { label: "Cientista de dados", role: "cientista-de-dados" },
       { label: "Engenheiro de dados", role: "engenheiro-de-dados" },
       { label: "Engenheiro de ML", role: "engenheiro-de-ml" },
+      { label: "Engenheiro de IA", role: "engenheiro-de-ia" },
       { label: "Engenheiro de software", role: "engenheiro-de-software" },
     ];
     const pick = await vscode.window.showQuickPick(items, {
@@ -579,6 +580,9 @@ export class Controller {
         break;
       case "tests/run":
         await this.runTests();
+        break;
+      case "env/prepare":
+        await this.prepareEnv();
         break;
       case "chat/abort":
         this.currentTask?.abort();
@@ -1310,6 +1314,12 @@ export class Controller {
       this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para rodar os testes." });
       return;
     }
+    // Serializa contra o RunService: rodar pytest enquanto "Preparar ambiente" cria/popula o mesmo venv
+    // daria ModuleNotFoundError intermitente (venv parcial). Compartilham o interpretador do .venv.
+    if (this.runService.isBusy()) {
+      this.post({ type: "notice", level: "info", message: "Há uma execução em andamento (ex.: preparar ambiente). Aguarde ou cancele." });
+      return;
+    }
     const runner = new Runner(ws);
     // Roda pytest pelo interpretador do venv do projeto (python -m pytest), não pelo PATH global —
     // elimina o "ModuleNotFoundError: No module named pytest" quando o venv não está ativado no shell.
@@ -1328,6 +1338,53 @@ export class Controller {
       skippedReason: result.skippedReason,
     });
     this.obs.record({ type: "run.result", filePath: "", label: "testes", ok: result.ok, exitCode: result.exitCode, durationMs: result.durationMs });
+  }
+
+  // "Preparar ambiente": cria o venv do projeto e instala as dependências (requirements.txt/pyproject).
+  // Ataca a raiz do "No module named pytest" — o ambiente não estava preparado. Streaming pelo spawn
+  // (cmd.exe/sh), então o encadeamento `&&` funciona mesmo com o terminal em PowerShell.
+  async prepareEnv(): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para preparar o ambiente." });
+      return;
+    }
+    const hasReq = existsSync(path.join(ws, "requirements.txt"));
+    const hasPyproject = existsSync(path.join(ws, "pyproject.toml"));
+    if (!hasReq && !hasPyproject) {
+      this.post({
+        type: "notice",
+        level: "warn",
+        message: "Preparar ambiente: nenhum requirements.txt ou pyproject.toml na raiz (suporte a projetos Python por ora).",
+      });
+      return;
+    }
+    // requirements.txt tem prioridade. Só usa `pip install -e .` se o pyproject for INSTALÁVEL
+    // ([build-system] ou [project]); um pyproject só-de-ferramentas (ruff/pytest/black) quebraria o
+    // `-e .` — nesse caso apenas cria o venv (não falha no cenário que deveria resolver).
+    let install: "requirements" | "editable" | "none";
+    if (hasReq) {
+      install = "requirements";
+    } else {
+      let pyproject = "";
+      try {
+        pyproject = await fs.readFile(path.join(ws, "pyproject.toml"), "utf8");
+      } catch {
+        /* ilegível → trata como não-instalável */
+      }
+      install = /^\s*\[(build-system|project)\]/m.test(pyproject) ? "editable" : "none";
+      if (install === "none") {
+        this.post({
+          type: "notice",
+          level: "info",
+          message: "pyproject.toml sem [project]/[build-system]: crio o venv e atualizo o pip (adicione requirements.txt ou torne o pacote instalável para instalar dependências).",
+        });
+      }
+    }
+    const isWin = process.platform === "win32";
+    const venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+    const command = buildVenvSetupCommand({ isWindows: isWin, venvPython, install });
+    await this.runService.runCommand("ambiente", command);
   }
 
   // ---- revisão de código (in-network) ----------------------------------------

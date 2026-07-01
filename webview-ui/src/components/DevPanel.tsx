@@ -124,7 +124,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             m.role === "user" ? <UserBubble key={m.id} m={m} /> : <AssistantBlock key={m.id} m={m} dispatch={dispatch} />
           )}
           {state.runs.map((r) => (
-            <RunCard key={r.id} run={r} dispatch={dispatch} />
+            <RunCard key={r.id} run={r} dispatch={dispatch} onDismiss={() => dispatch({ kind: "run/dismiss", id: r.id })} />
           ))}
         </div>
 
@@ -254,6 +254,13 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             )}
             <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>
               <Icon name="terminal" size={14} color="#86c98e" /> Testes
+            </span>
+            <span
+              className="pill"
+              title="Preparar ambiente: cria o venv e instala as dependências (requirements.txt/pyproject)"
+              onClick={() => post({ type: "env/prepare" })}
+            >
+              <Icon name="plug" size={14} color="#c9a26d" /> Ambiente
             </span>
             <span
               className="pill"
@@ -693,7 +700,15 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
   );
 }
 
-function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispatch<Action> }): JSX.Element {
+function RunCard({
+  run,
+  dispatch,
+  onDismiss,
+}: {
+  run: RunResultData;
+  dispatch: React.Dispatch<Action>;
+  onDismiss?: () => void; // presente só nos cartões soltos da thread (permite "Ocultar")
+}): JSX.Element {
   const running = !!run.running;
   const [open, setOpen] = useState(running || !run.ok);
   const [elapsed, setElapsed] = useState(0);
@@ -777,17 +792,25 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           )}
         </div>
       ) : (
-        canFix && (
+        (canFix || onDismiss) && (
           <div className="actions" style={{ marginTop: 7 }}>
-            <button
-              className="btn p"
-              onClick={() => {
-                dispatch({ kind: "pushUser", text: fixText });
-                post({ type: "chat/send", text: fixText });
-              }}
-            >
-              <Icon name="refresh" size={12} /> Corrigir com FORGE
-            </button>
+            {canFix && (
+              <button
+                className="btn p"
+                onClick={() => {
+                  dispatch({ kind: "pushUser", text: fixText });
+                  post({ type: "chat/send", text: fixText });
+                }}
+              >
+                <Icon name="refresh" size={12} /> Corrigir com FORGE
+              </button>
+            )}
+            <div className="spacer" />
+            {onDismiss && (
+              <button className="btn" title="Ocultar este cartão da conversa" onClick={onDismiss}>
+                <Icon name="x" size={12} /> Ocultar
+              </button>
+            )}
           </div>
         )
       )}

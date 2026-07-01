@@ -817,6 +817,7 @@ h6.md-h {
 }
 .composer-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 11px;
   margin-top: 9px;

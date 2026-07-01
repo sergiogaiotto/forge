@@ -61,6 +61,20 @@ test("buildProjectPrompt (Python/hexagonal): linguagem, camadas, protocolo forge
   assert.match(p, /PROIBIDO|reticências/i); // NO_ELLIPSIS_RULE
 });
 
+test("buildProjectPrompt EXIGE README.md com propósito, funcionalidades e comandos de execução", () => {
+  const p = buildProjectPrompt("proj", "python", "hexagonal");
+  assert.match(p, /README\.md/);
+  assert.match(p, /PROP[ÓO]SITO/i);
+  assert.match(p, /FUNCIONALIDADES/i);
+  assert.match(p, /Como rodar/i);
+  assert.match(p, /venv/i); // comandos de ambiente para Python
+  assert.match(p, /pytest/); // rodar os testes
+  // por linguagem: TypeScript documenta npm em vez de venv
+  const ts = buildProjectPrompt("p", "typescript", "mvc");
+  assert.match(ts, /README\.md/);
+  assert.match(ts, /npm (install|run)/);
+});
+
 test("buildTailContinuation: manda emitir o restante dos arquivos, sem repetir nem reabrir bloco", () => {
   const p = buildTailContinuation();
   assert.match(p, /CONTINUE/);

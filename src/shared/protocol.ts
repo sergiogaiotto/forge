@@ -226,6 +226,7 @@ export type WebviewToExt =
   | { type: "chat/send"; text: string; tdd?: boolean }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
   | { type: "tests/run" }
+  | { type: "env/prepare" }
   | { type: "chat/abort"; taskId: string }
   | { type: "proposal/apply"; proposalId: string }
   | { type: "proposal/discard"; proposalId: string }
