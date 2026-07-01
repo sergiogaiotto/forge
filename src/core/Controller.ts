@@ -30,10 +30,14 @@ import { deriveBudget } from "./ContextBudget";
 import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
+  BlueprintFile,
+  BlueprintFileView,
   CharterKey,
   CHARTER_KEYS,
   CharterSections,
   DEFAULT_REASONING_EFFORT,
+  ProjectBlueprintView,
+  ProjectFileStatus,
   effectiveTimeoutSeconds,
   ExtToWebview,
   ForgeState,
@@ -50,7 +54,9 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildCharterSystemPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { parseBlueprint, topoSort } from "../util/blueprint";
+import { safeWorkspacePath } from "../util/safePath";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
@@ -94,6 +100,8 @@ export class Controller {
   private readonly sessionId = crypto.randomUUID(); // id de sessão p/ correlação no Langfuse
   private skills: SkillMeta[] = [];
   private sessionToken: SessionToken | undefined;
+  // Fase F: sessão do Modo Projeto — o blueprint aprovado e o status por arquivo (orquestração).
+  private projectSession: { language: ProjectLanguage; architecture: ProjectArchitecture; brief: string; files: BlueprintFileView[] } | null = null;
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
   private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
@@ -553,6 +561,131 @@ export class Controller {
     await this.startTask(buildAcceptanceTestsRequest(fr, nfr), "tdd");
   }
 
+  // ---- Modo Projeto · Fase F (blueprint aprovável → orquestração → aplicar tudo) --------
+
+  // Passo 1: gera o BLUEPRINT (plano de arquivos) sem código, para o dev aprovar. One-shot.
+  async generateBlueprint(text: string, language: ProjectLanguage, architecture: ProjectArchitecture): Promise<void> {
+    if (!text.trim()) return;
+    if (!(await this.ensureSession())) {
+      this.post({ type: "project/blueprintError", message: "Licença requerida para planejar o projeto." });
+      return;
+    }
+    if (this.resolveIdentity().emailRequired) {
+      this.post({ type: "project/blueprintError", message: "Informe seu e-mail na configuração inicial antes de planejar." });
+      await this.postState();
+      return;
+    }
+    const runtime = await this.runtimeProviderConfig();
+    if (!runtime) {
+      this.post({ type: "project/blueprintError", message: "Configure um provedor antes de planejar." });
+      return;
+    }
+    try {
+      this.egress.assertAllowed(runtime.baseUrl ?? (runtime.type === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com"));
+    } catch (e) {
+      this.post({ type: "project/blueprintError", message: (e as Error)?.message ?? String(e) });
+      return;
+    }
+    let out = "";
+    try {
+      const provider = createProvider(runtime, this.egress);
+      const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "project");
+      for await (const chunk of provider.createMessage(buildBlueprintSystemPrompt(language, architecture), [{ role: "user", content: text.slice(0, 6000) }], {
+        timeoutMs: runtime.timeoutSeconds * 1000,
+        extraHeaders: headers,
+      })) {
+        if (chunk.kind === "text") out += chunk.text;
+        else if (chunk.kind === "error") {
+          this.post({ type: "project/blueprintError", message: chunk.message });
+          return;
+        }
+      }
+    } catch (e) {
+      this.post({ type: "project/blueprintError", message: (e as Error)?.message ?? String(e) });
+      return;
+    }
+    const files = topoSort(parseBlueprint(out));
+    if (files.length === 0) {
+      this.post({ type: "project/blueprintError", message: "Não consegui montar o plano (resposta sem blueprint válido). Ajuste a descrição e tente de novo." });
+      return;
+    }
+    this.projectSession = { language, architecture, brief: text, files: files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
+    this.post({ type: "project/blueprint", blueprint: { language, architecture, brief: text, files: this.projectSession.files } });
+  }
+
+  // Passo 2: gera o projeto GUIADO pelo blueprint aprovado (Task reusa continuação/proposta/validação).
+  async generateFromBlueprint(): Promise<void> {
+    const s = this.projectSession;
+    if (!s) {
+      this.post({ type: "notice", level: "warn", message: "Nenhum blueprint aprovado. Planeje o projeto primeiro." });
+      return;
+    }
+    // Pré-checagens (as mesmas do startTask) ANTES de marcar "gerando" — senão uma falha precoce (licença/
+    // e-mail/provedor) deixaria o modal preso em "gerando…" (o project/done só é postado após o run).
+    if (!(await this.ensureSession())) {
+      this.post({ type: "project/blueprintError", message: "Licença requerida para gerar o projeto." });
+      return;
+    }
+    if (this.resolveIdentity().emailRequired) {
+      this.post({ type: "project/blueprintError", message: "Informe seu e-mail na configuração inicial antes de gerar." });
+      await this.postState();
+      return;
+    }
+    if (!(await this.runtimeProviderConfig())) {
+      this.post({ type: "project/blueprintError", message: "Nenhum provedor configurado." });
+      return;
+    }
+    for (const f of s.files) if (f.status !== "applied") f.status = "generating";
+    this.post({ type: "project/status", files: s.files });
+    await this.startTask(s.brief, "project", {
+      language: s.language,
+      architecture: s.architecture,
+      files: s.files.map((f) => ({ path: f.path, purpose: f.purpose, deps: f.deps })),
+    });
+  }
+
+  cancelProject(): void {
+    this.currentTask?.abort(); // aborta a geração em andamento, se houver
+    this.projectSession = null;
+    this.post({ type: "project/done" });
+  }
+
+  // Passo 3: aplica TODAS as propostas, na ordem topológica do blueprint quando houver. NÃO aplica em
+  // lote os arquivos PARCIAIS (truncados) — gravá-los silenciosamente seria perigoso; o dev aplica pelo
+  // cartão individual (que avisa). Ao final, resumo honesto (aplicados/bloqueados/parciais pulados).
+  async applyAllProposals(): Promise<void> {
+    if (!this.currentTask) return;
+    const norm = (p: string) => p.replace(/^[./\\]+/, ""); // casa './x' com 'x' do blueprint
+    const order = this.projectSession ? this.projectSession.files.map((f) => norm(f.path)) : [];
+    const rank = (fp: string) => {
+      const i = order.indexOf(norm(fp));
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    const all = [...this.currentTask.proposals.values()].map((p) => p.proposal).filter((p) => !p.cell);
+    const partial = all.filter((p) => p.partial);
+    const toApply = all.filter((p) => !p.partial);
+    const sorted = order.length ? toApply.slice().sort((a, b) => rank(a.filePath) - rank(b.filePath)) : toApply;
+    let applied = 0;
+    let blocked = 0;
+    for (const p of sorted) {
+      const ok = await this.applyProposal(p.id);
+      if (ok) {
+        applied++;
+        if (this.projectSession) {
+          const f = this.projectSession.files.find((x) => norm(x.path) === norm(p.filePath));
+          if (f) f.status = "applied";
+        }
+      } else {
+        blocked++;
+      }
+    }
+    if (this.projectSession) this.post({ type: "project/status", files: this.projectSession.files });
+    const parts = [`${applied} aplicado(s)`];
+    if (blocked) parts.push(`${blocked} bloqueado(s) pelo quality gate`);
+    if (partial.length) parts.push(`${partial.length} parcial(is) pulado(s) — revise e aplique pelo cartão`);
+    this.post({ type: "notice", level: partial.length || blocked ? "warn" : "info", message: `Aplicar tudo: ${parts.join(" · ")}.` });
+  }
+
   // ---- Visualizador read-only de Skills e RAG (o dev inspeciona o que é injetado) ------
 
   // Abre o inspetor: envia a lista de skills e o resumo do índice RAG (dados já em memória).
@@ -782,6 +915,18 @@ export class Controller {
         break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture });
+        break;
+      case "project/blueprint":
+        await this.generateBlueprint(msg.text, msg.language, msg.architecture);
+        break;
+      case "project/generate":
+        await this.generateFromBlueprint();
+        break;
+      case "project/cancel":
+        this.cancelProject();
+        break;
+      case "proposal/applyAll":
+        await this.applyAllProposals();
         break;
       case "tests/run":
         await this.runTests();
@@ -1079,7 +1224,7 @@ export class Controller {
   async startTask(
     text: string,
     mode: "normal" | "tdd" | "project" = "normal",
-    project?: { language: ProjectLanguage; architecture: ProjectArchitecture }
+    project?: { language: ProjectLanguage; architecture: ProjectArchitecture; files?: BlueprintFile[] }
   ): Promise<void> {
     if (!text.trim()) return;
     // RF-010/015: condiciona a inferência a uma sessão válida.
@@ -1119,7 +1264,9 @@ export class Controller {
     }
     const basePrompt =
       mode === "project" && project
-        ? buildProjectPrompt(this.workspaceName(), project.language, project.architecture)
+        ? project.files && project.files.length > 0
+          ? buildProjectFromBlueprintPrompt(this.workspaceName(), project.language, project.architecture, project.files) // Fase F: plano aprovado
+          : buildProjectPrompt(this.workspaceName(), project.language, project.architecture)
         : mode === "tdd"
         ? buildTddPrompt(this.workspaceName())
         : buildBasePrompt(this.workspaceName());
@@ -1187,6 +1334,31 @@ export class Controller {
     // Registra o turno do usuário; o turno do assistente é anexado após a conclusão.
     this.history.push({ role: "user", content: text });
     await task.run();
+    // Fase F: reconcilia o status do FileTree — arquivo do blueprint que virou proposta = "complete";
+    // o que o modelo NÃO gerou = "failed" (não "pending", que se confundiria com o estado inicial).
+    if (mode === "project" && project?.files && project.files.length > 0 && this.projectSession) {
+      const norm = (p: string) => p.replace(/^[./\\]+/, ""); // casa './x' da proposta com 'x' do blueprint
+      const proposed = new Set([...task.proposals.values()].map((p) => norm(p.proposal.filePath)));
+      let done = 0;
+      for (const f of this.projectSession.files) {
+        if (f.status === "applied") {
+          done++;
+          continue;
+        }
+        if (proposed.has(norm(f.path))) {
+          f.status = "complete";
+          done++;
+        } else {
+          f.status = "failed";
+        }
+      }
+      this.post({ type: "project/status", files: this.projectSession.files });
+      this.post({ type: "project/done" });
+      const total = this.projectSession.files.length;
+      if (done < total) {
+        this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
+      }
+    }
     // Mantém o histórico limitado.
     if (this.history.length > 20) this.history = this.history.slice(-20);
   }
@@ -1383,7 +1555,12 @@ export class Controller {
       return ok;
     }
 
-    const abs = path.join(ws, entry.proposal.filePath);
+    // Contenção: o filePath vem do modelo — recusa escrever FORA do workspace (`../`, absoluto, outra unidade).
+    const abs = safeWorkspacePath(ws, entry.proposal.filePath);
+    if (!abs) {
+      this.post({ type: "notice", level: "error", message: `Caminho fora do workspace recusado: ${entry.proposal.filePath}` });
+      return false;
+    }
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, entry.proposal.modified, "utf8");
     this.history.push({ role: "assistant", content: `Apliquei a alteração em ${entry.proposal.filePath}.` });
@@ -1401,7 +1578,11 @@ export class Controller {
     entry: { proposal: import("../shared/protocol").DiffProposal; cellIndex?: number }
   ): Promise<boolean> {
     const ws = this.workspaceRoot();
-    const abs = path.join(ws!, entry.proposal.filePath);
+    const abs = ws ? safeWorkspacePath(ws, entry.proposal.filePath) : null;
+    if (!abs) {
+      this.post({ type: "notice", level: "error", message: `Caminho fora do workspace recusado: ${entry.proposal.filePath}` });
+      return false;
+    }
     const uri = vscode.Uri.file(abs);
     let nb: vscode.NotebookDocument;
     try {

@@ -991,6 +991,70 @@ h6.md-h {
   overflow-wrap: anywhere;
 }
 
+/* Fase F: painel do blueprint (FileTree) */
+.plan-modal {
+  max-width: 680px;
+  width: 94%;
+}
+.plan-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.plan-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 2px 0 10px;
+}
+.plan-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 4px;
+}
+.plan-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border-radius: 5px;
+}
+.plan-item:hover {
+  background: #232323;
+}
+.plan-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.plan-file {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.plan-file .mono {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #e0e0e0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-file .purpose {
+  font-size: 11px;
+  color: #8f8f8f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-st {
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
 /* Selo de completude na proposta */
 .seal {
   font-size: 10px;

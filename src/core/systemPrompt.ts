@@ -1,6 +1,6 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-import { CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
+import { BlueprintFile, CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -175,6 +175,49 @@ function archetypeLayers(architecture: ProjectArchitecture): string {
     case "mvc":
       return "Model (dados e regras) · View (apresentação: web, CLI ou API, conforme o projeto) · Controller (recebe a entrada, chama o model, devolve a resposta). Controller fino, model rico.";
   }
+}
+
+// Fase F — BLUEPRINT: pede ao modelo o PLANO de arquivos (aprovável) ANTES do código. Saída = SÓ um
+// array JSON [{path, purpose, deps}] em ordem de dependência (parseado por parseBlueprint). Sem código.
+export function buildBlueprintSystemPrompt(language: ProjectLanguage, architecture: ProjectArchitecture): string {
+  return [
+    `Você é o FORGE. Planeje um PROJETO completo em ${LANG_LABEL[language]}, na arquitetura ${ARCH_LABEL[architecture]}.`,
+    archetypeLayers(architecture),
+    "NÃO gere código agora — só o PLANO de arquivos.",
+    "Responda APENAS com um ARRAY JSON dos arquivos, em ORDEM DE DEPENDÊNCIA (interfaces/portas primeiro,",
+    "depois domínio, adaptadores, wiring e por fim os testes), no formato exato:",
+    '[{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase","deps":["outro/arquivo.ext"]}]',
+    `Inclua o manifesto de dependências (${MANIFEST[language]}), os testes do núcleo e um README.md.`,
+    "Nada de prosa, comentários ou cercas fora do array JSON.",
+  ].join("\n");
+}
+
+// Fase F — GERAÇÃO GUIADA: gera EXATAMENTE os arquivos do blueprint aprovado, na ordem, cada um como um
+// bloco forge-file completo. Herda o prompt base; reusa a continuação resiliente (Task).
+export function buildProjectFromBlueprintPrompt(
+  workspaceName: string,
+  language: ProjectLanguage,
+  architecture: ProjectArchitecture,
+  files: BlueprintFile[]
+): string {
+  const list = files.map((f) => `- ${f.path} — ${f.purpose}${f.deps.length ? ` (usa: ${f.deps.join(", ")})` : ""}`).join("\n");
+  return (
+    buildBasePrompt(workspaceName) +
+    `
+
+MODO PROJETO (plano APROVADO pelo dev): gere EXATAMENTE os arquivos abaixo em ${LANG_LABEL[language]}, na
+arquitetura ${ARCH_LABEL[architecture]}, NA ORDEM, cada um como um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO com o
+\`path=\` correto. NÃO invente arquivos fora da lista nem omita nenhum:
+
+${list}
+
+${archetypeLayers(architecture)}
+COERÊNCIA entre arquivos: reuse os mesmos nomes/assinaturas (o adaptador implementa a MESMA interface —
+${INTERFACE_MECH[language]} — que o domínio declara; imports e assinaturas casam). Inclua o manifesto
+(${MANIFEST[language]}). O README.md deve ser COMPLETO: propósito, funcionalidades e uma seção
+\`## Como rodar\` com TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para
+${SETUP_HINT[language]}. ${NO_ELLIPSIS_RULE}`
+  );
 }
 
 // Modo Projeto: gera um PROJETO COMPLETO na linguagem + arquitetura escolhidas, reusando o protocolo
