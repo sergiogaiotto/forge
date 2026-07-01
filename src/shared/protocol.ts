@@ -275,7 +275,8 @@ export type ExtToWebview =
   | { type: "profile/state"; profile: ProfileView }
   | { type: "charter/state"; sections: CharterSections }
   | { type: "charter/drafting"; section: CharterKey }
-  | { type: "charter/drafted"; section: CharterKey; text: string }
+  // warning: aviso não-fatal ancorado NA SEÇÃO dentro do modal (um toast ficaria atrás do backdrop).
+  | { type: "charter/drafted"; section: CharterKey; text: string; warning?: string }
   | { type: "charter/error"; section: CharterKey; message: string }
   | { type: "skills/inspect"; skills: SkillInspectView[] }
   | { type: "skills/body"; name: string; body: string }
@@ -284,7 +285,8 @@ export type ExtToWebview =
   // Etapa do PLANEJAMENTO (antes do blueprint chegar): narra o progresso ("analisando requisitos" →
   // "montando a árvore" → "ordenando por dependência") em vez de um spinner estático.
   | { type: "project/planStep"; label: string }
-  | { type: "project/blueprint"; blueprint: ProjectBlueprintView }
+  // warning: aviso não-fatal exibido DENTRO do modal do plano (ex.: plano parcial após truncamento).
+  | { type: "project/blueprint"; blueprint: ProjectBlueprintView; warning?: string }
   | { type: "project/blueprintError"; message: string }
   | { type: "project/status"; files: BlueprintFileView[] }
   // Atualização PONTUAL do status de UM arquivo (progresso um-a-um durante a geração) — evita reenviar

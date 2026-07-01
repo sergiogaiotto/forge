@@ -14,13 +14,13 @@ import { isSafeRelPath } from "./safePath";
 // virar O(n²) que congele o host quando o raciocínio vazado é grande e cheio de '['.
 const BP_MAX_INPUT = 1_000_000; // saída de blueprint plausível cabe folgada; além disso é ruído
 const BP_WORK_BUDGET = 3_000_000; // teto de char-visitas na varredura balanceada (poucos ms)
+const pathCount = (arr: unknown[]): number =>
+  arr.filter((e) => e && typeof e === "object" && typeof (e as Record<string, unknown>).path === "string").length;
 function extractBlueprintArray(raw: string): unknown[] | null {
   const text = raw.length > BP_MAX_INPUT ? raw.slice(0, BP_MAX_INPUT) : raw;
   let budget = BP_WORK_BUDGET;
   let best: unknown[] | null = null;
   let bestScore = 0;
-  const pathCount = (arr: unknown[]): number =>
-    arr.filter((e) => e && typeof e === "object" && typeof (e as Record<string, unknown>).path === "string").length;
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "[") continue;
     let depth = 0;
@@ -60,9 +60,73 @@ function extractBlueprintArray(raw: string): unknown[] | null {
   return best;
 }
 
-export function parseBlueprint(text: string): BlueprintFile[] {
+// Reparo de TRUNCAMENTO (finish_reason=length): quando o raciocínio do gpt-oss consome o max_tokens,
+// a resposta acaba NO MEIO do array (objeto/string cortados) e a extração balanceada falha — mas os
+// objetos JÁ COMPLETOS são recuperáveis. Para cada '[' candidato que nunca fecha até o fim do texto,
+// corta no último '}' que fecha um elemento DIRETO do array (nível 1) e fecha o colchete.
+// Duas salvaguardas contra plano FALSO (confirmadas em revisão adversarial):
+// 1) Só roda quando o chamador CONFIRMOU truncamento (finish_reason=length) E a extração normal falhou
+//    — um eco de schema não fechado no raciocínio vazado, sem truncamento, deve continuar dando erro.
+// 2) Entre candidatos reparáveis vence o MAIS TARDIO, não o de maior score: o corte por limite de
+//    tokens é sempre no FIM do texto, logo o array da resposta final é o último '[' não fechado; um
+//    rascunho vazado ANTERIOR (raciocínio) não pode vencer por ter mais objetos.
+// Mesmo orçamento de trabalho da extração — nunca O(n²) que congele o host.
+function salvageTruncatedArray(raw: string): unknown[] | null {
+  const text = raw.length > BP_MAX_INPUT ? raw.slice(0, BP_MAX_INPUT) : raw;
+  let budget = BP_WORK_BUDGET;
+  let best: unknown[] | null = null;
+  for (let i = 0; i < text.length && budget > 0; i++) {
+    if (text[i] !== "[") continue;
+    let depth = 0; // profundidade combinada de [ e { a partir deste candidato (1 = dentro do array)
+    let inStr = false;
+    let esc = false;
+    let lastComplete = -1; // índice do '}' que devolve a profundidade a 1 = fechou um elemento do array
+    let closed = false;
+    for (let j = i; j < text.length; j++) {
+      if (--budget <= 0) break;
+      const c = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "[" || c === "{") depth++;
+      else if (c === "]" || c === "}") {
+        depth--;
+        if (c === "}" && depth === 1) lastComplete = j;
+        if (depth <= 0) {
+          closed = true; // este candidato fecha sozinho — a extração normal já o considerou
+          break;
+        }
+      }
+    }
+    if (closed || lastComplete < 0) continue;
+    try {
+      const arr = JSON.parse(text.slice(i, lastComplete + 1) + "]");
+      // Candidato mais TARDIO vence (i crescente → a última atribuição fica): ver salvaguarda 2 acima.
+      if (Array.isArray(arr) && pathCount(arr) > 0) best = arr;
+    } catch {
+      /* irreparável a partir deste '[' → tenta o próximo candidato */
+    }
+  }
+  return best;
+}
+
+export interface ParseBlueprintOptions {
+  // Habilita o reparo de array truncado. Passe true APENAS quando o stream terminou com
+  // finish_reason=length — sem essa confirmação, o reparo poderia fabricar um plano a partir de um
+  // eco de schema/rascunho não fechado no raciocínio vazado (resposta final sem array nenhum).
+  salvageTruncated?: boolean;
+}
+
+export function parseBlueprint(text: string, opts?: ParseBlueprintOptions): BlueprintFile[] {
   // Remove o canal de análise/tokens harmony (vazamento do gpt-oss) e extrai o array top-level válido.
-  const arr = extractBlueprintArray(stripHarmony(text)) ?? extractBlueprintArray(text);
+  // Último recurso — e só com truncamento confirmado: repara o array cortado pelo limite de tokens.
+  const stripped = stripHarmony(text);
+  let arr = extractBlueprintArray(stripped) ?? extractBlueprintArray(text);
+  if (!arr && opts?.salvageTruncated) arr = salvageTruncatedArray(stripped) ?? salvageTruncatedArray(text);
   if (!arr) return [];
   const seen = new Set<string>();
   const out: BlueprintFile[] = [];

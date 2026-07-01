@@ -53,13 +53,63 @@ test("inspect: skills/inspect + skills/body + rag/inspect + rag/file preenchem o
   assert.deepEqual(s.inspect?.ragFile, {}, "rag/inspect zera o cache de chunks");
 });
 
-test("charter/error mostra toast e limpa o drafting da seção", () => {
+test("charter/error ancora o erro NA SEÇÃO (in-modal) e limpa o drafting; toast só sem wizard", () => {
   let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: EMPTY_CHARTER } });
   s = reducer(s, { kind: "ext", msg: { type: "charter/drafting", section: "nfr" } });
   s = reducer(s, { kind: "ext", msg: { type: "charter/error", section: "nfr", message: "sem licença" } });
   assert.equal(s.charter?.drafting.nfr, false);
-  assert.equal(s.toast?.level, "error");
-  assert.match(s.toast?.message ?? "", /sem licença/);
+  // O erro fica DENTRO do modal, na seção (um toast renderizaria atrás do backdrop e sumiria em 5s).
+  assert.equal(s.charter?.notes.nfr?.level, "error");
+  assert.match(s.charter?.notes.nfr?.message ?? "", /sem licença/);
+  assert.equal(s.toast, null);
+  // Sem wizard aberto (charter null), cai no fallback de toast para o erro não se perder.
+  const noWizard = reducer(initialState, { kind: "ext", msg: { type: "charter/error", section: "nfr", message: "sem licença" } });
+  assert.equal(noWizard.toast?.level, "error");
+});
+
+test("charter/drafted com warning anota a seção; redigir de novo ou editar dá baixa na nota", () => {
+  let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: EMPTY_CHARTER } });
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafted", section: "fr", text: "- RF-01: parcial", warning: "truncou no limite de tokens" } });
+  assert.equal(s.charter?.sections.fr, "- RF-01: parcial");
+  assert.equal(s.charter?.notes.fr?.level, "warn");
+  // Editar a seção (dev viu e está corrigindo) limpa a nota…
+  s = reducer(s, { kind: "charter/edit", section: "fr", text: "- RF-01: corrigido" });
+  assert.equal(s.charter?.notes.fr, undefined);
+  // …e um novo rascunho SEM warning também não deixa nota para trás.
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafting", section: "fr" } });
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafted", section: "fr", text: "- RF-01: completo" } });
+  assert.equal(s.charter?.notes.fr, undefined);
+});
+
+// REGRESSÃO (verificação adversarial): charter/drafted com texto VAZIO nunca pode sobrescrever o
+// rascunho digitado (defesa em profundidade — o Controller já converte vazio em charter/error, mas
+// se esse guard regredir, o reducer é a última linha antes da perda irreversível do textarea).
+test("charter/drafted VAZIO preserva o rascunho do dev e anota erro na seção", () => {
+  let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: EMPTY_CHARTER } });
+  s = reducer(s, { kind: "charter/edit", section: "fr", text: "- RF-01: rascunho digitado pelo dev" });
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafting", section: "fr" } });
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafted", section: "fr", text: "" } });
+  assert.equal(s.charter?.sections.fr, "- RF-01: rascunho digitado pelo dev"); // NÃO apagou
+  assert.equal(s.charter?.drafting.fr, false); // spinner desligado
+  assert.equal(s.charter?.notes.fr?.level, "error"); // dev sabe por que nada mudou
+  // Só-espaços conta como vazio também.
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafted", section: "fr", text: "   \n  " } });
+  assert.equal(s.charter?.sections.fr, "- RF-01: rascunho digitado pelo dev");
+});
+
+test("project/blueprint com warning exibe o aviso in-modal; aprovar (generating) dá baixa", () => {
+  let s = reducer(initialState, { kind: "project/planning", brief: { text: "app", language: "python", architecture: "hexagonal" } });
+  s = reducer(s, {
+    kind: "ext",
+    msg: {
+      type: "project/blueprint",
+      blueprint: { language: "python", architecture: "hexagonal", brief: "app", files: [{ path: "a.py", purpose: "", deps: [], status: "pending" }] },
+      warning: "plano parcial — revise",
+    },
+  });
+  assert.match(s.project?.warning ?? "", /plano parcial/);
+  s = reducer(s, { kind: "project/generating" });
+  assert.equal(s.project?.warning, undefined);
 });
 
 // Aplica uma sequência de mensagens do host (ExtToWebview) ao reducer da webview.
