@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildBasePrompt, buildContinuationPrompt, buildProjectPrompt, buildReviewPrompt, buildTailContinuation, buildTddPrompt } from "../core/systemPrompt";
+import { buildBasePrompt, buildCharterSystemPrompt, buildContinuationPrompt, buildProjectPrompt, buildReviewPrompt, buildTailContinuation, buildTddPrompt } from "../core/systemPrompt";
 
 test("prompt TDD inclui o prompt base e instruções de test-first", () => {
   const p = buildTddPrompt("meu-projeto");
@@ -73,6 +73,22 @@ test("buildProjectPrompt EXIGE README.md com propósito, funcionalidades e coman
   const ts = buildProjectPrompt("p", "typescript", "mvc");
   assert.match(ts, /README\.md/);
   assert.match(ts, /npm (install|run)/);
+});
+
+test("buildCharterSystemPrompt: cada seção pede o conteúdo certo, em pt-BR e SÓ o markdown", () => {
+  const purpose = buildCharterSystemPrompt("purpose");
+  assert.match(purpose, /PROP[ÓO]SITO/i);
+  assert.match(purpose, /pt-BR/);
+  assert.match(purpose, /APENAS|NADA de título/i); // regra de saída limpa
+  const fr = buildCharterSystemPrompt("fr");
+  assert.match(fr, /REQUISITOS FUNCIONAIS/i);
+  assert.match(fr, /RF-01|bullets/i);
+  const nfr = buildCharterSystemPrompt("nfr");
+  assert.match(nfr, /N[ÃA]O FUNCIONAIS/i);
+  assert.match(nfr, /LGPD|seguran/i);
+  const rules = buildCharterSystemPrompt("rules");
+  assert.match(rules, /REGRAS/i);
+  assert.match(rules, /sempre|nunca|prefira/i);
 });
 
 test("buildTailContinuation: manda emitir o restante dos arquivos, sem repetir nem reabrir bloco", () => {

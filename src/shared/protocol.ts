@@ -10,6 +10,12 @@ export function isRenderablePath(filePath: string): boolean {
   return /\.(html?|svg)$/i.test(filePath);
 }
 
+// Charter do projeto (Charter Wizard): seções editáveis do .forge/project.md, redigidas com auxílio
+// do modelo. As chaves são estáveis (o webview e o Controller compartilham este contrato).
+export type CharterKey = "purpose" | "rules" | "fr" | "nfr";
+export type CharterSections = Record<CharterKey, string>;
+export const CHARTER_KEYS: CharterKey[] = ["purpose", "rules", "fr", "nfr"];
+
 // Modo Projeto: linguagem e arquétipo de arquitetura escolhidos pelo dev para gerar um projeto completo.
 export type ProjectLanguage = "python" | "typescript" | "java" | "go";
 export type ProjectArchitecture = "hexagonal" | "clean" | "layered" | "mvc";
@@ -210,7 +216,11 @@ export type ExtToWebview =
       skippedReason?: string;
     }
   | { type: "mcp/approvalRequest"; requestId: string; server: string; tool: string; scope: string; argsPreview: string }
-  | { type: "profile/state"; profile: ProfileView };
+  | { type: "profile/state"; profile: ProfileView }
+  | { type: "charter/state"; sections: CharterSections }
+  | { type: "charter/drafting"; section: CharterKey }
+  | { type: "charter/drafted"; section: CharterKey; text: string }
+  | { type: "charter/error"; section: CharterKey; message: string };
 
 // ---- Webview → Host da extensão ------------------------------------------------
 
@@ -236,6 +246,9 @@ export type WebviewToExt =
   | { type: "profile/open" }
   | { type: "profile/pickRole" }
   | { type: "profile/refresh" }
+  | { type: "charter/open" }
+  | { type: "charter/draft"; section: CharterKey; brief: string }
+  | { type: "charter/save"; sections: CharterSections }
   | { type: "run/file"; filePath: string; proposalId?: string }
   | { type: "preview/open"; filePath: string; proposalId?: string }
   | { type: "proposal/applyAndRun"; proposalId: string }

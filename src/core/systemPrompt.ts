@@ -1,6 +1,6 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-import { FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
+import { CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -205,6 +205,34 @@ arquitetura ${ARCH_LABEL[architecture]}. Siga à risca:
    Os comandos devem ser reais e consistentes com o manifesto e a estrutura que você gerou.
 7. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_ELLIPSIS_RULE}`
   );
+}
+
+// Charter Wizard: system prompt para o modelo REDIGIR uma seção do charter do projeto (.forge/project.md).
+// Saída = SÓ o conteúdo markdown da seção, em pt-BR, sem título nem preâmbulo conversacional. O corpo
+// vira contexto PINNED em toda geração, então precisa ser objetivo e verificável.
+const CHARTER_GUIDANCE: Record<CharterKey, string> = {
+  purpose:
+    "o PROPÓSITO da aplicação: 2 a 4 frases claras dizendo o que o sistema faz, para quem e qual o valor. Prosa direta, sem bullets.",
+  rules:
+    "as REGRAS e convenções do time como bullets objetivos e acionáveis (comece cada linha com '- '), no estilo 'sempre/nunca/prefira/padronize…'. Uma regra por linha.",
+  fr:
+    "os REQUISITOS FUNCIONAIS como bullets verificáveis do que o sistema DEVE fazer (comece cada linha com '- '). Se ajudar, prefixe com 'RF-01:', 'RF-02:'…. Um requisito por linha, sem ambiguidade.",
+  nfr:
+    "os REQUISITOS NÃO FUNCIONAIS como bullets verificáveis (comece cada linha com '- '), cobrindo o que fizer sentido: desempenho, segurança/LGPD, disponibilidade, observabilidade, manutenibilidade, portabilidade. Prefixe com 'RNF-01:'… se ajudar.",
+};
+
+export function buildCharterSystemPrompt(section: CharterKey): string {
+  return [
+    "Você é o FORGE, assistente de engenharia para times de dados/IA da Claro. Ajude a redigir o CHARTER",
+    "do projeto (um documento vivo que guia todas as gerações de código).",
+    `Sua tarefa AGORA: redigir ${CHARTER_GUIDANCE[section]}`,
+    "",
+    "Regras de saída ESTRITAS:",
+    "- Responda em pt-BR e APENAS com o conteúdo markdown da seção — NADA de título de seção, saudação,",
+    "  confirmação ('claro', 'aqui está') nem comentários sobre a tarefa.",
+    "- Seja conciso, específico e coerente com o contexto do projeto fornecido pelo dev.",
+    "- Aproveite o rascunho do dev quando houver: melhore/estruture, não ignore.",
+  ].join("\n");
 }
 
 // Instrução (mensagem de USUÁRIO) para o modelo CONTINUAR uma resposta que foi cortada no meio de um

@@ -29,6 +29,9 @@ import { deriveBudget } from "./ContextBudget";
 import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
+  CharterKey,
+  CHARTER_KEYS,
+  CharterSections,
   DEFAULT_REASONING_EFFORT,
   effectiveTimeoutSeconds,
   ExtToWebview,
@@ -46,8 +49,8 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
-import { buildBasePrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
-import { appendRule, collectRules, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
+import { buildBasePrompt, buildCharterSystemPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
 import { Role, resolveRole, roleGuidance, roleLabel, setRole, stripFrontmatter } from "../util/roleDefaults";
@@ -416,6 +419,124 @@ export class Controller {
     void this.postProfileState();
   }
 
+  // ---- Charter Wizard (Propósito/Regras/RF/RNF assistidos pelo modelo) --------
+
+  // Lê o .forge/project.md atual (ou "" se não existir). Normaliza CRLF→LF para o valor das seções
+  // não vazar `\r` interior ao textarea/arquivo (higiene de EOL; o parsing já é robusto a CRLF).
+  private async readCharterDoc(): Promise<string> {
+    const ws = this.workspaceRoot();
+    if (!ws) return "";
+    try {
+      return (await fs.readFile(path.join(ws, PROFILE_RELPATH), "utf8")).replace(/\r\n/g, "\n");
+    } catch {
+      return "";
+    }
+  }
+
+  private charterSectionsFrom(doc: string): CharterSections {
+    return Object.fromEntries(CHARTER_SECTIONS.map((s) => [s.key, getSection(doc, s.header)])) as CharterSections;
+  }
+
+  // Abre o wizard: manda ao webview o conteúdo atual de cada seção do charter.
+  async openCharter(): Promise<void> {
+    this.post({ type: "charter/state", sections: this.charterSectionsFrom(await this.readCharterDoc()) });
+  }
+
+  // Pede ao modelo para REDIGIR uma seção a partir do rascunho do dev + contexto (stack + outras seções).
+  // Geração ONE-SHOT (texto puro, sem blocos de arquivo); registra trace como as demais gerações.
+  async draftCharterSection(section: CharterKey, brief: string): Promise<void> {
+    if (!CHARTER_KEYS.includes(section)) return;
+    if (!(await this.ensureSession())) {
+      this.post({ type: "charter/error", section, message: "Licença requerida para redigir com o modelo." });
+      return;
+    }
+    const runtime = await this.runtimeProviderConfig();
+    if (!runtime) {
+      this.post({ type: "charter/error", section, message: "Configure um provedor antes de redigir (Configurar provedor)." });
+      return;
+    }
+    // Valida o egress ANTES de abrir o trace (não registra uma geração que nunca sairá para a rede).
+    try {
+      this.egress.assertAllowed(runtime.baseUrl ?? (runtime.type === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com"));
+    } catch (e) {
+      this.post({ type: "charter/error", section, message: (e as Error)?.message ?? String(e) });
+      return;
+    }
+    this.post({ type: "charter/drafting", section });
+
+    const [stack, doc] = await Promise.all([this.detectWorkspaceStack(), this.readCharterDoc()]);
+    // Tetos defensivos como no resto do FORGE: o brief (textarea, pode ter texto colado) e cada bloco
+    // de contexto são limitados para não estourar a janela/custo do modelo.
+    const others = CHARTER_SECTIONS.filter((s) => s.key !== section)
+      .map((s) => {
+        const body = getSection(doc, s.header);
+        return body ? renderProfileBlock(`${s.header}\n${body}`, 1500) : "";
+      })
+      .filter((s) => s.trim());
+    const label = CHARTER_SECTIONS.find((s) => s.key === section)?.label ?? section;
+    const cappedBrief = brief.trim().slice(0, 4000);
+    const userMsg = [
+      "Contexto do projeto:",
+      [renderProfileBlock(renderStackBlock(stack), 1500), ...others].filter((s) => s.trim()).join("\n\n") || "(sem contexto adicional detectado)",
+      "",
+      `Rascunho/instrução do dev para a seção "${label}":`,
+      cappedBrief || "(vazio — proponha do zero, coerente com o contexto acima)",
+    ].join("\n");
+
+    const taskId = `charter_${section}_${this.sessionId}`;
+    const started = Date.now();
+    this.obs.record({
+      type: "generation.start",
+      taskId,
+      mode: "charter",
+      model: runtime.modelId,
+      provider: runtime.type,
+      skills: [],
+      sessionId: this.sessionId,
+      userId: this.resolveIdentity().email ?? "",
+    });
+    let text = "";
+    let error: string | undefined;
+    try {
+      const provider = createProvider(runtime, this.egress);
+      const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "charter");
+      for await (const chunk of provider.createMessage(buildCharterSystemPrompt(section), [{ role: "user", content: userMsg }], {
+        timeoutMs: runtime.timeoutSeconds * 1000,
+        extraHeaders: headers,
+      })) {
+        if (chunk.kind === "text") text += chunk.text;
+        else if (chunk.kind === "error") {
+          error = chunk.message;
+          break;
+        }
+      }
+      if (error) this.post({ type: "charter/error", section, message: error });
+      else this.post({ type: "charter/drafted", section, text: text.trim() });
+    } catch (e) {
+      error = (e as Error)?.message ?? String(e);
+      this.post({ type: "charter/error", section, message: error });
+    } finally {
+      this.obs.record({ type: "generation.end", taskId, durationMs: Date.now() - started, model: runtime.modelId, input: userMsg, output: text, proposals: 0, error });
+    }
+  }
+
+  // Grava as 4 seções no .forge/project.md (preserva frontmatter/papel e o resto do arquivo).
+  async saveCharter(sections: CharterSections): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para salvar o charter." });
+      return;
+    }
+    let doc = await this.readCharterDoc();
+    for (const s of CHARTER_SECTIONS) doc = setSection(doc, s.header, sections[s.key] ?? "");
+    const abs = path.join(ws, PROFILE_RELPATH);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, doc, "utf8");
+    this.post({ type: "notice", level: "info", message: "Charter salvo em .forge/project.md (injetado em todo prompt)." });
+    this.post({ type: "charter/state", sections: this.charterSectionsFrom(doc) });
+    void this.postProfileState(); // as regras podem ter mudado
+  }
+
   // Configura a observabilidade direta (sink Langfuse): guarda a secretKey no SecretStorage
   // (nunca em settings, RNF-010). baseUrl/publicKey/enabled ficam em forge.observability.langfuse.*.
   async setupObservability(): Promise<void> {
@@ -672,6 +793,15 @@ export class Controller {
         break;
       case "profile/refresh":
         await this.postProfileState();
+        break;
+      case "charter/open":
+        await this.openCharter();
+        break;
+      case "charter/draft":
+        await this.draftCharterSection(msg.section, msg.brief);
+        break;
+      case "charter/save":
+        await this.saveCharter(msg.sections);
         break;
       case "signOut":
         await this.signOut();
