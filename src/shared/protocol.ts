@@ -284,7 +284,13 @@ export type ExtToWebview =
   | { type: "project/blueprint"; blueprint: ProjectBlueprintView }
   | { type: "project/blueprintError"; message: string }
   | { type: "project/status"; files: BlueprintFileView[] }
-  | { type: "project/done" };
+  | { type: "project/done" }
+  // Todos os arquivos do projeto foram APLICADOS (após "Aplicar tudo"). O webview desmarca o Modo
+  // Projeto automaticamente — fim de fluxo: a próxima mensagem volta a ser chat/diagnóstico normal.
+  | { type: "project/appliedAll" }
+  // Fecha o modal do projeto SEM erro (ex.: o texto era pergunta/diagnóstico e foi redirecionado ao
+  // chat pela defesa em profundidade do host). Diferente de blueprintError, que mostra toast de erro.
+  | { type: "project/closed" };
 
 // ---- Webview → Host da extensão ------------------------------------------------
 

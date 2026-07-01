@@ -243,3 +243,23 @@ test("singleton só vale para 'testes': runs de arquivo distintos NÃO são fund
   assert.equal(s.runs.filter((r) => r.label === "testes").length, 1);
   assert.equal(s.runs.length, 3);
 });
+
+// ---- Modo Projeto: auto-desmarcar (project/appliedAll) e fechar sem erro (project/closed) ----
+
+test("project/appliedAll incrementa appliedAllAt (seq) a cada aplicação — dispara o auto-desmarcar", () => {
+  assert.equal(initialState.appliedAllAt, 0); // guard do useEffect ignora 0 na montagem
+  let s = apply(initialState, { type: "project/appliedAll" });
+  assert.equal(s.appliedAllAt, 1);
+  // 2º projeto na mesma sessão: o valor SOBE → a dependência [state.appliedAllAt] muda → efeito dispara de novo
+  s = apply(s, { type: "project/appliedAll" });
+  assert.equal(s.appliedAllAt, 2);
+});
+
+test("project/closed fecha o modal do projeto SEM toast de erro (diferente de blueprintError)", () => {
+  // abre o modal (planning) e então recebe o fechamento silencioso do host (redirecionado ao chat)
+  let s = reducer(initialState, { kind: "project/planning" });
+  assert.ok(s.project, "modal aberto ao planejar");
+  s = apply(s, { type: "project/closed" });
+  assert.equal(s.project, null, "modal fechado");
+  assert.equal(s.toast, null, "sem toast de erro (ao contrário de project/blueprintError)");
+});

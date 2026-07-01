@@ -56,6 +56,7 @@ import { log } from "../util/logger";
 import { exec } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { parseBlueprint, topoSort } from "../util/blueprint";
+import { classifyProjectIntent } from "../util/projectIntent";
 import { safeWorkspacePath } from "../util/safePath";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
@@ -566,6 +567,13 @@ export class Controller {
   // Passo 1: gera o BLUEPRINT (plano de arquivos) sem código, para o dev aprovar. One-shot.
   async generateBlueprint(text: string, language: ProjectLanguage, architecture: ProjectArchitecture): Promise<void> {
     if (!text.trim()) return;
+    // Defesa em profundidade: se o texto é pergunta/diagnóstico (frontend antigo/divergente que ainda
+    // mandou project/blueprint), não gaste inferência com o plano — feche o modal e responda no chat.
+    if (classifyProjectIntent(text) === "chat") {
+      this.post({ type: "project/closed" });
+      await this.startTask(text, "normal");
+      return;
+    }
     if (!(await this.ensureSession())) {
       this.post({ type: "project/blueprintError", message: "Licença requerida para planejar o projeto." });
       return;
@@ -679,7 +687,13 @@ export class Controller {
         blocked++;
       }
     }
-    if (this.projectSession) this.post({ type: "project/status", files: this.projectSession.files });
+    if (this.projectSession) {
+      this.post({ type: "project/status", files: this.projectSession.files });
+      // Fim de fluxo: se TODOS os arquivos do blueprint estão aplicados, o webview desmarca o Modo Projeto.
+      if (this.projectSession.files.length > 0 && this.projectSession.files.every((f) => f.status === "applied")) {
+        this.post({ type: "project/appliedAll" });
+      }
+    }
     const parts = [`${applied} aplicado(s)`];
     if (blocked) parts.push(`${blocked} bloqueado(s) pelo quality gate`);
     if (partial.length) parts.push(`${partial.length} parcial(is) pulado(s) — revise e aplique pelo cartão`);
