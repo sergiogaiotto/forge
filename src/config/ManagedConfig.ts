@@ -85,6 +85,12 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("identity.requireEmail", false);
   }
 
+  // Override opcional do teto de tokens de SAÍDA. 0 = usa o catálogo de modelos (recomendado). Útil
+  // quando o gateway HubGPU/vLLM aceita um teto diferente do padrão do catálogo.
+  provider(): { maxOutput: number } {
+    return { maxOutput: this.cfg().get<number>("provider.maxOutput", 0) };
+  }
+
   run(): { enabled: boolean; timeoutSeconds: number; commands: Record<string, string> } {
     const c = this.cfg();
     return {

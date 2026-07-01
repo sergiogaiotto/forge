@@ -22,6 +22,7 @@ import { ContextAssembler } from "../skills/ContextAssembler";
 import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
+import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -739,15 +740,19 @@ export class Controller {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     if (!p) return undefined;
     const apiKey = (await this.secrets.get(SecretsStore.providerApiKey("default"))) ?? "not-needed";
-    if (!supportsReasoningEffort(p.type, p.modelId)) {
+    // Teto de saída REAL do modelo (catálogo), sobrescrevível por config. Sem isto, toda geração caía
+    // no DEFAULT_MAX_TOKENS fixo (16384), ignorando a janela de 128k do gpt-oss-120b.
+    const meta = getModelMeta(p.type, p.modelId);
+    const maxTokens = resolveMaxOutput(this.config.provider().maxOutput, meta);
+    if (!meta.supportsReasoningEffort) {
       // Provedores sem esforço (Anthropic/OpenAI/Llama): preserva o timeout do onboarding e não
       // envia reasoning_effort.
-      return { ...p, apiKey, reasoningEffort: undefined };
+      return { ...p, apiKey, maxTokens, reasoningEffort: undefined };
     }
     const reasoningEffort = p.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
     // gpt-oss: o esforço eleva o piso de timeout (esforços maiores levam mais tempo), mas um override
     // maior do onboarding é respeitado — evita cortar respostas longas (arquivo completo) no meio.
-    return { ...p, apiKey, reasoningEffort, timeoutSeconds: Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(reasoningEffort)) };
+    return { ...p, apiKey, maxTokens, reasoningEffort, timeoutSeconds: Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(reasoningEffort)) };
   }
 
   async testProvider(setup: ProviderSetup): Promise<void> {
@@ -758,8 +763,10 @@ export class Controller {
       authHeader: setup.authHeader,
       apiKey: setup.apiKey || "not-needed",
       timeoutSeconds: Math.min(setup.timeoutSeconds || 30, 30),
-      // O ping só precisa de "ok"; teto mínimo evita custo e o 400 por exceder a janela em modelos pequenos.
-      maxTokens: 16,
+      // Envia o teto REAL do catálogo (não um valor mínimo): assim, se o gateway recusar esse max_tokens
+      // por exceder o --max-model-len servido, o 400 aparece já no "Testar conexão", não na 1ª geração.
+      // O prompt "responda apenas ok" faz o modelo parar cedo, então não gera o teto inteiro.
+      maxTokens: resolveMaxOutput(this.config.provider().maxOutput, getModelMeta(setup.type, setup.modelId)),
       // Exercita o MESMO corpo da geração real: se o gateway recusar reasoning_effort, o erro aparece
       // já no "Testar conexão", não silenciosamente na primeira geração.
       reasoningEffort: supportsReasoningEffort(setup.type, setup.modelId)
