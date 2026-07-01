@@ -17,6 +17,7 @@ export interface RunServiceDeps {
   workspaceRoot: () => string | undefined;
   runConfig: () => { enabled: boolean; commands: Record<string, string>; timeoutSeconds: number };
   onResult?: (r: { filePath: string; ok: boolean; exitCode: number | null; durationMs: number }) => void;
+  openPreview?: (relPath: string) => void; // artefatos renderáveis (.html/.svg) abrem no PreviewService
 }
 
 interface FinishData {
@@ -86,8 +87,14 @@ export class RunService implements vscode.Disposable {
 
     try {
       const resolved = resolveRunCommand(relPath, cfg.commands);
-      if ("skippedReason" in resolved) {
-        this.deps.post({ type: "run/result", runId, proposalId, filePath: relPath, command: "", ok: false, exitCode: null, output: "", durationMs: 0, skippedReason: resolved.skippedReason });
+      // Artefato renderável (.html/.svg): abre no preview em vez de rodar como processo.
+      if ("renderable" in resolved && this.deps.openPreview) {
+        this.deps.openPreview(relPath);
+        return;
+      }
+      if ("skippedReason" in resolved || "renderable" in resolved) {
+        const reason = "skippedReason" in resolved ? resolved.skippedReason : `Artefato "${resolved.ext}" se visualiza — use "Visualizar".`;
+        this.deps.post({ type: "run/result", runId, proposalId, filePath: relPath, command: "", ok: false, exitCode: null, output: "", durationMs: 0, skippedReason: reason });
         return;
       }
       const abs = path.join(ws, relPath);

@@ -26,6 +26,7 @@ import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { findVenvPython, resolveTestCommand } from "../util/pythonEnv";
 import { deriveBudget } from "./ContextBudget";
+import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -93,6 +94,7 @@ export class Controller {
   private attachmentSeq = 0;
   private currentTask: Task | undefined;
   private readonly runService: RunService;
+  private readonly previewService: PreviewService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   private poster: ((msg: ExtToWebview) => void) | undefined;
@@ -119,11 +121,17 @@ export class Controller {
       new LangfuseDirectSink(() => this.config.observability(), () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET), this.egress),
       { onError: (m) => log.warn(m) }
     );
+    this.previewService = new PreviewService({
+      workspaceRoot: () => this.workspaceRoot(),
+      post: (msg) => this.post(msg),
+    });
+    context.subscriptions.push(this.previewService);
     this.runService = new RunService({
       post: (msg) => this.post(msg),
       workspaceRoot: () => this.workspaceRoot(),
       runConfig: () => this.config.run(),
       onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
+      openPreview: (relPath) => void this.previewService.openPreview(relPath),
     });
     context.subscriptions.push(this.runService);
 
@@ -576,6 +584,9 @@ export class Controller {
       case "proposal/applyAndRun":
         await this.applyAndRun(msg.proposalId);
         break;
+      case "proposal/applyAndPreview":
+        await this.applyAndPreview(msg.proposalId);
+        break;
       case "proposal/discard": {
         const fp = this.currentTask?.getProposal(msg.proposalId)?.proposal.filePath ?? "";
         this.post({ type: "proposal/discarded", proposalId: msg.proposalId });
@@ -590,6 +601,10 @@ export class Controller {
         break;
       case "run/file":
         await this.runService.runFile(msg.filePath, msg.proposalId);
+        break;
+      case "preview/open":
+        await this.previewService.openPreview(msg.filePath);
+        this.obs.record({ type: "run.result", filePath: msg.filePath, label: "preview", ok: true, exitCode: 0, durationMs: 0 });
         break;
       case "run/cancel":
         this.runService.cancel(msg.runId);
@@ -1253,6 +1268,17 @@ export class Controller {
     const applied = await this.applyProposal(proposalId);
     if (applied && entry && !entry.proposal.cell) {
       await this.runService.runFile(entry.proposal.filePath, proposalId);
+    }
+  }
+
+  // Grava o arquivo E abre o preview — num único handler, garantindo a ordem (o preview lê o arquivo
+  // só depois de gravado), diferente de postar apply + preview/open como mensagens concorrentes.
+  async applyAndPreview(proposalId: string): Promise<void> {
+    const entry = this.currentTask?.getProposal(proposalId);
+    const applied = await this.applyProposal(proposalId);
+    if (applied && entry && !entry.proposal.cell) {
+      await this.previewService.openPreview(entry.proposal.filePath);
+      this.obs.record({ type: "run.result", filePath: entry.proposal.filePath, label: "preview", ok: true, exitCode: 0, durationMs: 0 });
     }
   }
 

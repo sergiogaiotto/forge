@@ -4,6 +4,12 @@
 
 export type ProviderType = "openai" | "anthropic" | "openai-compatible";
 
+// Artefatos que se VISUALIZAM num painel de preview (webview) em vez de executar como processo.
+// Compartilhado entre host (roteamento da execução) e webview (rótulo do botão) — sem deps de node.
+export function isRenderablePath(filePath: string): boolean {
+  return /\.(html?|svg)$/i.test(filePath);
+}
+
 // Esforço de raciocínio do modelo (gpt-oss e afins). Mais esforço = raciocínio mais longo e melhor,
 // porém mais lento — por isso o timeout é elevado automaticamente junto (ver TIMEOUT_BY_EFFORT).
 export type ReasoningEffort = "low" | "medium" | "high";
@@ -223,7 +229,9 @@ export type WebviewToExt =
   | { type: "profile/pickRole" }
   | { type: "profile/refresh" }
   | { type: "run/file"; filePath: string; proposalId?: string }
+  | { type: "preview/open"; filePath: string; proposalId?: string }
   | { type: "proposal/applyAndRun"; proposalId: string }
+  | { type: "proposal/applyAndPreview"; proposalId: string }
   | { type: "run/cancel"; runId: string }
   | { type: "run/focusTerminal"; runId: string }
   | { type: "cell/run"; proposalId: string }
