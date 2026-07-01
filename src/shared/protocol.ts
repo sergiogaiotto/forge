@@ -292,6 +292,7 @@ export type WebviewToExt =
   | { type: "charter/open" }
   | { type: "charter/draft"; section: CharterKey; brief: string }
   | { type: "charter/save"; sections: CharterSections }
+  | { type: "charter/genTests"; fr: string; nfr: string }
   | { type: "inspect/open" }
   | { type: "skills/body"; name: string }
   | { type: "rag/file"; relPath: string }

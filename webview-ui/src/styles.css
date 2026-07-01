@@ -990,6 +990,23 @@ h6.md-h {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Selo de completude na proposta */
+.seal {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.seal.ok {
+  color: #86c98e;
+  background: rgba(134, 201, 142, 0.12);
+}
+.seal.partial {
+  color: #d8b35a;
+  background: rgba(216, 179, 90, 0.14);
+}
 .proj-select {
   font-size: 11px;
   font-family: var(--sans);
