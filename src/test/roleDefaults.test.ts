@@ -12,6 +12,33 @@ test("normalizeRole reconhece variações e desambigua ML vs dados", () => {
   assert.equal(normalizeRole(""), undefined);
 });
 
+test("normalizeRole reconhece Engenheiro de IA e não confunde com ML/dados", () => {
+  assert.equal(normalizeRole("engenheiro de ia"), "engenheiro-de-ia");
+  assert.equal(normalizeRole("engenheiro-de-ia"), "engenheiro-de-ia");
+  assert.equal(normalizeRole("ai engineer"), "engenheiro-de-ia");
+  assert.equal(normalizeRole("inteligência artificial"), "engenheiro-de-ia");
+  assert.equal(normalizeRole("GenAI"), "engenheiro-de-ia");
+  // não deve capturar ML nem dados
+  assert.equal(normalizeRole("engenheiro de ml"), "engenheiro-de-ml");
+  assert.equal(normalizeRole("engenheiro de dados"), "engenheiro-de-dados");
+});
+
+test("REGRESSÃO: menção solta de llm/genai não sequestra cargo explícito (revisão PR-A)", () => {
+  assert.equal(normalizeRole("engenheiro de dados usando llm"), "engenheiro-de-dados");
+  assert.equal(normalizeRole("engenheiro de ml com genai"), "engenheiro-de-ml");
+  assert.equal(normalizeRole("engenheiro de software com llm"), "engenheiro-de-software");
+  // sem cargo explícito, a menção de tecnologia classifica como Eng. de IA
+  assert.equal(normalizeRole("llm ops"), "engenheiro-de-ia");
+});
+
+test("roleGuidance de Engenheiro de IA foca em LLM/RAG/evals/guardrails", () => {
+  const g = roleGuidance("engenheiro-de-ia");
+  assert.match(g, /## Papel e padrões/);
+  assert.match(g, /LLM|GenAI/);
+  assert.match(g, /RAG/);
+  assert.match(g, /eval/i);
+});
+
 test("parseRole lê o papel do frontmatter (e ignora ausência)", () => {
   const text = ["---", "papel: engenheiro-de-dados", "---", "", "## Regras do projeto"].join("\n");
   assert.equal(parseRole(text), "engenheiro-de-dados");

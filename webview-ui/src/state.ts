@@ -93,6 +93,7 @@ export type Action =
   | { kind: "newConversation" }
   | { kind: "clearApproval" }
   | { kind: "clearProfile" }
+  | { kind: "run/dismiss"; id: string }
   | { kind: "clearToast" };
 
 let toastSeq = 0;
@@ -144,6 +145,9 @@ export function reducer(state: UIState, action: Action): UIState {
       return { ...state, approval: null };
     case "clearProfile":
       return { ...state, profile: null };
+    case "run/dismiss":
+      // Oculta um cartão de execução/teste solto da thread (remove pelo id estável do cartão).
+      return { ...state, runs: state.runs.filter((r) => r.id !== action.id) };
     case "newConversation":
       return { ...state, messages: [], runs: [], busy: false, reviewed: false, lastFileRun: null, lastTestRun: null };
     case "providerTestPending":

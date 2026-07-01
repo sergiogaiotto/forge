@@ -2,17 +2,27 @@
 // em uma orientação injetada no prompt, ajustando o ESTILO e os defaults do FORGE por papel.
 // Puro/testável — o IO de arquivo fica no Controller.
 
-export type Role = "cientista-de-dados" | "engenheiro-de-dados" | "engenheiro-de-ml" | "engenheiro-de-software";
+export type Role =
+  | "cientista-de-dados"
+  | "engenheiro-de-dados"
+  | "engenheiro-de-ml"
+  | "engenheiro-de-ia"
+  | "engenheiro-de-software";
 
-// Normaliza variações de escrita para a chave canônica. Ordem importa: ML antes de DADOS para que
-// "engenheiro de ml" não case com o padrão de dados.
+// Normaliza variações de escrita para a chave canônica. Ordem importa: IA/ML antes de DADOS/software
+// para que "engenheiro de ia"/"engenheiro de ml" não casem com padrões mais genéricos.
 export function normalizeRole(raw: string | undefined): Role | undefined {
   const t = (raw ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
   if (!t) return undefined;
   if (/(cientista-?de-?dados|data-?scientist)/.test(t)) return "cientista-de-dados";
+  // Forma de CARGO específica de IA (adjacente): tem prioridade.
+  if (/(engenheiro-?de-?ia|engenharia-?de-?ia|ai-?engineer)/.test(t)) return "engenheiro-de-ia";
   if (/(engenheiro-?de-?ml|ml-?engineer|machine-?learning)/.test(t)) return "engenheiro-de-ml";
   if (/(engenheiro-?de-?dados|data-?engineer)/.test(t)) return "engenheiro-de-dados";
   if (/(engenheiro-?de-?software|software-?engineer|\bswe\b)/.test(t)) return "engenheiro-de-software";
+  // Menções soltas de TECNOLOGIA (não são cargo) só classificam se nenhum cargo explícito casou —
+  // evita que "engenheiro de dados usando llm" vire Engenheiro de IA.
+  if (/(genai|intelig[êe]ncia-?artificial|\bllm\b)/.test(t)) return "engenheiro-de-ia";
   return undefined;
 }
 
@@ -43,6 +53,8 @@ const GUIDANCE: Record<Role, string> = {
     "Engenheiro de Dados — priorize pipelines idempotentes e determinísticos, contratos/esquemas explícitos, tratamento de nulos/tipos/duplicados, particionamento e Spark/SQL; evite efeitos colaterais, código pronto para orquestração.",
   "engenheiro-de-ml":
     "Engenheiro de ML — priorize reprodutibilidade (seeds, versionamento de dados/modelo), rastreio de experimentos, separação treino/serving, métricas e validação, e latência/custo de inferência.",
+  "engenheiro-de-ia":
+    "Engenheiro de IA — priorize sistemas com LLMs/GenAI: engenharia de prompts versionada, RAG (chunking/embeddings/recuperação), avaliações offline/online (evals, benchmarks, datasets de referência), guardrails e segurança (injeção de prompt, PII/LGPD), e observabilidade de tokens/custo/latência. Trate o modelo como dependência governada: contratos de entrada/saída explícitos, fallback/timeout, e reprodutibilidade (temperatura/seed/versão do modelo).",
   "engenheiro-de-software":
     "Engenheiro de Software — priorize testes (de preferência primeiro), tipos estáticos, fronteiras/SOLID, tratamento de erros explícito e APIs claras; evite acoplamento desnecessário.",
 };
@@ -51,6 +63,7 @@ const LABELS: Record<Role, string> = {
   "cientista-de-dados": "Cientista de dados",
   "engenheiro-de-dados": "Engenheiro de dados",
   "engenheiro-de-ml": "Engenheiro de ML",
+  "engenheiro-de-ia": "Engenheiro de IA",
   "engenheiro-de-software": "Engenheiro de software",
 };
 

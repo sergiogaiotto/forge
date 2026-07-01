@@ -395,6 +395,7 @@ export class Controller {
       { label: "Cientista de dados", role: "cientista-de-dados" },
       { label: "Engenheiro de dados", role: "engenheiro-de-dados" },
       { label: "Engenheiro de ML", role: "engenheiro-de-ml" },
+      { label: "Engenheiro de IA", role: "engenheiro-de-ia" },
       { label: "Engenheiro de software", role: "engenheiro-de-software" },
     ];
     const pick = await vscode.window.showQuickPick(items, {
