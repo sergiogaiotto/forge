@@ -24,6 +24,31 @@ export function findVenvPython(
   return venvPythonCandidates(workspaceRoot, isWindows).find(exists);
 }
 
+// Monta o comando de "Preparar ambiente" (venv + dependências) para um projeto Python. Se já existe
+// um venv (venvPython), só instala; senão cria `.venv` e instala. Encadeia com `&&` — executado via
+// exec/spawn com shell (cmd.exe no Windows), onde `&&` é válido (evita o PowerShell do terminal).
+//   install="requirements" → pip install -r requirements.txt
+//   install="editable"     → pip install -e .   (pyproject.toml INSTALÁVEL: tem [build-system]/[project])
+//   install="none"         → só cria o venv e atualiza o pip (pyproject só-de-ferramentas / sem deps
+//                            declaradas instaláveis; evita o erro do `-e .` sem backend de build).
+export function buildVenvSetupCommand(o: {
+  isWindows: boolean;
+  venvPython: string | undefined; // caminho do interpretador se o venv já existe
+  install: "requirements" | "editable" | "none";
+}): string {
+  const q = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
+  const py = o.isWindows ? "python" : "python3";
+  const venvPy = o.isWindows ? ".venv\\Scripts\\python" : ".venv/bin/python";
+  const interp = o.venvPython ? q(o.venvPython) : venvPy;
+  const installStep =
+    o.install === "requirements" ? ` && ${interp} -m pip install -r requirements.txt` : o.install === "editable" ? ` && ${interp} -m pip install -e .` : "";
+  if (o.venvPython) {
+    // venv já existe: atualiza o pip e (se houver) instala as deps — sem recriar o venv.
+    return `${interp} -m pip install --upgrade pip${installStep}`;
+  }
+  return `${py} -m venv .venv && ${venvPy} -m pip install --upgrade pip${installStep}`;
+}
+
 // Monta o comando de teste usando o interpretador do venv quando o comando é pytest. Cobre:
 //   "pytest -q"           → `"<venv>" -m pytest -q`
 //   "python -m pytest -q" → `"<venv>" -m pytest -q`  (python/python3 SEM caminho — nome nu)

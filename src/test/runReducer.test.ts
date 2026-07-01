@@ -119,6 +119,18 @@ test("run de teste (label=testes) atualiza lastTestRun, não lastFileRun", () =>
   assert.equal(s.lastFileRun, null);
 });
 
+test("run de 'ambiente' (Preparar ambiente) NÃO polui lastFileRun nem lastTestRun (chip Executa neutro)", () => {
+  // um run de arquivo real primeiro (label indefinido) alimenta lastFileRun
+  let s = apply(initialState, { type: "run/result", filePath: "app.py", command: "python app.py", ok: true, exitCode: 0, output: "", durationMs: 3 });
+  assert.equal(s.lastFileRun?.filePath, "app.py");
+  // "Preparar ambiente" chega com label "ambiente" — não deve sobrescrever lastFileRun
+  s = apply(s, { type: "run/result", filePath: "", label: "ambiente", command: "python -m venv .venv", ok: true, exitCode: 0, output: "ok", durationMs: 50 });
+  assert.equal(s.lastFileRun?.filePath, "app.py", "ambiente não deve virar o 'último arquivo executado'");
+  assert.equal(s.lastTestRun, null);
+  // mas o cartão de ambiente aparece na lista solta (pode ser Ocultado)
+  assert.ok(s.runs.some((r) => r.label === "ambiente"));
+});
+
 test("suíte de testes é SINGLETON: rodar várias vezes não empilha cartões (corrige acúmulo)", () => {
   let s: UIState = initialState;
   // simula o print: 3 execuções de teste seguidas (exit 5, 3, 0)
