@@ -10,7 +10,7 @@ import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
 import { CompletenessResult, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
-import { buildContinuationPrompt } from "./systemPrompt";
+import { buildContinuationPrompt, buildTailContinuation } from "./systemPrompt";
 
 // Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
 // completude, não custo (decisão de produto), mas com teto rígido + guarda de "stall" (passagem que
@@ -36,7 +36,7 @@ export interface TaskDeps {
   extraHeaders?: Record<string, string>;
   post: (msg: ExtToWebview) => void;
   emit?: (e: ObsEvent) => void; // observabilidade (geração + workflow)
-  obsMeta?: { mode: "normal" | "tdd" | "review"; model: string; provider: string; sessionId: string; userId: string; org?: string };
+  obsMeta?: { mode: "normal" | "tdd" | "review" | "project"; model: string; provider: string; sessionId: string; userId: string; org?: string };
 }
 
 const LANG_BY_EXT: Record<string, string> = {
@@ -98,8 +98,9 @@ export class Task {
       maxContinuations: MAX_CONTINUATIONS,
       anchorChars: CONTINUATION_ANCHOR_CHARS,
       buildContinuation: buildContinuationPrompt,
+      buildTailContinuation,
       onContinue: (attempt, path) =>
-        d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o arquivo"} (continuação ${attempt}/${MAX_CONTINUATIONS})…` }),
+        d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o restante"} (continuação ${attempt}/${MAX_CONTINUATIONS})…` }),
       aborted: () => this.controller.signal.aborted,
     });
     const usage = { inputTokens, outputTokens };
@@ -111,13 +112,16 @@ export class Task {
     const full = gen.full;
     const completeness: CompletenessResult = gen.completeness;
 
-    const wasTruncated = !completeness.complete;
+    // `truncated` cobre tanto o arquivo com cerca aberta quanto o corte ENTRE arquivos (provider sinalizou
+    // finish_reason=length) — este último é o caso comum de um PROJETO que veio com arquivos faltando.
+    const wasTruncated = gen.truncated;
     if (wasTruncated) {
+      const alvo = completeness.path ? `(arquivo ${completeness.path})` : "(cortada por limite de tokens — pode faltar arquivo)";
       d.post({
         type: "stream/notice",
         taskId: d.taskId,
         level: "warn",
-        message: `O arquivo ${completeness.path ?? ""} pode estar incompleto (a geração não fechou após ${gen.attempts} continuações). Peça para continuar ou regenerar.`.replace(/\s{2,}/g, " "),
+        message: `A geração pode estar incompleta ${alvo} após ${gen.attempts} continuações. Peça para continuar ou regenerar.`,
       });
     }
 
@@ -158,9 +162,10 @@ export class Task {
   private async streamOnce(
     messages: ChatMessage[],
     onUsage: (u: { inputTokens?: number; outputTokens?: number }) => void
-  ): Promise<{ text: string; error?: string }> {
+  ): Promise<{ text: string; error?: string; truncated: boolean }> {
     const d = this.deps;
     let text = "";
+    let truncated = false;
     try {
       for await (const chunk of d.provider.createMessage(d.systemPrompt, messages, {
         timeoutMs: d.timeoutMs,
@@ -176,9 +181,10 @@ export class Task {
             d.post({ type: "stream/text", taskId: d.taskId, delta: chunk.text });
             break;
           case "warning":
-            break; // truncamento: o laço de run() decide a mensagem via checkCompleteness
+            truncated = true; // provider sinalizou corte por limite (finish_reason=length/max_tokens)
+            break;
           case "error":
-            return { text, error: chunk.message };
+            return { text, error: chunk.message, truncated };
           case "usage":
             onUsage({ inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
             break;
@@ -187,9 +193,9 @@ export class Task {
         }
       }
     } catch (err) {
-      return { text, error: (err as Error).message };
+      return { text, error: (err as Error).message, truncated };
     }
-    return { text };
+    return { text, truncated };
   }
 
   private async makeCellProposal(cb: import("../util/cellBlocks").CellBlock): Promise<DiffProposal> {

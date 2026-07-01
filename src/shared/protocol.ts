@@ -10,6 +10,12 @@ export function isRenderablePath(filePath: string): boolean {
   return /\.(html?|svg)$/i.test(filePath);
 }
 
+// Modo Projeto: linguagem e arquétipo de arquitetura escolhidos pelo dev para gerar um projeto completo.
+export type ProjectLanguage = "python" | "typescript" | "java" | "go";
+export type ProjectArchitecture = "hexagonal" | "clean" | "layered" | "mvc";
+export const PROJECT_LANGUAGES: ProjectLanguage[] = ["python", "typescript", "java", "go"];
+export const PROJECT_ARCHITECTURES: ProjectArchitecture[] = ["hexagonal", "clean", "layered", "mvc"];
+
 // Esforço de raciocínio do modelo (gpt-oss e afins). Mais esforço = raciocínio mais longo e melhor,
 // porém mais lento — por isso o timeout é elevado automaticamente junto (ver TIMEOUT_BY_EFFORT).
 export type ReasoningEffort = "low" | "medium" | "high";
@@ -218,6 +224,7 @@ export type WebviewToExt =
   | { type: "provider/openSettings" }
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }
+  | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
   | { type: "tests/run" }
   | { type: "chat/abort"; taskId: string }
   | { type: "proposal/apply"; proposalId: string }
