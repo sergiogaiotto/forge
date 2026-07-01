@@ -333,9 +333,10 @@
             "**/__pycache__/**",
             "**/.ipynb_checkpoints/**",
             "**/target/**",
-            "**/.forge/**"
+            "**/.forge/**",
+            "**/.env"
           ],
-          "markdownDescription": "Globs de arquivos/pastas excluídos da indexação."
+          "markdownDescription": "Globs de arquivos/pastas excluídos da indexação. Inclui `.env` por padrão. O casamento é por substring do caminho (após remover `**/` e `/**`); evite padrões que casem código legítimo (ex.: `secret` excluiria `credential_service.py`)."
         },
         "forge.telemetry.enabled": {
           "type": "boolean",

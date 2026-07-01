@@ -120,6 +120,45 @@ export interface RagView {
   dimensions: number; // 0 = padrão do modelo
 }
 
+// ---- Visualizador read-only de Skills e RAG (o dev inspeciona o que é injetado) ----
+export interface SkillInspectView {
+  name: string;
+  description: string;
+  source: "managed" | "user" | "workspace";
+  enabled: boolean;
+  relFile: string; // caminho amigável do SKILL.md (raiz + nome, sem expor o caminho absoluto todo)
+  validators: string[]; // ids dos validadores da skill
+}
+
+export interface RagChunkView {
+  id: string;
+  startLine: number;
+  endLine: number;
+  symbol?: string;
+  hasVector: boolean;
+  preview: string; // primeiras linhas do trecho (read-only, truncado)
+}
+
+export interface RagFileView {
+  relPath: string;
+  language: string;
+  chunks: number;
+}
+
+export interface RagInspectView {
+  enabled: boolean;
+  ready: boolean;
+  mode: "embeddings" | "lexical";
+  files: number;
+  chunks: number;
+  maxChunks: number;
+  capped: boolean;
+  embeddingsUrl: string;
+  embeddingModel: string;
+  dimensions: number;
+  fileList: RagFileView[];
+}
+
 // Visão do perfil do projeto para o painel da webview (stack detectada + papel + regras).
 export interface ProfileView {
   stack: {
@@ -220,7 +259,11 @@ export type ExtToWebview =
   | { type: "charter/state"; sections: CharterSections }
   | { type: "charter/drafting"; section: CharterKey }
   | { type: "charter/drafted"; section: CharterKey; text: string }
-  | { type: "charter/error"; section: CharterKey; message: string };
+  | { type: "charter/error"; section: CharterKey; message: string }
+  | { type: "skills/inspect"; skills: SkillInspectView[] }
+  | { type: "skills/body"; name: string; body: string }
+  | { type: "rag/inspect"; index: RagInspectView }
+  | { type: "rag/file"; relPath: string; chunks: RagChunkView[] };
 
 // ---- Webview → Host da extensão ------------------------------------------------
 
@@ -249,6 +292,10 @@ export type WebviewToExt =
   | { type: "charter/open" }
   | { type: "charter/draft"; section: CharterKey; brief: string }
   | { type: "charter/save"; sections: CharterSections }
+  | { type: "charter/genTests"; fr: string; nfr: string }
+  | { type: "inspect/open" }
+  | { type: "skills/body"; name: string }
+  | { type: "rag/file"; relPath: string }
   | { type: "run/file"; filePath: string; proposalId?: string }
   | { type: "preview/open"; filePath: string; proposalId?: string }
   | { type: "proposal/applyAndRun"; proposalId: string }

@@ -1,4 +1,15 @@
-import type { CharterKey, CharterSections, DiffProposal, ExtToWebview, ForgeState, ProfileView, ValidatorResult } from "../../src/shared/protocol";
+import type {
+  CharterKey,
+  CharterSections,
+  DiffProposal,
+  ExtToWebview,
+  ForgeState,
+  ProfileView,
+  RagChunkView,
+  RagInspectView,
+  SkillInspectView,
+  ValidatorResult,
+} from "../../src/shared/protocol";
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 export type { ProfileView } from "../../src/shared/protocol";
 
@@ -69,7 +80,15 @@ export interface UIState {
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
   profile: ProfileView | null;
   charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
+  inspect: {
+    skills: SkillInspectView[];
+    rag: RagInspectView | null;
+    skillBody: Record<string, string>; // name → corpo do SKILL.md (cache sob demanda)
+    ragFile: Record<string, RagChunkView[]>; // relPath → chunks (cache sob demanda)
+  } | null;
 }
+
+const emptyInspect = (): NonNullable<UIState["inspect"]> => ({ skills: [], rag: null, skillBody: {}, ragFile: {} });
 
 const noDrafting = (): Record<CharterKey, boolean> =>
   CHARTER_KEYS.reduce((a, k) => ({ ...a, [k]: false }), {} as Record<CharterKey, boolean>);
@@ -89,6 +108,7 @@ export const initialState: UIState = {
   attachments: [],
   profile: null,
   charter: null,
+  inspect: null,
 };
 
 export type Action =
@@ -253,6 +273,16 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         toast: { level: "error", message: msg.message, seq: ++toastSeq },
         charter: state.charter ? { ...state.charter, drafting: { ...state.charter.drafting, [msg.section]: false } } : state.charter,
       };
+    case "skills/inspect":
+      // Reabrir o Índice re-emite a lista → zera o cache de corpos (evita SKILL.md stale após editar/reindexar).
+      return { ...state, inspect: { ...(state.inspect ?? emptyInspect()), skills: msg.skills, skillBody: {} } };
+    case "skills/body":
+      return { ...state, inspect: { ...(state.inspect ?? emptyInspect()), skillBody: { ...(state.inspect?.skillBody ?? {}), [msg.name]: msg.body } } };
+    case "rag/inspect":
+      // idem para os chunks (o índice pode ter sido reconstruído).
+      return { ...state, inspect: { ...(state.inspect ?? emptyInspect()), rag: msg.index, ragFile: {} } };
+    case "rag/file":
+      return { ...state, inspect: { ...(state.inspect ?? emptyInspect()), ragFile: { ...(state.inspect?.ragFile ?? {}), [msg.relPath]: msg.chunks } } };
     case "proposal/discarded":
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "discarded" }));
     case "run/start": {

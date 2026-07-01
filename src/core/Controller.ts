@@ -25,6 +25,7 @@ import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector"
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { buildVenvSetupCommand, findVenvPython, resolveTestCommand } from "../util/pythonEnv";
+import { redactSecrets } from "../util/redact";
 import { deriveBudget } from "./ContextBudget";
 import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
@@ -49,7 +50,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
-import { buildBasePrompt, buildCharterSystemPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildCharterSystemPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
@@ -537,6 +538,89 @@ export class Controller {
     void this.postProfileState(); // as regras podem ter mudado
   }
 
+  // Requisitos → Testes: gera testes de aceitação (modo TDD, propostas aplicáveis) a partir dos
+  // Requisitos Funcionais/Não Funcionais do charter. Recebe os requisitos ATUAIS do wizard (mesmo não
+  // salvos), evitando divergência com o project.md em disco. Reusa todo o pipeline de geração/proposta.
+  async generateAcceptanceTests(fr: string, nfr: string): Promise<void> {
+    if (!fr.trim() && !nfr.trim()) {
+      this.post({
+        type: "notice",
+        level: "warn",
+        message: "Preencha os Requisitos (funcionais/não funcionais) no Charter antes de gerar os testes de aceitação.",
+      });
+      return;
+    }
+    await this.startTask(buildAcceptanceTestsRequest(fr, nfr), "tdd");
+  }
+
+  // ---- Visualizador read-only de Skills e RAG (o dev inspeciona o que é injetado) ------
+
+  // Abre o inspetor: envia a lista de skills e o resumo do índice RAG (dados já em memória).
+  async inspectOpen(): Promise<void> {
+    this.post({
+      type: "skills/inspect",
+      skills: this.skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        source: s.source,
+        enabled: s.enabled,
+        relFile: `${s.source}/${path.basename(s.path)}/SKILL.md`, // amigável (não expõe o caminho absoluto/username)
+        validators: s.validators.map((v) => v.id),
+      })),
+    });
+    const st = this.rag.status();
+    const lim = this.rag.limits();
+    const ragCfg = this.config.rag();
+    this.post({
+      type: "rag/inspect",
+      index: {
+        enabled: ragCfg.enabled,
+        ready: st.ready,
+        mode: st.mode,
+        files: st.files,
+        chunks: st.chunks,
+        maxChunks: lim.maxChunks,
+        capped: lim.capped,
+        embeddingsUrl: ragCfg.embeddingsUrl,
+        embeddingModel: ragCfg.embeddingModel,
+        dimensions: ragCfg.embeddingDimensions,
+        fileList: this.rag.listIndexedFiles(),
+      },
+    });
+  }
+
+  // Carrega o corpo (markdown) de uma SKILL.md sob demanda — read-only.
+  async inspectSkillBody(name: string): Promise<void> {
+    const skill = this.skills.find((s) => s.name === name);
+    if (!skill) {
+      // Sempre responde (senão o painel de detalhe fica preso em "carregando…" se a skill sumiu num reindex).
+      this.post({ type: "skills/body", name, body: "(skill não encontrada — reabra o Índice)" });
+      return;
+    }
+    let body = "";
+    try {
+      body = await this.loader.loadBody(skill);
+    } catch (e) {
+      body = `(erro ao ler SKILL.md: ${(e as Error)?.message ?? String(e)})`;
+    }
+    this.post({ type: "skills/body", name, body });
+  }
+
+  // Chunks indexados de um arquivo (read-only): linhas, símbolo, se tem vetor, e um preview truncado.
+  // O preview é REDIGIDO (mascara valores de segredo tipo `api_key: …`) — o viewer não deve virar uma
+  // superfície fácil de extrair credenciais que por acaso tenham sido indexadas.
+  inspectRagFile(relPath: string): void {
+    const chunks = this.rag.fileChunks(relPath).map((c) => ({
+      id: c.id,
+      startLine: c.startLine,
+      endLine: c.endLine,
+      symbol: c.symbol,
+      hasVector: c.hasVector,
+      preview: redactSecrets(c.text.split("\n").slice(0, 8).join("\n")).slice(0, 600),
+    }));
+    this.post({ type: "rag/file", relPath, chunks });
+  }
+
   // Configura a observabilidade direta (sink Langfuse): guarda a secretKey no SecretStorage
   // (nunca em settings, RNF-010). baseUrl/publicKey/enabled ficam em forge.observability.langfuse.*.
   async setupObservability(): Promise<void> {
@@ -802,6 +886,18 @@ export class Controller {
         break;
       case "charter/save":
         await this.saveCharter(msg.sections);
+        break;
+      case "charter/genTests":
+        await this.generateAcceptanceTests(msg.fr, msg.nfr);
+        break;
+      case "inspect/open":
+        await this.inspectOpen();
+        break;
+      case "skills/body":
+        await this.inspectSkillBody(msg.name);
+        break;
+      case "rag/file":
+        this.inspectRagFile(msg.relPath);
         break;
       case "signOut":
         await this.signOut();

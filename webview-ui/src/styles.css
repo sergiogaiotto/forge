@@ -864,6 +864,149 @@ h6.md-h {
 .charter-input:disabled {
   opacity: 0.6;
 }
+
+/* Visualizador read-only (Skills / RAG) */
+.inspect-modal {
+  max-width: 760px;
+  width: 94%;
+}
+.inspect-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+.inspect-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.inspect-tab.on {
+  color: #e6e6e6;
+  border-color: #5a5a5a;
+}
+.inspect-cols {
+  display: flex;
+  gap: 10px;
+  min-height: 260px;
+  max-height: 56vh;
+}
+.inspect-list {
+  flex: 0 0 40%;
+  overflow-y: auto;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 5px;
+}
+.inspect-detail {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.inspect-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.inspect-item:hover {
+  background: #232323;
+}
+.inspect-item.on {
+  background: #2b2b2b;
+}
+.inspect-item .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.inspect-item .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspect-item .nm.mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.inspect-item .src {
+  margin-left: auto;
+  font-size: 10px;
+  color: #9a9a9a;
+}
+.inspect-path {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #8a8a8a;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.inspect-md {
+  font-size: 12px;
+}
+.rag-status {
+  font-size: 11px;
+  color: #cfcfcf;
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid #2a2a2a;
+  margin-bottom: 6px;
+}
+.rag-status .muted {
+  color: #8a8a8a;
+}
+.rag-chunk {
+  margin-bottom: 8px;
+}
+.rag-chunk-head {
+  display: flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #9a9a9a;
+  margin-bottom: 3px;
+}
+.rag-chunk-body {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: #cbcbcb;
+  background: #1b1b1b;
+  border: 1px solid #2a2a2a;
+  border-radius: 5px;
+  padding: 6px 8px;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Selo de completude na proposta */
+.seal {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.seal.ok {
+  color: #86c98e;
+  background: rgba(134, 201, 142, 0.12);
+}
+.seal.partial {
+  color: #d8b35a;
+  background: rgba(216, 179, 90, 0.14);
+}
 .proj-select {
   font-size: 11px;
   font-family: var(--sans);
