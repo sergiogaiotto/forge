@@ -510,22 +510,50 @@ export class Controller {
     let text = "";
     let error: string | undefined;
     try {
-      const provider = createProvider(runtime, this.egress);
-      const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "charter");
+      const sr = this.structuredRuntime(runtime); // esforço "low" — evita truncar a seção do charter
+      const provider = createProvider(sr, this.egress);
+      const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "charter");
+      let truncated = false;
       for await (const chunk of provider.createMessage(buildCharterSystemPrompt(section), [{ role: "user", content: userMsg }], {
         timeoutMs: runtime.timeoutSeconds * 1000,
         extraHeaders: headers,
       })) {
         if (chunk.kind === "text") text += chunk.text;
+        else if (chunk.kind === "warning") truncated = true; // finish_reason=length: seção cortada
         else if (chunk.kind === "error") {
           error = chunk.message;
           break;
         }
       }
       if (error) this.post({ type: "charter/error", section, message: error });
-      // stripHarmony: remove o raciocínio/canal de análise que o gpt-oss pode vazar no content
-      // (ex.: "Now final output is markdown string. Proceed.") antes de cair no campo do wizard.
-      else this.post({ type: "charter/drafted", section, text: stripHarmony(text) });
+      else {
+        // stripHarmony: remove o raciocínio/canal de análise que o gpt-oss pode vazar no content
+        // (ex.: "Now final output is markdown string. Proceed.") antes de cair no campo do wizard.
+        const clean = stripHarmony(text);
+        if (!clean.trim()) {
+          // Resposta VAZIA (típico: o raciocínio consumiu todo o max_tokens e nenhum texto saiu).
+          // charter/error preserva o rascunho digitado — postar drafted:"" APAGARIA o texto do dev.
+          this.post({
+            type: "charter/error",
+            section,
+            message: truncated
+              ? "O modelo atingiu o limite de tokens antes de redigir a seção. Tente de novo; se persistir, aumente forge.provider.maxOutput."
+              : "O modelo não retornou conteúdo para a seção. Tente de novo.",
+          });
+        } else {
+          // NUNCA salvar seção cortada silenciosamente (aconteceu num project.md real: frases terminando
+          // no meio da palavra). O aviso vai ancorado NA SEÇÃO, dentro do modal — um toast ficaria
+          // atrás do backdrop do wizard e sumiria em 5s sem ser visto.
+          this.post({
+            type: "charter/drafted",
+            section,
+            text: clean,
+            warning: truncated
+              ? "A seção foi truncada no limite de tokens — o final pode estar faltando. Revise antes de salvar (ou redija de novo)."
+              : undefined,
+          });
+        }
+      }
     } catch (e) {
       error = (e as Error)?.message ?? String(e);
       this.post({ type: "charter/error", section, message: error });
@@ -601,9 +629,11 @@ export class Controller {
     // Narração do planejamento (o modal mostra a etapa atual em vez de um spinner estático).
     this.post({ type: "project/planStep", label: "Analisando os requisitos e desenhando a arquitetura…" });
     let out = "";
+    let truncated = false; // finish_reason=length em algum ponto do stream (consultada após o try)
     try {
-      const provider = createProvider(runtime, this.egress);
-      const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "project");
+      const sr = this.structuredRuntime(runtime); // esforço "low" — evita o raciocínio truncar o plano
+      const provider = createProvider(sr, this.egress);
+      const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "project");
       let gotText = false;
       const started = Date.now();
       let lastBeat = 0;
@@ -626,6 +656,8 @@ export class Controller {
             lastBeat = now;
             this.post({ type: "project/planStep", label: `Raciocinando sobre a arquitetura… (${Math.round((now - started) / 1000)}s)` });
           }
+        } else if (chunk.kind === "warning") {
+          truncated = true; // finish_reason=length: o raciocínio/output estourou o max_tokens
         } else if (chunk.kind === "error") {
           this.post({ type: "project/blueprintError", message: chunk.message });
           return;
@@ -636,13 +668,28 @@ export class Controller {
       return;
     }
     this.post({ type: "project/planStep", label: "Ordenando os arquivos por dependência…" });
-    const files = topoSort(parseBlueprint(out));
+    // O reparo de array truncado SÓ é habilitado com truncamento confirmado (finish_reason=length) —
+    // sem isso ele poderia fabricar um plano a partir de eco de schema no raciocínio vazado.
+    const files = topoSort(parseBlueprint(out, { salvageTruncated: truncated }));
     if (files.length === 0) {
-      this.post({ type: "project/blueprintError", message: "Não consegui montar o plano (resposta sem blueprint válido). Ajuste a descrição e tente de novo." });
+      this.post({
+        type: "project/blueprintError",
+        message: truncated
+          ? "O modelo atingiu o limite de tokens de saída antes de terminar o plano. Tente de novo; se persistir, aumente forge.provider.maxOutput ou reduza o escopo da descrição."
+          : "Não consegui montar o plano (resposta sem blueprint válido). Ajuste a descrição e tente de novo.",
+      });
       return;
     }
     this.projectSession = { language, architecture, brief: text, files: files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
-    this.post({ type: "project/blueprint", blueprint: { language, architecture, brief: text, files: this.projectSession.files } });
+    this.post({
+      type: "project/blueprint",
+      blueprint: { language, architecture, brief: text, files: this.projectSession.files },
+      // Truncou mas o reparo recuperou os objetos completos: plano PARCIAL utilizável. O aviso vai
+      // DENTRO do modal (um toast ficaria atrás do backdrop e sumiria em 5s sem ser visto).
+      warning: truncated
+        ? "A resposta truncou no limite de tokens e recuperei um plano parcial — arquivos do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
+        : undefined,
+    });
   }
 
   // Passo 2: gera o projeto GUIADO pelo blueprint aprovado (Task reusa continuação/proposta/validação).
@@ -1209,6 +1256,15 @@ export class Controller {
     // gpt-oss: o esforço eleva o piso de timeout (esforços maiores levam mais tempo), mas um override
     // maior do onboarding é respeitado — evita cortar respostas longas (arquivo completo) no meio.
     return { ...p, apiKey, maxTokens, reasoningEffort, timeoutSeconds: Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(reasoningEffort)) };
+  }
+
+  // Tarefas ESTRUTURADAS one-shot (blueprint, charter): rebaixa o esforço de raciocínio para "low"
+  // quando o modelo o suporta (gpt-oss). Esforço ALTO faz o raciocínio DEVORAR o max_tokens e TRUNCAR o
+  // output final — o array do plano fica incompleto (parseBlueprint → []) e as seções do charter são
+  // cortadas no meio da palavra. Essas tarefas são estruturais, não precisam de raciocínio profundo;
+  // "low" garante que o output caiba. (A geração de CÓDIGO em startTask mantém o esforço do usuário.)
+  private structuredRuntime(runtime: ProviderRuntimeConfig): ProviderRuntimeConfig {
+    return runtime.reasoningEffort ? { ...runtime, reasoningEffort: "low" } : runtime;
   }
 
   async testProvider(setup: ProviderSetup): Promise<void> {

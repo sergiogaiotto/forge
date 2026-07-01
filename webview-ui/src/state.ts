@@ -85,12 +85,15 @@ export interface UIState {
   lastTestRun: RunResultData | null;
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
   profile: ProfileView | null;
-  charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
+  // notes: aviso/erro ancorado POR SEÇÃO, renderizado dentro do modal do wizard — um toast ficaria
+  // atrás do backdrop (z-index) e sumiria em 5s sem ser visto (ex.: seção truncada por limite de tokens).
+  charter: { sections: CharterSections; drafting: Record<CharterKey, boolean>; notes: CharterNotes } | null;
   // Fase F: blueprint do Modo Projeto + fase (planejando/gerando). Null = sem fluxo de projeto ativo.
   // planStep: etapa atual do planejamento (narração), mostrada enquanto o blueprint não chegou.
   // error: falha do blueprint — o modal FICA ABERTO mostrando o erro + "Tentar de novo" (não some).
+  // warning: aviso não-fatal DENTRO do modal (ex.: plano parcial recuperado após truncamento).
   // brief: o pedido em curso, para o retry reenviar sem redigitar.
-  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string; error?: string; brief?: ProjectBrief } | null;
+  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string; error?: string; warning?: string; brief?: ProjectBrief } | null;
   // Seq monotônico incrementado a cada "project/appliedAll" (aplicou todos os arquivos). O DevPanel
   // observa a mudança para desmarcar o Modo Projeto automaticamente (0 = nunca ocorreu).
   appliedAllAt: number;
@@ -101,6 +104,8 @@ export interface UIState {
     ragFile: Record<string, RagChunkView[]>; // relPath → chunks (cache sob demanda)
   } | null;
 }
+
+export type CharterNotes = Partial<Record<CharterKey, { level: "warn" | "error"; message: string }>>;
 
 const emptyInspect = (): NonNullable<UIState["inspect"]> => ({ skills: [], rag: null, skillBody: {}, ragFile: {} });
 
@@ -196,13 +201,22 @@ export function reducer(state: UIState, action: Action): UIState {
       // Oculta um cartão de execução/teste solto da thread (remove pelo id estável do cartão).
       return { ...state, runs: state.runs.filter((r) => r.id !== action.id) };
     case "charter/edit":
-      // Edição local de uma seção do charter (textarea controlado pelo estado global).
+      // Edição local de uma seção do charter (textarea controlado pelo estado global). Editar a seção
+      // dá baixa no aviso/erro dela (o dev viu e está corrigindo — o aviso ficaria stale).
       if (!state.charter) return state;
-      return { ...state, charter: { ...state.charter, sections: { ...state.charter.sections, [action.section]: action.text } } };
+      return {
+        ...state,
+        charter: {
+          ...state.charter,
+          sections: { ...state.charter.sections, [action.section]: action.text },
+          notes: { ...state.charter.notes, [action.section]: undefined },
+        },
+      };
     case "project/planning":
       return { ...state, project: { blueprint: null, busy: true, done: false, brief: action.brief } };
     case "project/generating":
-      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false, error: undefined } };
+      // Aprovou e começou a gerar → o aviso de "revise antes de aprovar" já cumpriu o papel.
+      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false, error: undefined, warning: undefined } };
     case "project/close":
       return { ...state, project: null };
     case "newConversation":
@@ -281,7 +295,8 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...state, profile: msg.profile };
     case "project/blueprint":
       // Blueprint chegou → limpa qualquer erro anterior, preserva o brief (para retry futuro).
-      return { ...state, project: { ...state.project, blueprint: msg.blueprint, busy: false, done: false, error: undefined } };
+      // warning (ex.: plano parcial após truncamento) renderiza DENTRO do modal, acima da lista.
+      return { ...state, project: { ...state.project, blueprint: msg.blueprint, busy: false, done: false, error: undefined, warning: msg.warning } };
     case "project/blueprintError":
       // NÃO fecha o modal: mantém aberto com o erro real + "Tentar de novo" (o brief está retido).
       // Fallback ao toast só se, por acaso, não houver modal (state.project null).
@@ -319,25 +334,54 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       // Fecha o modal do projeto sem erro (redirecionado ao chat pela defesa em profundidade do host).
       return { ...state, project: null };
     case "charter/state":
-      return { ...state, charter: { sections: msg.sections, drafting: noDrafting() } };
+      return { ...state, charter: { sections: msg.sections, drafting: noDrafting(), notes: {} } };
     case "charter/drafting":
-      return state.charter ? { ...state, charter: { ...state.charter, drafting: { ...state.charter.drafting, [msg.section]: true } } } : state;
-    case "charter/drafted":
+      // Novo rascunho em curso → limpa o aviso/erro anterior da seção (vai ser reavaliado ao chegar).
       return state.charter
         ? {
             ...state,
             charter: {
-              sections: { ...state.charter.sections, [msg.section]: msg.text },
-              drafting: { ...state.charter.drafting, [msg.section]: false },
+              ...state.charter,
+              drafting: { ...state.charter.drafting, [msg.section]: true },
+              notes: { ...state.charter.notes, [msg.section]: undefined },
             },
           }
         : state;
-    case "charter/error":
+    case "charter/drafted": {
+      if (!state.charter) return state;
+      // Defesa em profundidade: um drafted VAZIO nunca sobrescreve o texto do dev. O Controller já
+      // converte resposta vazia em charter/error; se esse guard regredir, o reducer segura a perda
+      // (o textarea é estado controlado — sobrescrever com "" destruiria o rascunho sem volta).
+      const empty = !msg.text.trim();
       return {
         ...state,
-        toast: { level: "error", message: msg.message, seq: ++toastSeq },
-        charter: state.charter ? { ...state.charter, drafting: { ...state.charter.drafting, [msg.section]: false } } : state.charter,
+        charter: {
+          sections: empty ? state.charter.sections : { ...state.charter.sections, [msg.section]: msg.text },
+          drafting: { ...state.charter.drafting, [msg.section]: false },
+          notes: {
+            ...state.charter.notes,
+            [msg.section]: empty
+              ? { level: "error" as const, message: "O modelo não retornou conteúdo para a seção. Tente de novo." }
+              : msg.warning
+                ? { level: "warn" as const, message: msg.warning }
+                : undefined,
+          },
+        },
       };
+    }
+    case "charter/error":
+      // Com o wizard aberto o erro ancora NA SEÇÃO (o toast renderiza atrás do backdrop do modal e
+      // some em 5s). Toast só como fallback quando não há wizard (não deveria ocorrer).
+      return state.charter
+        ? {
+            ...state,
+            charter: {
+              ...state.charter,
+              drafting: { ...state.charter.drafting, [msg.section]: false },
+              notes: { ...state.charter.notes, [msg.section]: { level: "error" as const, message: msg.message } },
+            },
+          }
+        : { ...state, toast: { level: "error", message: msg.message, seq: ++toastSeq } };
     case "skills/inspect":
       // Reabrir o Índice re-emite a lista → zera o cache de corpos (evita SKILL.md stale após editar/reindexar).
       return { ...state, inspect: { ...(state.inspect ?? emptyInspect()), skills: msg.skills, skillBody: {} } };

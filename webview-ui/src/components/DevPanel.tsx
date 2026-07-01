@@ -494,6 +494,13 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                 <Icon name="alert-triangle" size={14} /> {proj.error}
               </div>
             )}
+            {proj.warning && (
+              // Aviso não-fatal do planejamento (ex.: plano PARCIAL recuperado após truncamento por
+              // limite de tokens) — dentro do modal, onde o dev decide entre aprovar ou tentar de novo.
+              <div className="assistant-warning" style={{ marginTop: 4 }}>
+                <Icon name="alert-triangle" size={14} /> {proj.warning}
+              </div>
+            )}
             <div className="plan-hint">
               {proj.done
                 ? "Arquivos gerados. Clique em “Aplicar tudo” para gravá-los no workspace, ou feche para revisar antes."
@@ -738,6 +745,7 @@ function CharterWizard({
           <>
             {CHARTER_UI.map((sec) => {
               const drafting = charter.drafting[sec.key];
+              const note = charter.notes[sec.key];
               return (
                 <div key={sec.key} className="charter-sec">
                   <div className="profile-sec" style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
@@ -753,6 +761,13 @@ function CharterWizard({
                       {drafting ? "redigindo…" : "Redigir com IA"}
                     </button>
                   </div>
+                  {note && (
+                    // Aviso/erro do rascunho ANCORADO na seção (ex.: truncou no limite de tokens; modelo
+                    // não retornou conteúdo). Um toast ficaria atrás do backdrop e sumiria em 5s.
+                    <div className="assistant-warning" style={{ marginBottom: 4, ...(note.level === "error" ? { color: "#e5534b" } : {}) }}>
+                      <Icon name="alert-triangle" size={13} /> {note.message}
+                    </div>
+                  )}
                   <textarea
                     className="charter-input"
                     rows={sec.rows}

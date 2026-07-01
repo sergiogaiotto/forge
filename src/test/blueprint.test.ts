@@ -64,6 +64,63 @@ test("parseBlueprint: prosa volumosa com colchetes balanceados não atrapalha ne
   assert.deepEqual(parseBlueprint(text).map((f) => f.path), ["src/main.py", "a.py"]);
 });
 
+// REGRESSÃO (modal "resposta sem blueprint válido" no HubGPU): com esforço alto, o raciocínio do
+// gpt-oss consumia o max_tokens e a resposta parava NO MEIO do array (finish_reason=length). O reparo
+// de truncamento recupera os objetos completos em vez de devolver [] — mas SÓ com o truncamento
+// confirmado pelo chamador (salvageTruncated: true, derivado do finish_reason do stream).
+const TRUNC = { salvageTruncated: true };
+
+test("parseBlueprint: array TRUNCADO no meio de um objeto → recupera os arquivos completos", () => {
+  const text =
+    '[{"path":"src/a.py","purpose":"porta","deps":[]},{"path":"src/b.py","purpose":"impl","deps":["src/a.py"]},{"path":"src/c.py","purp';
+  assert.deepEqual(parseBlueprint(text, TRUNC).map((f) => f.path), ["src/a.py", "src/b.py"]);
+});
+
+test("parseBlueprint: array TRUNCADO no meio de uma STRING (com escape) → recupera os completos", () => {
+  const text = 'Plano:\n[{"path":"x.py","purpose":"p","deps":[]},{"path":"y.py","purpose":"diz \\"algo';
+  assert.deepEqual(parseBlueprint(text, TRUNC).map((f) => f.path), ["x.py"]);
+});
+
+test("parseBlueprint: TRUNCADO dentro do deps (array aninhado aberto) → recupera os anteriores", () => {
+  const text = '[{"path":"a.py","purpose":"a","deps":[]},{"path":"b.py","purpose":"b","deps":["a.py",';
+  assert.deepEqual(parseBlueprint(text, TRUNC).map((f) => f.path), ["a.py"]);
+});
+
+test("parseBlueprint: reparo é ÚLTIMO recurso — não compete com um array completo válido", () => {
+  const text = '[{"path":"real.py","purpose":"ok"}] e raciocínio vazado com [ aberto e {"path":"fake.py"';
+  assert.deepEqual(parseBlueprint(text, TRUNC).map((f) => f.path), ["real.py"]);
+});
+
+test("parseBlueprint: preâmbulo harmony vazado + array truncado → strip e reparo combinados", () => {
+  const text =
+    'Now final output is markdown string.\nProceed.\n[{"path":"src/main.py","purpose":"entry","deps":[]},{"path":"src/util.py","pur';
+  assert.deepEqual(parseBlueprint(text, TRUNC).map((f) => f.path), ["src/main.py"]);
+});
+
+test("parseBlueprint: truncado sem NENHUM objeto completo → [] (sem plano falso)", () => {
+  assert.deepEqual(parseBlueprint('[{"path":"src/a.py","purpose":"corta', TRUNC), []);
+});
+
+// REGRESSÃO (revisão adversarial): SEM truncamento confirmado o reparo NÃO roda — um eco do schema do
+// system prompt no raciocínio vazado ('[' nunca fechado) numa resposta NORMAL (prosa, sem array) tem
+// de continuar dando [] → erro claro, não um plano falso de 1 arquivo placeholder.
+test("parseBlueprint: eco de schema não fechado SEM truncamento → [] (reparo desabilitado)", () => {
+  const text =
+    'We need JSON like [{"path": "caminho/relativo/arquivo.ext", "purpose": "uma frase"} etc.\nDesculpe, preciso de mais detalhes sobre o projeto para planejar.';
+  assert.deepEqual(parseBlueprint(text), []);
+  assert.deepEqual(parseBlueprint(text, { salvageTruncated: false }), []);
+});
+
+// REGRESSÃO (revisão adversarial): o truncamento por limite de tokens corta sempre o FIM do texto,
+// logo o array da resposta final é o ÚLTIMO '[' não fechado. Um rascunho vazado ANTERIOR do canal
+// analysis (mais objetos completos) não pode vencer o array final real por "score".
+test("parseBlueprint: rascunho vazado ANTES não vence o array final truncado (mais tardio vence)", () => {
+  const text =
+    'I think the files could be [{"path":"draft/a.py","purpose":"x"},{"path":"draft/b.py","purpose":"y"},{"path":"draft/c.py","purpose":"z"}, maybe more...\n' +
+    'Final answer:\n[{"path":"src/real.py","purpose":"real entry","deps":[]},{"path":"src/real2.py","purp';
+  assert.deepEqual(parseBlueprint(text, TRUNC).map((f) => f.path), ["src/real.py"]);
+});
+
 test("topoSort põe dependências antes dos dependentes e tolera ciclos", () => {
   const files = [
     { path: "wiring.py", purpose: "", deps: ["domain.py", "adapter.py"] },
