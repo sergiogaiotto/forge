@@ -1,4 +1,5 @@
-import type { DiffProposal, ExtToWebview, ForgeState, ProfileView, ValidatorResult } from "../../src/shared/protocol";
+import type { CharterKey, CharterSections, DiffProposal, ExtToWebview, ForgeState, ProfileView, ValidatorResult } from "../../src/shared/protocol";
+import { CHARTER_KEYS } from "../../src/shared/protocol";
 export type { ProfileView } from "../../src/shared/protocol";
 
 // Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
@@ -67,7 +68,11 @@ export interface UIState {
   lastTestRun: RunResultData | null;
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
   profile: ProfileView | null;
+  charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
 }
+
+const noDrafting = (): Record<CharterKey, boolean> =>
+  CHARTER_KEYS.reduce((a, k) => ({ ...a, [k]: false }), {} as Record<CharterKey, boolean>);
 
 export const initialState: UIState = {
   forge: null,
@@ -83,6 +88,7 @@ export const initialState: UIState = {
   lastTestRun: null,
   attachments: [],
   profile: null,
+  charter: null,
 };
 
 export type Action =
@@ -94,6 +100,7 @@ export type Action =
   | { kind: "clearApproval" }
   | { kind: "clearProfile" }
   | { kind: "run/dismiss"; id: string }
+  | { kind: "charter/edit"; section: CharterKey; text: string }
   | { kind: "clearToast" };
 
 let toastSeq = 0;
@@ -148,6 +155,10 @@ export function reducer(state: UIState, action: Action): UIState {
     case "run/dismiss":
       // Oculta um cartão de execução/teste solto da thread (remove pelo id estável do cartão).
       return { ...state, runs: state.runs.filter((r) => r.id !== action.id) };
+    case "charter/edit":
+      // Edição local de uma seção do charter (textarea controlado pelo estado global).
+      if (!state.charter) return state;
+      return { ...state, charter: { ...state.charter, sections: { ...state.charter.sections, [action.section]: action.text } } };
     case "newConversation":
       return { ...state, messages: [], runs: [], busy: false, reviewed: false, lastFileRun: null, lastTestRun: null };
     case "providerTestPending":
@@ -222,6 +233,26 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...state, attachments: msg.items };
     case "profile/state":
       return { ...state, profile: msg.profile };
+    case "charter/state":
+      return { ...state, charter: { sections: msg.sections, drafting: noDrafting() } };
+    case "charter/drafting":
+      return state.charter ? { ...state, charter: { ...state.charter, drafting: { ...state.charter.drafting, [msg.section]: true } } } : state;
+    case "charter/drafted":
+      return state.charter
+        ? {
+            ...state,
+            charter: {
+              sections: { ...state.charter.sections, [msg.section]: msg.text },
+              drafting: { ...state.charter.drafting, [msg.section]: false },
+            },
+          }
+        : state;
+    case "charter/error":
+      return {
+        ...state,
+        toast: { level: "error", message: msg.message, seq: ++toastSeq },
+        charter: state.charter ? { ...state.charter, drafting: { ...state.charter.drafting, [msg.section]: false } } : state.charter,
+      };
     case "proposal/discarded":
       return mapProposals(state, msg.proposalId, (p) => ({ ...p, status: "discarded" }));
     case "run/start": {

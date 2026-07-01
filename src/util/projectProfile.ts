@@ -4,9 +4,82 @@
 //
 // Este módulo é PURO (sem dependências de runtime) para teste unitário. O IO de arquivo fica no
 // Controller, que chama estas funções.
+import type { CharterKey } from "../shared/protocol";
 
 export const PROFILE_RELPATH = ".forge/project.md";
 const RULES_SECTION = "## Regras do projeto";
+
+// Seções do "charter" do projeto (preenchidas pelo Charter Wizard, com auxílio do modelo). Ficam no
+// mesmo .forge/project.md, versionadas e injetadas no prompt como convenções do time.
+export const PURPOSE_SECTION = "## Propósito";
+export const FR_SECTION = "## Requisitos funcionais";
+export const NFR_SECTION = "## Requisitos não funcionais";
+
+// Chaves estáveis das seções editáveis pelo wizard (o webview usa estas chaves; o Controller mapeia
+// para o cabeçalho markdown correspondente). A ordem define o layout do arquivo quando criado do zero.
+export const CHARTER_SECTIONS: { key: CharterKey; header: string; label: string }[] = [
+  { key: "purpose", header: PURPOSE_SECTION, label: "Propósito" },
+  { key: "rules", header: RULES_SECTION, label: "Regras do projeto" },
+  { key: "fr", header: FR_SECTION, label: "Requisitos funcionais" },
+  { key: "nfr", header: NFR_SECTION, label: "Requisitos não funcionais" },
+];
+
+// Cabeçalho markdown de uma seção do charter, pela chave estável.
+export function charterHeader(key: CharterKey): string {
+  return (CHARTER_SECTIONS.find((s) => s.key === key) ?? CHARTER_SECTIONS[0]).header;
+}
+
+// Lê o CORPO de uma seção markdown (entre o cabeçalho e a próxima `## `), já com trim. "" se ausente.
+export function getSection(text: string | undefined, header: string): string {
+  const lines = (text ?? "").split("\n");
+  const start = lines.findIndex((l) => l.trim() === header);
+  if (start === -1) return "";
+  const body: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i])) break; // próxima seção encerra
+    body.push(lines[i]);
+  }
+  return body.join("\n").trim();
+}
+
+// Substitui (ou cria) o corpo de uma seção, preservando o restante do arquivo (frontmatter, outras
+// seções e a ordem). Line-based para robustez com CRLF/LF e tokens `$` do conteúdo do dev. Um `body`
+// vazio remove a seção. Sempre termina o arquivo com um único `\n`.
+export function setSection(text: string | undefined, header: string, body: string): string {
+  const base = text ?? "";
+  const lines = base.split("\n");
+  const start = lines.findIndex((l) => l.trim() === header);
+  // Sanitiza o CORPO: rebaixa qualquer linha `## …` (heading nível 2) para `### …`. Sem isso, um
+  // `## ` emitido pelo modelo (ou colado pelo dev) viraria uma FRONTEIRA de seção — partindo a seção,
+  // engolindo conteúdo no readback e poluindo o .forge/project.md (que é injetado em todo prompt).
+  const trimmed = body.trim().replace(/^##(\s)/gm, "###$1");
+
+  let before: string;
+  let after: string;
+  if (start === -1) {
+    // Semente SEM seções (só a intro): assim as seções do charter entram na ORDEM em que o chamador
+    // as grava (não pré-semeia "## Regras" antes de "## Propósito").
+    const seed = base.trim() ? base : profileIntro();
+    before = seed.replace(/\s*$/, "");
+    after = "";
+  } else {
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^##\s/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    before = lines.slice(0, start).join("\n").replace(/\s*$/, "");
+    after = lines.slice(end).join("\n").replace(/^\s*/, "").replace(/\s*$/, "");
+  }
+
+  const parts: string[] = [];
+  if (before) parts.push(before);
+  if (trimmed) parts.push(`${header}\n\n${trimmed}`); // body vazio → remove a seção
+  if (after) parts.push(after);
+  return parts.join("\n\n").replace(/\s*$/, "") + "\n";
+}
 
 // Normaliza um texto de regra: tira marcador de bullet, colapsa espaços e limita o tamanho.
 export function normalizeRule(raw: string): string {
@@ -86,15 +159,17 @@ export function renderProfileBlock(text: string | undefined, maxChars = 4000): s
 // Esqueleto inicial do arquivo, criado na primeira regra adicionada / ao abrir o perfil.
 // A stack NÃO é gravada aqui de propósito: ela é detectada do repositório e injetada ao vivo a cada
 // geração (sempre fresca, sem drift). Este arquivo é para o que o código não revela: papel e regras.
+// Cabeçalho/intro do perfil, SEM nenhuma seção `## ` — usado como semente por setSection (para não
+// forçar a ordem das seções) e como base do esqueleto completo.
+function profileIntro(): string {
+  return (
+    "# Perfil do projeto (FORGE)\n\n" +
+    "Arquivo versionado e injetado em todo prompt do FORGE.\n" +
+    "A stack (linguagem, libs, lint/tipos/testes) é detectada automaticamente do repositório —\n" +
+    "use este arquivo para o papel, as bibliotecas preferidas e as convenções/regras do time.\n"
+  );
+}
+
 export function defaultProfileSkeleton(): string {
-  return [
-    "# Perfil do projeto (FORGE)",
-    "",
-    "Arquivo versionado e injetado em todo prompt do FORGE.",
-    "A stack (linguagem, libs, lint/tipos/testes) é detectada automaticamente do repositório —",
-    "use este arquivo para o papel, as bibliotecas preferidas e as convenções/regras do time.",
-    "",
-    RULES_SECTION,
-    "",
-  ].join("\n");
+  return profileIntro() + "\n" + RULES_SECTION + "\n";
 }

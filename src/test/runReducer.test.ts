@@ -1,7 +1,34 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { DiffProposal, ExtToWebview } from "../shared/protocol";
+import type { CharterSections, DiffProposal, ExtToWebview } from "../shared/protocol";
 import { initialState, reducer, type UIState } from "../../webview-ui/src/state";
+
+const EMPTY_CHARTER: CharterSections = { purpose: "", rules: "", fr: "", nfr: "" };
+
+test("charter: state → drafting → drafted atualiza a seção e o status; edit é local", () => {
+  let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: { ...EMPTY_CHARTER, purpose: "inicial" } } });
+  assert.equal(s.charter?.sections.purpose, "inicial");
+  assert.equal(s.charter?.drafting.fr, false);
+  // pediu para redigir FR → drafting.fr = true
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafting", section: "fr" } });
+  assert.equal(s.charter?.drafting.fr, true);
+  // modelo respondeu → texto entra e drafting volta a false
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafted", section: "fr", text: "- RF-01: autenticar" } });
+  assert.equal(s.charter?.sections.fr, "- RF-01: autenticar");
+  assert.equal(s.charter?.drafting.fr, false);
+  // edição local do textarea
+  s = reducer(s, { kind: "charter/edit", section: "purpose", text: "novo propósito" });
+  assert.equal(s.charter?.sections.purpose, "novo propósito");
+});
+
+test("charter/error mostra toast e limpa o drafting da seção", () => {
+  let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: EMPTY_CHARTER } });
+  s = reducer(s, { kind: "ext", msg: { type: "charter/drafting", section: "nfr" } });
+  s = reducer(s, { kind: "ext", msg: { type: "charter/error", section: "nfr", message: "sem licença" } });
+  assert.equal(s.charter?.drafting.nfr, false);
+  assert.equal(s.toast?.level, "error");
+  assert.match(s.toast?.message ?? "", /sem licença/);
+});
 
 // Aplica uma sequência de mensagens do host (ExtToWebview) ao reducer da webview.
 function apply(state: UIState, ...msgs: ExtToWebview[]): UIState {
