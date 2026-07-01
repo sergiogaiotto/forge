@@ -10,6 +10,7 @@ import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
 import { CompletenessResult, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
+import { safeWorkspacePath } from "../util/safePath";
 import { buildContinuationPrompt, buildTailContinuation } from "./systemPrompt";
 
 // Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
@@ -201,9 +202,10 @@ export class Task {
   private async makeCellProposal(cb: import("../util/cellBlocks").CellBlock): Promise<DiffProposal> {
     const d = this.deps;
     let original = "";
-    if (cb.op === "replace" && cb.index !== undefined && d.workspaceRoot) {
+    const safe = d.workspaceRoot ? safeWorkspacePath(d.workspaceRoot, cb.path) : null;
+    if (cb.op === "replace" && cb.index !== undefined && safe) {
       try {
-        const content = await fs.readFile(path.join(d.workspaceRoot, cb.path), "utf8");
+        const content = await fs.readFile(safe, "utf8");
         original = parseNotebookCells(content)[cb.index]?.source ?? "";
       } catch {
         original = "";
@@ -228,9 +230,12 @@ export class Task {
   private async makeProposal(relPath: string, content: string): Promise<DiffProposal> {
     const d = this.deps;
     let original = "";
-    if (d.workspaceRoot) {
+    // Só lê o "original" se o caminho (vindo do modelo) estiver CONTIDO no workspace — não vaza conteúdo
+    // de arquivos externos (`../`, absoluto) para o diff. A escrita é barrada de novo no applyProposal.
+    const safe = d.workspaceRoot ? safeWorkspacePath(d.workspaceRoot, relPath) : null;
+    if (safe) {
       try {
-        original = await fs.readFile(path.join(d.workspaceRoot, relPath), "utf8");
+        original = await fs.readFile(safe, "utf8");
       } catch {
         original = "";
       }

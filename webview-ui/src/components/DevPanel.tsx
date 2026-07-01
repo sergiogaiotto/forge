@@ -11,7 +11,7 @@ import {
   ProjectArchitecture,
   ProjectLanguage,
 } from "../../../src/shared/protocol";
-import type { RagChunkView, SkillInspectView } from "../../../src/shared/protocol";
+import type { BlueprintFileView, ProjectFileStatus, RagChunkView, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
@@ -46,8 +46,10 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     const text = input.trim();
     if (!text || state.busy) return;
     if (projectMode) {
+      // Fase F: planeja um BLUEPRINT aprovável antes de gerar código.
       dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}] ${text}` });
-      post({ type: "project/start", text, language, architecture });
+      dispatch({ kind: "project/planning" });
+      post({ type: "project/blueprint", text, language, architecture });
     } else {
       dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
       post({ type: "chat/send", text, tdd });
@@ -381,6 +383,107 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       )}
       {showCharter && <CharterWizard state={state} dispatch={dispatch} onClose={() => setShowCharter(false)} />}
       {showInspect && <InspectPanel state={state} onClose={() => setShowInspect(false)} />}
+      {state.project && <ProjectPlanPanel state={state} dispatch={dispatch} />}
+    </div>
+  );
+}
+
+// Fase F: painel do blueprint (FileTree aprovável). Planeja → aprova → gera → aplica tudo.
+const STATUS_DOT: Record<ProjectFileStatus, string> = {
+  pending: "#5a5a5a",
+  generating: "#e0863c",
+  complete: "#86c98e",
+  applied: "#4ec9b0",
+  failed: "#d16969",
+};
+const STATUS_LABEL: Record<ProjectFileStatus, string> = {
+  pending: "pendente",
+  generating: "gerando…",
+  complete: "gerado",
+  applied: "aplicado",
+  failed: "não gerado",
+};
+
+function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
+  const proj = state.project!;
+  const bp = proj.blueprint;
+  const files: BlueprintFileView[] = bp?.files ?? [];
+  const anyComplete = files.some((f) => f.status === "complete");
+  const close = () => dispatch({ kind: "project/close" });
+  return (
+    <div className="modal-backdrop" onClick={proj.busy ? undefined : close}>
+      <div className="modal plan-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="card-title">
+          <Icon name="list-check" size={15} color="#e0863c" /> Blueprint do projeto
+          {bp ? <span className="plan-sub">· {bp.files.length} arquivos</span> : null}
+          <div className="spacer" />
+          {!proj.busy && (
+            <span className="icon-btn" title="Fechar" onClick={close}>
+              <Icon name="x" size={15} />
+            </span>
+          )}
+        </div>
+
+        {!bp ? (
+          <div className="profile-empty">
+            <Icon name="refresh" size={13} className="spin" /> Planejando o projeto…
+          </div>
+        ) : (
+          <>
+            <div className="plan-hint">Revise o plano. Ao aprovar, o FORGE gera cada arquivo na ordem de dependência.</div>
+            <div className="plan-list">
+              {files.map((f) => (
+                <div key={f.path} className="plan-item">
+                  <span className="dot" style={{ background: STATUS_DOT[f.status] }} title={STATUS_LABEL[f.status]} />
+                  <div className="plan-file">
+                    <span className="mono">{f.path}</span>
+                    <span className="purpose">{f.purpose}</span>
+                  </div>
+                  <span className="plan-st" style={{ color: STATUS_DOT[f.status] }}>
+                    {STATUS_LABEL[f.status]}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="actions" style={{ marginTop: 12, justifyContent: "flex-end", gap: 8 }}>
+              {!proj.done ? (
+                <>
+                  <button className="btn" disabled={proj.busy} onClick={() => { post({ type: "project/cancel" }); close(); }}>
+                    Cancelar
+                  </button>
+                  <button
+                    className="btn p"
+                    disabled={proj.busy}
+                    onClick={() => {
+                      dispatch({ kind: "project/generating" });
+                      post({ type: "project/generate" });
+                    }}
+                  >
+                    {proj.busy ? (
+                      <>
+                        <Icon name="refresh" size={13} className="spin" /> gerando…
+                      </>
+                    ) : (
+                      <>
+                        <Icon name="check" size={13} /> Aprovar e gerar
+                      </>
+                    )}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="btn" onClick={close}>
+                    Fechar
+                  </button>
+                  <button className="btn p" disabled={!anyComplete} title="Aplicar todos os arquivos gerados, na ordem de dependência" onClick={() => post({ type: "proposal/applyAll" })}>
+                    <Icon name="check" size={13} /> Aplicar tudo
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

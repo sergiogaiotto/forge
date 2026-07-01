@@ -16,6 +16,23 @@ export type CharterKey = "purpose" | "rules" | "fr" | "nfr";
 export type CharterSections = Record<CharterKey, string>;
 export const CHARTER_KEYS: CharterKey[] = ["purpose", "rules", "fr", "nfr"];
 
+// Modo Projeto — Fase F: blueprint aprovável (plano de arquivos) + status de orquestração.
+export interface BlueprintFile {
+  path: string;
+  purpose: string;
+  deps: string[];
+}
+export type ProjectFileStatus = "pending" | "generating" | "complete" | "applied" | "failed";
+export interface BlueprintFileView extends BlueprintFile {
+  status: ProjectFileStatus;
+}
+export interface ProjectBlueprintView {
+  language: ProjectLanguage;
+  architecture: ProjectArchitecture;
+  brief: string;
+  files: BlueprintFileView[];
+}
+
 // Modo Projeto: linguagem e arquétipo de arquitetura escolhidos pelo dev para gerar um projeto completo.
 export type ProjectLanguage = "python" | "typescript" | "java" | "go";
 export type ProjectArchitecture = "hexagonal" | "clean" | "layered" | "mvc";
@@ -263,7 +280,11 @@ export type ExtToWebview =
   | { type: "skills/inspect"; skills: SkillInspectView[] }
   | { type: "skills/body"; name: string; body: string }
   | { type: "rag/inspect"; index: RagInspectView }
-  | { type: "rag/file"; relPath: string; chunks: RagChunkView[] };
+  | { type: "rag/file"; relPath: string; chunks: RagChunkView[] }
+  | { type: "project/blueprint"; blueprint: ProjectBlueprintView }
+  | { type: "project/blueprintError"; message: string }
+  | { type: "project/status"; files: BlueprintFileView[] }
+  | { type: "project/done" };
 
 // ---- Webview → Host da extensão ------------------------------------------------
 
@@ -278,6 +299,10 @@ export type WebviewToExt =
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
+  | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
+  | { type: "project/generate" }
+  | { type: "project/cancel" }
+  | { type: "proposal/applyAll" }
   | { type: "tests/run" }
   | { type: "env/prepare" }
   | { type: "chat/abort"; taskId: string }

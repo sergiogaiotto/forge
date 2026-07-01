@@ -5,6 +5,7 @@ import type {
   ExtToWebview,
   ForgeState,
   ProfileView,
+  ProjectBlueprintView,
   RagChunkView,
   RagInspectView,
   SkillInspectView,
@@ -80,6 +81,8 @@ export interface UIState {
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
   profile: ProfileView | null;
   charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
+  // Fase F: blueprint do Modo Projeto + fase (planejando/gerando). Null = sem fluxo de projeto ativo.
+  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean } | null;
   inspect: {
     skills: SkillInspectView[];
     rag: RagInspectView | null;
@@ -108,6 +111,7 @@ export const initialState: UIState = {
   attachments: [],
   profile: null,
   charter: null,
+  project: null,
   inspect: null,
 };
 
@@ -121,6 +125,9 @@ export type Action =
   | { kind: "clearProfile" }
   | { kind: "run/dismiss"; id: string }
   | { kind: "charter/edit"; section: CharterKey; text: string }
+  | { kind: "project/planning" }
+  | { kind: "project/generating" }
+  | { kind: "project/close" }
   | { kind: "clearToast" };
 
 let toastSeq = 0;
@@ -179,6 +186,12 @@ export function reducer(state: UIState, action: Action): UIState {
       // Edição local de uma seção do charter (textarea controlado pelo estado global).
       if (!state.charter) return state;
       return { ...state, charter: { ...state.charter, sections: { ...state.charter.sections, [action.section]: action.text } } };
+    case "project/planning":
+      return { ...state, project: { blueprint: null, busy: true, done: false } };
+    case "project/generating":
+      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false } };
+    case "project/close":
+      return { ...state, project: null };
     case "newConversation":
       return { ...state, messages: [], runs: [], busy: false, reviewed: false, lastFileRun: null, lastTestRun: null };
     case "providerTestPending":
@@ -253,6 +266,16 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...state, attachments: msg.items };
     case "profile/state":
       return { ...state, profile: msg.profile };
+    case "project/blueprint":
+      return { ...state, project: { blueprint: msg.blueprint, busy: false, done: false } };
+    case "project/blueprintError":
+      return { ...state, project: null, toast: { level: "error", message: msg.message, seq: ++toastSeq } };
+    case "project/status":
+      return state.project?.blueprint
+        ? { ...state, project: { ...state.project, blueprint: { ...state.project.blueprint, files: msg.files } } }
+        : state;
+    case "project/done":
+      return state.project ? { ...state, project: { ...state.project, busy: false, done: true } } : state;
     case "charter/state":
       return { ...state, charter: { sections: msg.sections, drafting: noDrafting() } };
     case "charter/drafting":
