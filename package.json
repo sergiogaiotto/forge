@@ -403,6 +403,16 @@
           "default": "",
           "markdownDescription": "Caminho para um **perfil de projeto gerido pelo admin** (markdown — padrões/convenções da organização). Quando definido, é injetado em todo prompt como camada de **menor precedência**: o `.forge/project.md` do workspace ainda tem a palavra final. Vazio = sem camada admin."
         },
+        "forge.ocr.tesseractPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Caminho do executável `tesseract` para o **OCR ao colar um print**. Vazio = **auto-detecção** (PATH + locais padrão de instalação, inclusive por-usuário em `%LOCALAPPDATA%`). Defina se o tesseract estiver num local não-padrão/**portable** — assim não precisa de admin nem instalar em `Program Files`. Sem tesseract, o OCR só mostra um aviso; o resto do FORGE funciona normal."
+        },
+        "forge.ocr.tessdataPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Pasta `tessdata` com os idiomas do OCR (ex.: `eng.traineddata`, `por.traineddata`). Vazio = usa o `tessdata` padrão do tesseract. Aponte para uma pasta **gravável do usuário** para adicionar o `por` **sem admin**."
+        },
         "forge.observability.langfuse.enabled": {
           "type": "boolean",
           "default": false,

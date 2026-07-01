@@ -40,6 +40,17 @@ export class ManagedConfig {
     return this.cfg().get<string>("project.managedProfile", "").trim();
   }
 
+  // OCR (colar print): caminho do executável tesseract (vazio = auto-detecção no PATH + locais padrão,
+  // inclusive por-usuário) e pasta tessdata dos idiomas (vazio = tessdata padrão do tesseract). Permite
+  // usar um tesseract portable/per-user e adicionar idiomas sem admin.
+  ocrTesseractPath(): string {
+    return this.cfg().get<string>("ocr.tesseractPath", "").trim();
+  }
+
+  ocrTessdataPath(): string {
+    return this.cfg().get<string>("ocr.tessdataPath", "").trim();
+  }
+
   retrievalThreshold(): number {
     return this.cfg().get<number>("skills.retrievalThreshold", 15);
   }

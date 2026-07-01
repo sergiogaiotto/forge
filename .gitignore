@@ -3,6 +3,8 @@ dist/
 out/
 *.vsix
 .vscode-test/
+# Dados locais do Claude Code (sessões, worktrees, memória) — tooling, nunca versionar.
+.claude/
 admin-cli/keys/
 gateway/.env
 *.log

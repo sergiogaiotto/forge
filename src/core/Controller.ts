@@ -57,7 +57,7 @@ import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { parseBlueprint, topoSort } from "../util/blueprint";
 import { classifyProjectIntent } from "../util/projectIntent";
-import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs } from "../util/ocr";
+import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
@@ -1600,14 +1600,19 @@ export class Controller {
       return;
     }
     this.ocrInFlight = true;
+    // Resolve QUAL tesseract usar (config explícita → locais padrão/por-usuário → PATH) e a pasta de
+    // idiomas (tessdata) opcional. Permite tesseract portable/per-user e `por` sem admin, sem embutir binário.
+    const cmd = resolveTesseractCmd(this.config.ocrTesseractPath(), tesseractCandidates(process.env), existsSync);
+    const tdPath = this.config.ocrTessdataPath();
+    const tdArgs = tdPath ? ["--tessdata-dir", tdPath] : [];
     const tmp = path.join(os.tmpdir(), `forge-ocr-${crypto.randomUUID()}.${parsed.ext || "png"}`);
     let wrote = false; // distingue a falha de GRAVAR o temp da falha de RODAR o tesseract
     try {
       await fs.writeFile(tmp, buf);
       wrote = true;
       this.post({ type: "notice", level: "info", message: "Extraindo texto do print (OCR)…" });
-      const langs = pickOcrLangs(await this.listTesseractLangs());
-      const text = (await this.runTesseract(tmp, langs)).trim();
+      const langs = pickOcrLangs(await this.listTesseractLangs(cmd, tdArgs));
+      const text = (await this.runTesseract(cmd, tmp, langs, tdArgs)).trim();
       if (!text) {
         this.post({ type: "notice", level: "warn", message: "Não encontrei texto legível no print. Se for um erro/log, cole o texto direto." });
         return;
@@ -1621,10 +1626,14 @@ export class Controller {
         this.post({
           type: "notice",
           level: "warn",
-          message: "OCR requer o 'tesseract' instalado no sistema e no PATH (ex.: choco install tesseract-ocr). Enquanto isso, cole o texto do log direto no chat.",
+          message:
+            "OCR requer o 'tesseract' acessível (no PATH, ou configure o caminho em forge.ocr.tesseractPath — pode ser um tesseract portable, sem admin). Enquanto isso, cole o texto do log direto no chat.",
         });
       } else {
-        this.post({ type: "notice", level: "error", message: `Falha no OCR do print: ${err.message ?? String(err)}` });
+        // Se o dev apontou um tessdata próprio, o erro do tesseract costuma ser "data file not found" —
+        // aponta a config a revisar em vez de só a mensagem crua.
+        const hint = tdPath ? " Verifique forge.ocr.tessdataPath (a pasta precisa conter os .traineddata dos idiomas)." : "";
+        this.post({ type: "notice", level: "error", message: `Falha no OCR do print: ${err.message ?? String(err)}${hint}` });
       }
     } finally {
       this.ocrInFlight = false;
@@ -1634,20 +1643,20 @@ export class Controller {
 
   // Idiomas instalados no tesseract (`--list-langs`). Se o binário faltar/erro, retorna [] (o run
   // principal surfacia o ENOENT com a mensagem de instalação). `--list-langs` costuma escrever no stderr.
-  private listTesseractLangs(): Promise<string[]> {
+  private listTesseractLangs(cmd: string, tdArgs: string[]): Promise<string[]> {
     return new Promise((resolve) => {
-      execFile("tesseract", ["--list-langs"], { timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
+      execFile(cmd, [...tdArgs, "--list-langs"], { timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
         resolve(err ? [] : parseTesseractLangs(`${stdout}\n${stderr}`));
       });
     });
   }
 
-  // Roda o OCR: `tesseract <img> stdout [-l por+eng]`. Timeout e buffer limitados; nunca trava a extensão.
-  private runTesseract(imgPath: string, langs: string[]): Promise<string> {
+  // Roda o OCR: `tesseract [--tessdata-dir DIR] <img> stdout [-l por+eng]`. Timeout e buffer limitados.
+  private runTesseract(cmd: string, imgPath: string, langs: string[], tdArgs: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      const args = [imgPath, "stdout"];
+      const args = [...tdArgs, imgPath, "stdout"];
       if (langs.length) args.push("-l", langs.join("+"));
-      execFile("tesseract", args, { timeout: 30000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
+      execFile(cmd, args, { timeout: 30000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
         if (err) reject(err);
         else resolve(stdout);
       });

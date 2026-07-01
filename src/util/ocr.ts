@@ -36,3 +36,27 @@ export function parseTesseractLangs(output: string): string[] {
     .map((s) => s.trim())
     .filter((s) => s.length > 0 && !/^List of/i.test(s));
 }
+
+// Locais PADRÃO de instalação do tesseract no Windows, em ordem de preferência — inclui o caminho
+// POR-USUÁRIO (`%LOCALAPPDATA%\Programs\...`), que é onde uma instalação sem admin / portable costuma
+// ficar. Em outros SOs os env vars não existem → lista vazia → cai no `tesseract` do PATH (brew/apt).
+export function tesseractCandidates(env: Record<string, string | undefined>): string[] {
+  const join = (base: string | undefined, ...parts: string[]) => (base ? [base.replace(/[\\/]+$/, ""), ...parts].join("\\") : null);
+  return [
+    join(env.ProgramFiles, "Tesseract-OCR", "tesseract.exe"),
+    join(env["ProgramFiles(x86)"], "Tesseract-OCR", "tesseract.exe"),
+    join(env.LOCALAPPDATA, "Programs", "Tesseract-OCR", "tesseract.exe"), // instalação por-usuário (sem admin)
+    join(env.LOCALAPPDATA, "Tesseract-OCR", "tesseract.exe"),
+    join(env.USERPROFILE, "scoop", "apps", "tesseract", "current", "tesseract.exe"), // scoop (per-user)
+  ].filter((p): p is string => !!p);
+}
+
+// Resolve QUAL comando/caminho de tesseract usar: (1) o configurado explicitamente (respeitado como-está,
+// mesmo que aponte para portable), senão (2) o 1º candidato que EXISTE em disco, senão (3) "tesseract"
+// no PATH (o spawn dá ENOENT se faltar → o chamador mostra a dica). Puro/testável (fileExists injetado).
+export function resolveTesseractCmd(configuredPath: string, candidates: string[], fileExists: (p: string) => boolean): string {
+  const cfg = (configuredPath ?? "").trim();
+  if (cfg) return cfg;
+  for (const c of candidates) if (fileExists(c)) return c;
+  return "tesseract";
+}
