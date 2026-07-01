@@ -11,6 +11,7 @@ import {
   ProjectArchitecture,
   ProjectLanguage,
 } from "../../../src/shared/protocol";
+import type { RagChunkView, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
@@ -30,6 +31,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [attachMenu, setAttachMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showCharter, setShowCharter] = useState(false);
+  const [showInspect, setShowInspect] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -266,6 +268,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             </span>
             <span
               className="pill"
+              title="Inspecionar (read-only) as skills injetadas e o que está indexado no RAG"
+              onClick={() => {
+                setShowInspect(true);
+                post({ type: "inspect/open" });
+              }}
+            >
+              <Icon name="database" size={14} color="#7fb3d5" /> Índice
+            </span>
+            <span
+              className="pill"
               title="Perfil do projeto — stack, papel e convenções"
               onClick={() => {
                 dispatch({ kind: "clearProfile" }); // força "carregando…" e evita dados stale ao reabrir
@@ -368,6 +380,145 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         />
       )}
       {showCharter && <CharterWizard state={state} dispatch={dispatch} onClose={() => setShowCharter(false)} />}
+      {showInspect && <InspectPanel state={state} onClose={() => setShowInspect(false)} />}
+    </div>
+  );
+}
+
+// Visualizador read-only: aba de Skills (lista + corpo do SKILL.md) e aba de RAG (status + arquivos
+// indexados + chunks de um arquivo). Só LEITURA — os dados vêm do que já está em memória no host.
+function InspectPanel({ state, onClose }: { state: UIState; onClose: () => void }): JSX.Element {
+  const [tab, setTab] = useState<"skills" | "rag">("skills");
+  const [selSkill, setSelSkill] = useState<string | null>(null);
+  const [selFile, setSelFile] = useState<string | null>(null);
+  const insp = state.inspect;
+  const rag = insp?.rag;
+
+  // Usa "chave presente?" (não truthiness) — um SKILL.md só-frontmatter tem corpo "" e não deve
+  // reler o disco a cada clique.
+  const openSkill = (s: SkillInspectView) => {
+    setSelSkill(s.name);
+    if (!insp || !(s.name in insp.skillBody)) post({ type: "skills/body", name: s.name });
+  };
+  const openFile = (relPath: string) => {
+    setSelFile(relPath);
+    if (!insp || !(relPath in insp.ragFile)) post({ type: "rag/file", relPath });
+  };
+
+  const srcColor: Record<string, string> = { managed: "#c9a26d", user: "#7fb3d5", workspace: "#86c98e" };
+  const body = selSkill ? insp?.skillBody[selSkill] : undefined;
+  const chunks: RagChunkView[] | undefined = selFile ? insp?.ragFile[selFile] : undefined;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal inspect-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="card-title">
+          <Icon name="database" size={15} color="#7fb3d5" /> Índice · o que o FORGE injeta
+          <div className="spacer" />
+          <span className="icon-btn" title="Fechar" onClick={onClose}>
+            <Icon name="x" size={15} />
+          </span>
+        </div>
+
+        <div className="inspect-tabs">
+          <button className={`inspect-tab ${tab === "skills" ? "on" : ""}`} onClick={() => setTab("skills")}>
+            <Icon name="puzzle" size={12} /> Skills {insp ? `· ${insp.skills.length}` : ""}
+          </button>
+          <button className={`inspect-tab ${tab === "rag" ? "on" : ""}`} onClick={() => setTab("rag")}>
+            <Icon name="database" size={12} /> RAG {rag ? `· ${rag.files} arq.` : ""}
+          </button>
+        </div>
+
+        {tab === "skills" ? (
+          <div className="inspect-cols">
+            <div className="inspect-list">
+              {!insp ? (
+                <div className="profile-empty">carregando…</div>
+              ) : insp.skills.length === 0 ? (
+                <div className="profile-empty">nenhuma skill</div>
+              ) : (
+                insp.skills.map((s) => (
+                  <div key={s.name} className={`inspect-item ${selSkill === s.name ? "on" : ""}`} onClick={() => openSkill(s)}>
+                    <span className="dot" style={{ background: s.enabled ? "#86c98e" : "#555" }} />
+                    <span className="nm">{s.name}</span>
+                    <span className="src" style={{ color: srcColor[s.source] ?? "#9a9a9a" }}>
+                      {s.source}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="inspect-detail">
+              {!selSkill ? (
+                <div className="profile-empty">selecione uma skill para ver o SKILL.md</div>
+              ) : body === undefined ? (
+                <div className="profile-empty">carregando…</div>
+              ) : (
+                <>
+                  <div className="inspect-path">{insp?.skills.find((s) => s.name === selSkill)?.relFile}</div>
+                  <div className="inspect-md">
+                    <Markdown text={body} />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="inspect-cols">
+            <div className="inspect-list">
+              {!rag ? (
+                <div className="profile-empty">carregando…</div>
+              ) : (
+                <>
+                  <div className="rag-status">
+                    <div>
+                      modo <b>{rag.mode}</b> · {rag.ready ? "pronto" : "indexando…"}
+                    </div>
+                    <div>
+                      {rag.files} arquivos · {rag.chunks} chunks{rag.capped ? ` (teto ${rag.maxChunks})` : ""}
+                    </div>
+                    <div className="muted">
+                      {rag.mode === "embeddings" ? `${rag.embeddingModel}${rag.dimensions ? ` · ${rag.dimensions}d` : ""}` : "BM25 lexical (sem embeddings)"}
+                    </div>
+                  </div>
+                  {rag.fileList.length === 0 ? (
+                    <div className="profile-empty">nada indexado</div>
+                  ) : (
+                    rag.fileList.map((f) => (
+                      <div key={f.relPath} className={`inspect-item ${selFile === f.relPath ? "on" : ""}`} onClick={() => openFile(f.relPath)}>
+                        <span className="nm mono">{f.relPath}</span>
+                        <span className="src">{f.chunks}</span>
+                      </div>
+                    ))
+                  )}
+                </>
+              )}
+            </div>
+            <div className="inspect-detail">
+              {!selFile ? (
+                <div className="profile-empty">selecione um arquivo para ver os chunks indexados</div>
+              ) : chunks === undefined ? (
+                <div className="profile-empty">carregando…</div>
+              ) : (
+                <>
+                  <div className="inspect-path">{selFile}</div>
+                  {chunks.map((c) => (
+                    <div key={c.id} className="rag-chunk">
+                      <div className="rag-chunk-head">
+                        L{c.startLine}–{c.endLine}
+                        {c.symbol ? ` · ${c.symbol}` : ""}
+                        <span className="spacer" />
+                        {c.hasVector ? "vetor ✓" : "sem vetor"}
+                      </div>
+                      <pre className="rag-chunk-body">{c.preview}</pre>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

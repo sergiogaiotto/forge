@@ -21,6 +21,38 @@ test("charter: state → drafting → drafted atualiza a seção e o status; edi
   assert.equal(s.charter?.sections.purpose, "novo propósito");
 });
 
+test("inspect: skills/inspect + skills/body + rag/inspect + rag/file preenchem o estado do viewer", () => {
+  let s = reducer(initialState, {
+    kind: "ext",
+    msg: { type: "skills/inspect", skills: [{ name: "sql", description: "d", source: "workspace", enabled: true, relFile: "/x/SKILL.md", validators: [] }] },
+  });
+  assert.equal(s.inspect?.skills[0].name, "sql");
+  s = reducer(s, { kind: "ext", msg: { type: "skills/body", name: "sql", body: "# corpo" } });
+  assert.equal(s.inspect?.skillBody["sql"], "# corpo");
+  s = reducer(s, {
+    kind: "ext",
+    msg: {
+      type: "rag/inspect",
+      index: { enabled: true, ready: true, mode: "lexical", files: 2, chunks: 5, maxChunks: 4000, capped: false, embeddingsUrl: "", embeddingModel: "m", dimensions: 0, fileList: [{ relPath: "a.py", language: "python", chunks: 3 }] },
+    },
+  });
+  assert.equal(s.inspect?.rag?.files, 2);
+  assert.equal(s.inspect?.rag?.fileList[0].relPath, "a.py");
+  s = reducer(s, { kind: "ext", msg: { type: "rag/file", relPath: "a.py", chunks: [{ id: "a.py#1", startLine: 1, endLine: 9, hasVector: false, preview: "x=1" }] } });
+  assert.equal(s.inspect?.ragFile["a.py"][0].id, "a.py#1");
+  // preservou skills ao receber os dados de RAG (merge, não reset)
+  assert.equal(s.inspect?.skills[0].name, "sql");
+
+  // reabrir o Índice (nova skills/inspect + rag/inspect) INVALIDA os caches de corpo/chunks (evita stale)
+  s = reducer(s, { kind: "ext", msg: { type: "skills/inspect", skills: [{ name: "sql", description: "d2", source: "workspace", enabled: false, relFile: "workspace/sql/SKILL.md", validators: [] }] } });
+  assert.deepEqual(s.inspect?.skillBody, {}, "skills/inspect zera o cache de corpos");
+  s = reducer(s, {
+    kind: "ext",
+    msg: { type: "rag/inspect", index: { enabled: true, ready: true, mode: "lexical", files: 1, chunks: 1, maxChunks: 4000, capped: false, embeddingsUrl: "", embeddingModel: "m", dimensions: 0, fileList: [] } },
+  });
+  assert.deepEqual(s.inspect?.ragFile, {}, "rag/inspect zera o cache de chunks");
+});
+
 test("charter/error mostra toast e limpa o drafting da seção", () => {
   let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: EMPTY_CHARTER } });
   s = reducer(s, { kind: "ext", msg: { type: "charter/drafting", section: "nfr" } });
