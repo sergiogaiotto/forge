@@ -1,4 +1,5 @@
 import { ChatMessage } from "../api/types";
+import { estimateTokens } from "../util/tokenEstimate";
 import { SkillMeta } from "./types";
 
 export interface AssembleInput {
@@ -9,7 +10,7 @@ export interface AssembleInput {
   retrievedContext: string; // contexto de RAG / arquivo aberto
   history: ChatMessage[];
   query: string;
-  tokenBudget?: number; // orçamento aproximado de chars para o system prompt montado
+  inputBudgetTokens?: number; // orçamento de ENTRADA em TOKENS (system + history + query)
 }
 
 export interface AssembleOutput {
@@ -18,43 +19,94 @@ export interface AssembleOutput {
   activatedSkillNames: string[];
 }
 
-// RF-040: monta na ordem base + skills(discovery) → contexto recuperado →
-// corpos das skills ativadas → histórico → query. Discovery/contexto/corpos ficam no
-// system prompt; o histórico e a query formam a lista de mensagens.
+// Trunca um texto a um teto aproximado de tokens (≈ chars/4), cortando na última quebra de linha para
+// não partir uma função/bloco no meio. Usado só para a seção elástica de RAG.
+function truncateToTokens(text: string, maxTokens: number): string {
+  const maxChars = Math.max(0, maxTokens) * 4;
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const nl = cut.lastIndexOf("\n");
+  return nl > maxChars * 0.5 ? cut.slice(0, nl) : cut; // só recua até a linha se não perder metade
+}
+
+// Inclui o histórico das mensagens MAIS RECENTES até caber no orçamento (em tokens). Resolve a lacuna
+// de o histórico antes ser injetado inteiro, sem medição, podendo estourar a janela em sessões longas.
+function historyWithinBudget(history: ChatMessage[], budgetTokens: number): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let used = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const cost = estimateTokens(history[i].content) + 4;
+    if (used + cost > budgetTokens) break;
+    out.unshift(history[i]);
+    used += cost;
+  }
+  // Garante ao menos o turno MAIS RECENTE (truncado) quando ele sozinho excede o orçamento — sem isto
+  // o modelo perderia toda a última troca (ex.: usuário colou um stacktrace grande) e receberia só a query.
+  if (out.length === 0 && history.length > 0 && budgetTokens > 0) {
+    const last = history[history.length - 1];
+    out.push({ ...last, content: truncateToTokens(last.content, budgetTokens) });
+  }
+  return out;
+}
+
+// RF-040 (evoluído): monta o system prompt com orçamento por PRIORIDADE em vez de slice() cego.
+// Ordem (também a prioridade de corte, do mais protegido ao mais descartável):
+//   base + perfil (PINNED, nunca cortados) → skills de discovery → corpos de skills ativadas →
+//   contexto recuperado (RAG, ELÁSTICO: truncado/omitido primeiro quando o orçamento aperta).
+// O histórico e a query formam a lista de mensagens; ambos têm espaço reservado no orçamento.
 export class ContextAssembler {
   assemble(input: AssembleInput): AssembleOutput {
-    const parts: string[] = [input.basePrompt];
+    const budget = input.inputBudgetTokens ?? Number.POSITIVE_INFINITY;
+    const reserveQuery = estimateTokens(input.query) + 8;
+    const reserveHistory = input.history.length > 0 ? 256 : 0; // piso para manter o turno mais recente
 
-    // Perfil do projeto logo após o base: alta prioridade e, por ficar no topo, sobrevive ao
-    // corte por orçamento (que trunca a cauda do prompt montado).
+    type Section = { text: string; pinned: boolean };
+    const candidates: Section[] = [{ text: input.basePrompt, pinned: true }];
+
     if (input.projectProfile && input.projectProfile.trim().length > 0) {
-      parts.push(`# Perfil do projeto (convenções do time — siga à risca)\n${input.projectProfile.trim()}`);
+      candidates.push({
+        text: `# Perfil do projeto (convenções do time — siga à risca)\n${input.projectProfile.trim()}`,
+        pinned: true,
+      });
     }
-
     if (input.discoverySkills.length > 0) {
       const lines = input.discoverySkills
         .map((s) => `- ${s.name}: ${s.description.replace(/\s+/g, " ").trim()}`)
         .join("\n");
-      parts.push(`# Skills disponíveis (discovery)\n${lines}`);
+      candidates.push({ text: `# Skills disponíveis (discovery)\n${lines}`, pinned: false });
     }
-
+    for (const { meta, body } of input.activatedSkills) {
+      candidates.push({ text: `# Skill ativada: ${meta.name}\n${body.trim()}`, pinned: false });
+    }
     if (input.retrievedContext.trim().length > 0) {
-      parts.push(`# Contexto do código recuperado\n${input.retrievedContext.trim()}`);
+      candidates.push({ text: `# Contexto do código recuperado\n${input.retrievedContext.trim()}`, pinned: false });
     }
 
-    if (input.activatedSkills.length > 0) {
-      for (const { meta, body } of input.activatedSkills) {
-        parts.push(`# Skill ativada: ${meta.name}\n${body.trim()}`);
+    // PINNED entram sempre; as demais enquanto couberem. A primeira que estourar é truncada (se sobrar
+    // espaço útil) e o restante é omitido. Reserva espaço para a query e para o histórico mínimo.
+    const cap = budget - reserveQuery - reserveHistory;
+    const out: string[] = [];
+    let used = 0;
+    for (const c of candidates) {
+      const cost = estimateTokens(c.text) + 2;
+      if (c.pinned || used + cost <= cap) {
+        out.push(c.text);
+        used += cost;
+        continue;
       }
+      const room = cap - used;
+      if (room > 256) {
+        out.push(`${truncateToTokens(c.text, room - 8)}\n[contexto truncado por orçamento]`);
+        used = cap;
+      }
+      break;
     }
+    const systemPrompt = out.join("\n\n");
 
-    let systemPrompt = parts.join("\n\n");
-    if (input.tokenBudget && systemPrompt.length > input.tokenBudget * 4) {
-      // Compactação grosseira por orçamento de chars: mantém base + discovery + trunca o resto.
-      systemPrompt = systemPrompt.slice(0, input.tokenBudget * 4) + "\n\n[contexto truncado por orçamento]";
-    }
-
-    const messages: ChatMessage[] = [...input.history, { role: "user", content: input.query }];
+    // Histórico orçado com o que sobrou (mensagens mais recentes primeiro), preservando a query.
+    const historyBudget = Math.max(0, budget - used - reserveQuery);
+    const history = historyWithinBudget(input.history, historyBudget);
+    const messages: ChatMessage[] = [...history, { role: "user", content: input.query }];
 
     return {
       systemPrompt,

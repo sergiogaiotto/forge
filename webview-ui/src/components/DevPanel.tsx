@@ -516,6 +516,13 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
         <DiffView original={p.proposal.original} modified={p.proposal.modified} />
       </div>
 
+      {p.proposal.partial && (
+        <div className="assistant-warning" style={{ marginTop: 4 }}>
+          <Icon name="alert-triangle" size={14} /> Geração parcial — o arquivo pode estar incompleto. Peça para
+          continuar ou regenerar antes de aplicar.
+        </div>
+      )}
+
       {v && (
         <div className={`validation ${v.running ? "run" : v.gateOk ? "ok" : "fail"}`}>
           <Icon name={v.running ? "refresh" : "list-check"} size={14} className={v.running ? "spin" : ""} />

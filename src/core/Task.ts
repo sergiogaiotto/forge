@@ -7,8 +7,19 @@ import { SkillValidatorSpec } from "../skills/types";
 import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
+import { CompletenessResult, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
+import { buildContinuationPrompt } from "./systemPrompt";
+
+// Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
+// completude, não custo (decisão de produto), mas com teto rígido + guarda de "stall" (passagem que
+// não avança) para nunca entrar em loop infinito nem custo descontrolado.
+const MAX_CONTINUATIONS = 6;
+// Ao pedir a continuação, reenviamos apenas a CAUDA do texto acumulado como âncora (não o arquivo
+// inteiro): evita inflar a ENTRADA a cada rodada e estourar a janela do servidor (HTTP 400). A cauda
+// dá contexto de sobra para o modelo continuar, e o stitch (teto 400) dedupa a sobreposição.
+const CONTINUATION_ANCHOR_CHARS = 8000;
 
 let proposalCounter = 0;
 
@@ -74,49 +85,54 @@ export class Task {
       d.emit?.({ type: "skill.activated", skill: s });
     }
 
-    let full = "";
-    let usage: { inputTokens?: number; outputTokens?: number } | undefined;
-    try {
-      for await (const chunk of d.provider.createMessage(d.systemPrompt, d.messages, {
-        timeoutMs: d.timeoutMs,
-        signal: this.controller.signal,
-        extraHeaders: d.extraHeaders,
-      })) {
-        switch (chunk.kind) {
-          case "reasoning":
-            d.post({ type: "stream/reasoning", taskId: d.taskId, delta: chunk.text });
-            break;
-          case "text":
-            full += chunk.text;
-            d.post({ type: "stream/text", taskId: d.taskId, delta: chunk.text });
-            break;
-          case "warning":
-            // Aviso não-fatal (ex.: truncamento por limite de tokens). NÃO interrompe o stream:
-            // o texto parcial segue acumulado em `full` e as propostas ainda são parseadas abaixo.
-            // Ancorado à resposta (stream/notice) para ficar visível no balão, não um toast volátil.
-            d.post({ type: "stream/notice", taskId: d.taskId, level: "warn", message: chunk.message });
-            break;
-          case "error":
-            d.post({ type: "stream/error", taskId: d.taskId, message: chunk.message });
-            d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: 0, error: chunk.message });
-            return;
-          case "usage":
-            usage = { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens };
-            break;
-          case "tool_call":
-            break;
-        }
-      }
-    } catch (err) {
-      d.post({ type: "stream/error", taskId: d.taskId, message: (err as Error).message });
-      d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: 0, error: (err as Error).message });
+    // Geração RESILIENTE: gera; se um arquivo ficou cortado (cerca de fechamento não veio), re-pede a
+    // continuação e costura ao texto acumulado, até o arquivo fechar ou esgotar o teto de tentativas.
+    // O usage é ACUMULADO entre as passagens — cada continuação reenvia contexto e tem custo próprio.
+    let inputTokens = 0;
+    let outputTokens = 0;
+    const onUsage = (u: { inputTokens?: number; outputTokens?: number }) => {
+      inputTokens += u.inputTokens ?? 0;
+      outputTokens += u.outputTokens ?? 0;
+    };
+    const gen = await resilientGenerate(d.messages, (msgs) => this.streamOnce(msgs, onUsage), {
+      maxContinuations: MAX_CONTINUATIONS,
+      anchorChars: CONTINUATION_ANCHOR_CHARS,
+      buildContinuation: buildContinuationPrompt,
+      onContinue: (attempt, path) =>
+        d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o arquivo"} (continuação ${attempt}/${MAX_CONTINUATIONS})…` }),
+      aborted: () => this.controller.signal.aborted,
+    });
+    const usage = { inputTokens, outputTokens };
+    if (gen.error !== undefined) {
+      d.post({ type: "stream/error", taskId: d.taskId, message: gen.error });
+      d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: gen.full, usage, proposals: 0, error: gen.error });
       return;
+    }
+    const full = gen.full;
+    const completeness: CompletenessResult = gen.completeness;
+
+    const wasTruncated = !completeness.complete;
+    if (wasTruncated) {
+      d.post({
+        type: "stream/notice",
+        taskId: d.taskId,
+        level: "warn",
+        message: `O arquivo ${completeness.path ?? ""} pode estar incompleto (a geração não fechou após ${gen.attempts} continuações). Peça para continuar ou regenerar.`.replace(/\s{2,}/g, " "),
+      });
     }
 
     // Faz o parse das edições de arquivo propostas e transforma cada uma em um diff revisável.
     const blocks = parseFileBlocks(full);
+    // Qual proposta marcar como parcial: a do arquivo que não fechou; se ele não virou proposta
+    // (ex.: truncou antes do corpo), marca a ÚLTIMA (candidata natural, por ordem de emissão).
+    const partialPath = wasTruncated
+      ? blocks.some((b) => b.path === completeness.path)
+        ? completeness.path
+        : blocks[blocks.length - 1]?.path
+      : undefined;
     for (const block of blocks) {
       const proposal = await this.makeProposal(block.path, block.content);
+      if (partialPath && block.path === partialPath) proposal.partial = true;
       this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
       d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
       d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: proposal.original ? "edição" : "novo", language: proposal.language });
@@ -133,6 +149,47 @@ export class Task {
 
     d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: this.proposals.size });
     d.post({ type: "stream/end", taskId: d.taskId });
+  }
+
+  // Uma passagem de streaming do provider: acumula e transmite o texto ao vivo, retornando o texto
+  // desta chamada (o laço de continuação em run() costura as passagens). O aviso de truncamento do
+  // provider é suprimido aqui — quem decide a mensagem (completar/parcial) é o laço, com base no
+  // verificador de completude, evitando avisos redundantes/confusos entre uma continuação e outra.
+  private async streamOnce(
+    messages: ChatMessage[],
+    onUsage: (u: { inputTokens?: number; outputTokens?: number }) => void
+  ): Promise<{ text: string; error?: string }> {
+    const d = this.deps;
+    let text = "";
+    try {
+      for await (const chunk of d.provider.createMessage(d.systemPrompt, messages, {
+        timeoutMs: d.timeoutMs,
+        signal: this.controller.signal,
+        extraHeaders: d.extraHeaders,
+      })) {
+        switch (chunk.kind) {
+          case "reasoning":
+            d.post({ type: "stream/reasoning", taskId: d.taskId, delta: chunk.text });
+            break;
+          case "text":
+            text += chunk.text;
+            d.post({ type: "stream/text", taskId: d.taskId, delta: chunk.text });
+            break;
+          case "warning":
+            break; // truncamento: o laço de run() decide a mensagem via checkCompleteness
+          case "error":
+            return { text, error: chunk.message };
+          case "usage":
+            onUsage({ inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
+            break;
+          case "tool_call":
+            break;
+        }
+      }
+    } catch (err) {
+      return { text, error: (err as Error).message };
+    }
+    return { text };
   }
 
   private async makeCellProposal(cb: import("../util/cellBlocks").CellBlock): Promise<DiffProposal> {
