@@ -47,6 +47,33 @@ export function checkCompleteness(text: string): CompletenessResult {
   return { complete: true };
 }
 
+// Decide QUAL arquivo (se algum) marcar como PARCIAL após a geração resiliente. Recebe o texto COMPLETO
+// para inspecionar o FECHAMENTO real de cada bloco (o discriminador confiável), pois `completeness`
+// pode dizer `complete:true` mesmo com o último arquivo truncado — quando o modelo emite uma cerca solta
+// de contagem ERRADA no fim, o BARE_FENCE_TAIL de checkCompleteness suprime o "cerca-aberta".
+//
+// Regras (só há parcial se o provider cortou):
+//   (a) incompletude explícita (cerca aberta/elipse) → o arquivo afetado (`completeness.path`), ou, se o
+//       corte veio antes do caminho, o ÚLTIMO bloco emitido.
+//   (b) `complete:true` mas o provider cortou → é parcial APENAS se o ÚLTIMO bloco não fechou de fato
+//       (truncamento no meio mascarado por cerca solta errada). Se todos fecharam, o corte foi ENTRE
+//       arquivos: nenhum bloco COMPLETO é rebaixado (o que pode faltar são arquivos NÃO gerados). Isto
+//       corrige o "Aplicar tudo" pular o README completo, sem deixar escapar um README truncado.
+export function partialFilePath(
+  wasTruncated: boolean,
+  completeness: CompletenessResult,
+  full: string
+): string | undefined {
+  if (!wasTruncated) return undefined;
+  const blocks = parsePartialFileBlocks(full);
+  if (!completeness.complete) {
+    if (completeness.path && blocks.some((b) => b.path === completeness.path)) return completeness.path;
+    return blocks[blocks.length - 1]?.path || undefined;
+  }
+  const last = blocks[blocks.length - 1];
+  return last && !last.closed ? last.path || undefined : undefined;
+}
+
 // Fragmentos conversacionais que o modelo às vezes emite no INÍCIO de uma continuação, apesar de
 // instruído a só continuar o código (ex.: "Will do.", "Add newline after fence.", "Vou continuar.").
 // Se costurados crus, poluem o ARQUIVO. Padrões deliberadamente PROSA — o ramo continue/proceed exige
