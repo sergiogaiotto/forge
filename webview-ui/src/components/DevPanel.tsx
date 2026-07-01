@@ -74,6 +74,27 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     }
   };
 
+  // Colar um PRINT no chat: intercepta a imagem do clipboard e a envia ao host para OCR (o texto vira
+  // anexo). Sem imagem, deixa o paste de texto normal seguir. Corrige o "colar não funciona" (ponto 6).
+  const onPaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const file = it.getAsFile();
+        if (!file || file.size > 8 * 1024 * 1024) continue; // muito grande (>8 MB) → ignora este item
+        e.preventDefault(); // não cola o binário/nome como texto
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") post({ type: "context/addImage", dataUrl: reader.result });
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+    }
+  };
+
   return (
     <div className="app">
       {/* Cabeçalho */}
@@ -224,6 +245,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px";
             }}
             onKeyDown={onKey}
+            onPaste={onPaste}
             rows={1}
           />
           <div className="composer-tools">

@@ -345,6 +345,8 @@ export type WebviewToExt =
   | { type: "context/pickLocalFile" }
   | { type: "context/addSelection" }
   | { type: "context/addTerminalSelection" }
+  // Print colado no chat: o host roda OCR (tesseract do sistema) e anexa o TEXTO extraído.
+  | { type: "context/addImage"; dataUrl: string }
   | { type: "context/removeAttachment"; id: string }
   | { type: "context/search" }
   | { type: "context/webInfo" }
