@@ -83,6 +83,9 @@ export interface UIState {
   charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
   // Fase F: blueprint do Modo Projeto + fase (planejando/gerando). Null = sem fluxo de projeto ativo.
   project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean } | null;
+  // Seq monotônico incrementado a cada "project/appliedAll" (aplicou todos os arquivos). O DevPanel
+  // observa a mudança para desmarcar o Modo Projeto automaticamente (0 = nunca ocorreu).
+  appliedAllAt: number;
   inspect: {
     skills: SkillInspectView[];
     rag: RagInspectView | null;
@@ -112,6 +115,7 @@ export const initialState: UIState = {
   profile: null,
   charter: null,
   project: null,
+  appliedAllAt: 0,
   inspect: null,
 };
 
@@ -132,6 +136,7 @@ export type Action =
 
 let toastSeq = 0;
 let runSeq = 0;
+let appliedAllSeq = 0;
 const RUN_OUTPUT_CAP = 20_000; // tail de saída ao vivo guardada no estado (evita estado gigante)
 const RUN_CARDS_CAP = 8; // teto de cartões de execução retidos (rede de segurança contra acúmulo)
 
@@ -276,6 +281,13 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         : state;
     case "project/done":
       return state.project ? { ...state, project: { ...state.project, busy: false, done: true } } : state;
+    case "project/appliedAll":
+      // Aplicou tudo → sinaliza o DevPanel (via seq) para desmarcar o Modo Projeto. O modal segue
+      // aberto mostrando os status "aplicado"; o dev fecha quando quiser.
+      return { ...state, appliedAllAt: ++appliedAllSeq };
+    case "project/closed":
+      // Fecha o modal do projeto sem erro (redirecionado ao chat pela defesa em profundidade do host).
+      return { ...state, project: null };
     case "charter/state":
       return { ...state, charter: { sections: msg.sections, drafting: noDrafting() } };
     case "charter/drafting":

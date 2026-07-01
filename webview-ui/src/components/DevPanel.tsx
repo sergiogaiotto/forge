@@ -13,6 +13,7 @@ import {
 } from "../../../src/shared/protocol";
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
+import { classifyProjectIntent } from "../../../src/util/projectIntent";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -39,13 +40,21 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" });
   }, [state.messages]);
 
+  // Auto-desmarcar o Modo Projeto quando TODOS os arquivos foram aplicados (fim de fluxo): a próxima
+  // mensagem volta a ser chat/diagnóstico. Reage ao seq monotônico do host (0 = nunca ocorreu).
+  useEffect(() => {
+    if (state.appliedAllAt) setProjectMode(false);
+  }, [state.appliedAllAt]);
+
   const enabledSkills = forge.skills.filter((s) => s.enabled).length;
   const enabledMcp = forge.mcp.filter((m) => m.enabled);
 
   const send = () => {
     const text = input.trim();
     if (!text || state.busy) return;
-    if (projectMode) {
+    // No Modo Projeto, só um PEDIDO de gerar abre o Blueprint. Pergunta/diagnóstico (ex.: logs colados
+    // + "o que aconteceu?") é respondido no chat normal — sem sequestrar a mensagem para o Blueprint.
+    if (projectMode && classifyProjectIntent(text) === "generate") {
       // Fase F: planeja um BLUEPRINT aprovável antes de gerar código.
       dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}] ${text}` });
       dispatch({ kind: "project/planning" });
