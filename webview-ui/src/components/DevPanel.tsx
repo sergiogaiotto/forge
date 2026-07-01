@@ -3,6 +3,7 @@ import { Icon } from "../icons";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
+import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -653,13 +654,30 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
     if (running) outRef.current?.scrollTo({ top: outRef.current.scrollHeight });
   }, [run.output, running]);
 
-  const status = running ? "run" : run.skippedReason ? "skip" : run.ok ? "ok" : "fail";
   const isTests = run.label === "testes";
+  const outcome: TestOutcome | null = isTests && !running ? pytestOutcome(run.exitCode, run.output) : null;
+  // Para testes, o status vem do outcome semântico (exit 5 = neutro, não vermelho). Para execução de
+  // arquivo, segue o ok booleano. "Corrigir com FORGE" só faz sentido quando os testes de fato falharam.
+  const status = running
+    ? "run"
+    : run.skippedReason
+    ? "skip"
+    : outcome
+    ? outcome === "passed"
+      ? "ok"
+      : outcome === "no-tests"
+      ? "skip"
+      : "fail"
+    : run.ok
+    ? "ok"
+    : "fail";
+  const canFix = outcome ? outcome === "failed" : status === "fail";
   const title = run.label ? run.label : run.command || "execução";
   const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
-  const fixText = isTests
-    ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
-    : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
+  const fixText =
+    outcome === "failed"
+      ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
+      : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
   return (
     <div className="run-card">
       <div className={`run-head ${status}`} onClick={() => !running && setOpen((v) => !v)}>
@@ -674,7 +692,7 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           <span>indisponível</span>
         ) : (
           <span>
-            {run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
+            {outcome ? testOutcomeLabel(outcome, run.exitCode) : run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
           </span>
         )}
         {!running && (
@@ -701,7 +719,7 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           )}
         </div>
       ) : (
-        status === "fail" && (
+        canFix && (
           <div className="actions" style={{ marginTop: 7 }}>
             <button
               className="btn p"
@@ -762,6 +780,10 @@ type DodStatus = "ok" | "fail" | "pending";
 
 function runStatus(r: RunResultData | null): DodStatus {
   if (!r || r.skippedReason) return "pending";
+  if (r.label === "testes") {
+    const o = pytestOutcome(r.exitCode, r.output);
+    return o === "passed" ? "ok" : o === "no-tests" ? "pending" : "fail"; // sem testes = pendente, não falha
+  }
   return r.ok ? "ok" : "fail";
 }
 

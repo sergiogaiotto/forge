@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,6 +24,7 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { findVenvPython, resolveTestCommand } from "../util/pythonEnv";
 import { deriveBudget } from "./ContextBudget";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
@@ -1267,7 +1269,11 @@ export class Controller {
       return;
     }
     const runner = new Runner(ws);
-    const result = await runner.runRaw(testCfg.command, this.config.run().timeoutSeconds * 1000);
+    // Roda pytest pelo interpretador do venv do projeto (python -m pytest), não pelo PATH global —
+    // elimina o "ModuleNotFoundError: No module named pytest" quando o venv não está ativado no shell.
+    const venvPython = findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV);
+    const command = resolveTestCommand(testCfg.command, venvPython);
+    const result = await runner.runRaw(command, this.config.run().timeoutSeconds * 1000);
     this.post({
       type: "run/result",
       filePath: "",
