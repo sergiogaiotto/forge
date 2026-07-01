@@ -172,6 +172,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               <button onClick={() => { setAttachMenu(false); post({ type: "context/addSelection" }); }}>
                 <Icon name="code" size={14} /> Anexar seleção do editor
               </button>
+              <button onClick={() => { setAttachMenu(false); post({ type: "context/addTerminalSelection" }); }}>
+                <Icon name="terminal" size={14} /> Anexar seleção do terminal
+              </button>
               <button onClick={() => { setAttachMenu(false); post({ type: "context/pickWorkspaceFile" }); }}>
                 <Icon name="paperclip" size={14} /> Anexar arquivo do workspace
               </button>
