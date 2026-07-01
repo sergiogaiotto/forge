@@ -16,7 +16,7 @@ export interface RunServiceDeps {
   post: (msg: ExtToWebview) => void;
   workspaceRoot: () => string | undefined;
   runConfig: () => { enabled: boolean; commands: Record<string, string>; timeoutSeconds: number };
-  onResult?: (r: { filePath: string; ok: boolean; exitCode: number | null; durationMs: number }) => void;
+  onResult?: (r: { filePath: string; label?: string; ok: boolean; exitCode: number | null; durationMs: number }) => void;
   openPreview?: (relPath: string) => void; // artefatos renderáveis (.html/.svg) abrem no PreviewService
 }
 
@@ -113,6 +113,37 @@ export class RunService implements vscode.Disposable {
         data = { ok: false, exitCode: null, output: `[erro ao iniciar a execução] ${(e as Error)?.message ?? String(e)}`, durationMs: 0, cancelled: false, timedOut: false };
       }
       this.finishResult(runId, proposalId, relPath, command, data);
+    } finally {
+      this.busy = false;
+      this.activeRunId = undefined;
+      this.activeCancel = undefined;
+    }
+  }
+
+  // Executa um COMANDO arbitrário (ex.: "Preparar ambiente": venv + pip install) com streaming para o
+  // cartão lateral. Usa SEMPRE o spawn (cmd.exe/sh via shell:true), não o terminal integrado — assim o
+  // encadeamento `&&` funciona mesmo quando o terminal do usuário é PowerShell 5.1 (que não aceita `&&`).
+  // É cancelável (killTree) e serializado pela mesma flag `busy` das execuções de arquivo.
+  async runCommand(label: string, command: string): Promise<void> {
+    const cfg = this.deps.runConfig();
+    if (!cfg.enabled) return this.notice("warn", "Execução desabilitada (forge.run.enabled = false).");
+    const ws = this.deps.workspaceRoot();
+    if (!ws) return this.notice("error", "Abra uma pasta no VSCode.");
+    if (this.busy) return this.notice("info", "Já há uma execução em andamento. Aguarde ou cancele.");
+    this.busy = true;
+    const runId = `run_${++this.seq}`;
+    this.activeRunId = runId;
+    this.activeCancel = undefined;
+    try {
+      const timeoutMs = Math.max(1000, cfg.timeoutSeconds * 1000);
+      this.deps.post({ type: "run/start", runId, filePath: "", label, command, where: "panel" });
+      let data: FinishData;
+      try {
+        data = await this.runSpawn(command, ws, timeoutMs, runId);
+      } catch (e) {
+        data = { ok: false, exitCode: null, output: `[erro ao iniciar] ${(e as Error)?.message ?? String(e)}`, durationMs: 0, cancelled: false, timedOut: false };
+      }
+      this.finishResult(runId, undefined, "", command, data, label);
     } finally {
       this.busy = false;
       this.activeRunId = undefined;
@@ -310,10 +341,10 @@ export class RunService implements vscode.Disposable {
     });
   }
 
-  private finishResult(runId: string, proposalId: string | undefined, relPath: string, command: string, data: FinishData): void {
+  private finishResult(runId: string, proposalId: string | undefined, relPath: string, command: string, data: FinishData, label?: string): void {
     if (data.skippedReason) {
-      this.deps.post({ type: "run/result", runId, proposalId, filePath: relPath, command, ok: false, exitCode: null, output: "", durationMs: data.durationMs, skippedReason: data.skippedReason });
-      this.deps.onResult?.({ filePath: relPath, ok: false, exitCode: null, durationMs: data.durationMs });
+      this.deps.post({ type: "run/result", runId, proposalId, filePath: relPath, label, command, ok: false, exitCode: null, output: "", durationMs: data.durationMs, skippedReason: data.skippedReason });
+      this.deps.onResult?.({ filePath: relPath, label, ok: false, exitCode: null, durationMs: data.durationMs });
       return;
     }
     const suffix = data.cancelled ? "\n[execução cancelada]" : data.timedOut ? "\n[execução interrompida após o tempo limite]" : "";
@@ -322,13 +353,14 @@ export class RunService implements vscode.Disposable {
       runId,
       proposalId,
       filePath: relPath,
+      label,
       command,
       ok: data.ok,
       exitCode: data.exitCode,
       output: data.output.slice(-OUTPUT_CAP) + suffix,
       durationMs: data.durationMs,
     });
-    this.deps.onResult?.({ filePath: relPath, ok: data.ok, exitCode: data.exitCode, durationMs: data.durationMs });
+    this.deps.onResult?.({ filePath: relPath, label, ok: data.ok, exitCode: data.exitCode, durationMs: data.durationMs });
   }
 }
 

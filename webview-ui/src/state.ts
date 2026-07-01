@@ -255,7 +255,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         skippedReason: msg.skippedReason,
         running: false,
       };
-      const last = data.label === "testes" ? { lastTestRun: data } : { lastFileRun: data };
+      // Só execução de ARQUIVO (label indefinido) alimenta lastFileRun (o chip "Executa" da DoD);
+      // "testes" vai para lastTestRun; "ambiente"/"célula [i]" e afins são neutros (não poluem a DoD).
+      const last = data.label === "testes" ? { lastTestRun: data } : data.label ? {} : { lastFileRun: data };
       // Se já existe um cartão ao vivo (criado pelo run/start), finaliza-o no lugar (preserva `where`).
       if (msg.runId && hasRunWithId(state, msg.runId)) {
         return { ...updateRunByRunId(state, msg.runId, (r) => ({ ...data, where: r.where })), ...last };

@@ -257,6 +257,13 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             </span>
             <span
               className="pill"
+              title="Preparar ambiente: cria o venv e instala as dependências (requirements.txt/pyproject)"
+              onClick={() => post({ type: "env/prepare" })}
+            >
+              <Icon name="plug" size={14} color="#c9a26d" /> Ambiente
+            </span>
+            <span
+              className="pill"
               title="Perfil do projeto — stack, papel e convenções"
               onClick={() => {
                 dispatch({ kind: "clearProfile" }); // força "carregando…" e evita dados stale ao reabrir

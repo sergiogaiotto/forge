@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { test } from "node:test";
-import { findVenvPython, resolveTestCommand, venvPythonCandidates } from "../util/pythonEnv";
+import { buildVenvSetupCommand, findVenvPython, resolveTestCommand, venvPythonCandidates } from "../util/pythonEnv";
 
 test("venvPythonCandidates: caminhos por SO (.venv/venv/.env)", () => {
   const win = venvPythonCandidates("C:/proj", true);
@@ -47,4 +47,27 @@ test("resolveTestCommand: 'python -m pytest' (nome nu) também recebe o venv; ca
   assert.equal(resolveTestCommand("/usr/bin/python3 -m pytest", "/v/bin/python"), "/usr/bin/python3 -m pytest");
   // wrapper que já resolve o ambiente → respeitar
   assert.equal(resolveTestCommand("poetry run pytest", "/v/bin/python"), "poetry run pytest");
+});
+
+test("buildVenvSetupCommand: cria .venv e instala quando não há venv (encadeia com &&)", () => {
+  const win = buildVenvSetupCommand({ isWindows: true, venvPython: undefined, install: "requirements" });
+  assert.match(win, /python -m venv \.venv/);
+  assert.match(win, /&&/);
+  assert.match(win, /\.venv\\Scripts\\python -m pip install -r requirements\.txt/);
+  const posix = buildVenvSetupCommand({ isWindows: false, venvPython: undefined, install: "editable" });
+  assert.match(posix, /python3 -m venv \.venv/);
+  assert.match(posix, /\.venv\/bin\/python -m pip install -e \./);
+});
+
+test("buildVenvSetupCommand: pyproject só-de-ferramentas (install='none') só cria o venv — NÃO usa -e .", () => {
+  const cmd = buildVenvSetupCommand({ isWindows: false, venvPython: undefined, install: "none" });
+  assert.match(cmd, /python3 -m venv \.venv && \.venv\/bin\/python -m pip install --upgrade pip$/);
+  assert.ok(!cmd.includes("-e ."), "não deve tentar editable install");
+  assert.ok(!cmd.includes("requirements"), "não deve instalar requirements inexistente");
+});
+
+test("buildVenvSetupCommand: com venv existente, só instala (sem recriar) e cita caminho com espaço", () => {
+  const cmd = buildVenvSetupCommand({ isWindows: true, venvPython: "C:/meus projetos/.venv/Scripts/python.exe", install: "requirements" });
+  assert.ok(!cmd.includes("venv .venv"), "não deve recriar o venv");
+  assert.match(cmd, /^"C:\/meus projetos\/\.venv\/Scripts\/python\.exe" -m pip install --upgrade pip && "C:\/meus projetos\/\.venv\/Scripts\/python\.exe" -m pip install -r requirements\.txt$/);
 });
