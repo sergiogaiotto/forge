@@ -23,6 +23,7 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { deriveBudget } from "./ContextBudget";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -869,6 +870,14 @@ export class Controller {
     const projectProfile = renderProfileBlock(
       [renderStackBlock(stack), roleGuidance(resolveRole(sources)), body].filter((s) => s.trim()).join("\n\n")
     );
+    // Orçamento de ENTRADA derivado da janela real do modelo (em vez do antigo 24000 fixo em chars):
+    // a saída já está reservada em runtime.maxTokens (catálogo), então a entrada usa o resto da janela.
+    // A janela é reconciliada com o limite real do servidor (forge.provider.maxContextWindow), se definido.
+    const budget = deriveBudget(
+      getModelMeta(runtime.type, runtime.modelId),
+      runtime.maxTokens ?? 0,
+      this.config.provider().maxContextWindow
+    );
     const assembled = this.assembler.assemble({
       basePrompt,
       projectProfile,
@@ -877,7 +886,7 @@ export class Controller {
       retrievedContext,
       history: this.history,
       query: text,
-      tokenBudget: 24000,
+      inputBudgetTokens: budget.inputBudget,
     });
 
     // Convenções-como-validators: as ferramentas detectadas (ruff/mypy/eslint/…) viram validadores

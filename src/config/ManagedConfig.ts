@@ -85,10 +85,14 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("identity.requireEmail", false);
   }
 
-  // Override opcional do teto de tokens de SAÍDA. 0 = usa o catálogo de modelos (recomendado). Útil
-  // quando o gateway HubGPU/vLLM aceita um teto diferente do padrão do catálogo.
-  provider(): { maxOutput: number } {
-    return { maxOutput: this.cfg().get<number>("provider.maxOutput", 0) };
+  // Overrides opcionais do provedor. maxOutput: teto de tokens de SAÍDA (0 = catálogo). maxContextWindow:
+  // janela REAL servida pelo gateway (--max-model-len); 0 = usa a capacidade do modelo do catálogo. Defina
+  // maxContextWindow quando o HubGPU/vLLM servir uma janela menor que a do modelo, para não estourar (400).
+  provider(): { maxOutput: number; maxContextWindow: number } {
+    return {
+      maxOutput: this.cfg().get<number>("provider.maxOutput", 0),
+      maxContextWindow: this.cfg().get<number>("provider.maxContextWindow", 0),
+    };
   }
 
   run(): { enabled: boolean; timeoutSeconds: number; commands: Record<string, string> } {
