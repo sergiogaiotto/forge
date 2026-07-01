@@ -829,6 +829,20 @@ h6.md-h {
   font-size: 11px;
   cursor: pointer;
 }
+.proj-select {
+  font-size: 11px;
+  font-family: var(--sans);
+  color: var(--text);
+  background: #1d1f24;
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.proj-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .send-btn {
   width: 26px;
   height: 26px;

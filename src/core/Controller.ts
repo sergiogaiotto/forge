@@ -34,6 +34,8 @@ import {
   ExtToWebview,
   ForgeState,
   LicenseView,
+  ProjectArchitecture,
+  ProjectLanguage,
   ProviderSetup,
   ProviderView,
   ReasoningEffort,
@@ -44,7 +46,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec } from "node:child_process";
-import { buildBasePrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildBasePrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { appendRule, collectRules, defaultProfileSkeleton, PROFILE_RELPATH, renderProfileBlock } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
@@ -572,6 +574,9 @@ export class Controller {
       case "chat/send":
         await this.startTask(msg.text, msg.tdd ? "tdd" : "normal");
         break;
+      case "project/start":
+        await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture });
+        break;
       case "tests/run":
         await this.runTests();
         break;
@@ -841,7 +846,11 @@ export class Controller {
 
   // ---- geração ---------------------------------------------------------------
 
-  async startTask(text: string, mode: "normal" | "tdd" = "normal"): Promise<void> {
+  async startTask(
+    text: string,
+    mode: "normal" | "tdd" | "project" = "normal",
+    project?: { language: ProjectLanguage; architecture: ProjectArchitecture }
+  ): Promise<void> {
     if (!text.trim()) return;
     // RF-010/015: condiciona a inferência a uma sessão válida.
     if (!(await this.ensureSession())) {
@@ -878,7 +887,12 @@ export class Controller {
       this.pendingAttachments = [];
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
-    const basePrompt = mode === "tdd" ? buildTddPrompt(this.workspaceName()) : buildBasePrompt(this.workspaceName());
+    const basePrompt =
+      mode === "project" && project
+        ? buildProjectPrompt(this.workspaceName(), project.language, project.architecture)
+        : mode === "tdd"
+        ? buildTddPrompt(this.workspaceName())
+        : buildBasePrompt(this.workspaceName());
     // Combina a stack detectada (sempre fresca), a orientação do papel (workspace vence) e os corpos
     // dos perfis. Papel e frontmatter resolvidos POR DOCUMENTO (não no blob) para honrar precedência
     // e não vazar o frontmatter do segundo arquivo na prosa.
@@ -926,7 +940,7 @@ export class Controller {
       timeoutMs: runtime.timeoutSeconds * 1000,
       // RF-063: propaga identidade do dev (login), sessão, modelo e skills ao
       // gateway para a observabilidade — nunca segredos.
-      extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type, runtime.reasoningEffort),
+      extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type, runtime.reasoningEffort, mode),
       emit: (e) => this.obs.record(e),
       obsMeta: {
         mode,
@@ -957,7 +971,8 @@ export class Controller {
     activatedSkills: string[],
     modelId: string,
     providerType: string,
-    reasoningEffort?: ReasoningEffort
+    reasoningEffort?: ReasoningEffort,
+    mode?: string
   ): Record<string, string> {
     const meta = this.context.globalState.get<{ org: string; subject: string }>(GS_LICENSE_META);
     const identity = this.resolveIdentity();
@@ -971,6 +986,7 @@ export class Controller {
       "x-forge-model": modelId,
       "x-forge-skills": activatedSkills.join(","),
       "x-forge-effort": reasoningEffort ?? "", // esforço de raciocínio aplicado (vazio quando N/A)
+      "x-forge-mode": mode ?? "", // normal | tdd | project | review
     };
   }
 

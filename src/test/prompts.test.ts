@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildBasePrompt, buildContinuationPrompt, buildReviewPrompt, buildTddPrompt } from "../core/systemPrompt";
+import { buildBasePrompt, buildContinuationPrompt, buildProjectPrompt, buildReviewPrompt, buildTailContinuation, buildTddPrompt } from "../core/systemPrompt";
 
 test("prompt TDD inclui o prompt base e instruções de test-first", () => {
   const p = buildTddPrompt("meu-projeto");
@@ -46,4 +46,35 @@ test("buildContinuationPrompt cita o arquivo, manda continuar e proíbe reabrir 
   assert.match(p, /CONTINUE/);
   assert.match(p, /NÃO reabra/i);
   assert.match(p, /PROIBIDO|reticências/i); // herda o NO_ELLIPSIS_RULE
+});
+
+test("buildProjectPrompt (Python/hexagonal): linguagem, camadas, protocolo forge-file, manifesto e anti-elipse", () => {
+  const p = buildProjectPrompt("proj", "python", "hexagonal");
+  assert.match(p, /Python/);
+  assert.match(p, /hexagonal/i);
+  assert.match(p, /forge-file/);
+  assert.match(p, /domain/);
+  assert.match(p, /ports/);
+  assert.match(p, /Protocol|ABC/); // mecanismo de interface do Python
+  assert.match(p, /pyproject|requirements/i); // manifesto
+  assert.match(p, /TESTES/); // pede testes por camada
+  assert.match(p, /PROIBIDO|reticências/i); // NO_ELLIPSIS_RULE
+});
+
+test("buildTailContinuation: manda emitir o restante dos arquivos, sem repetir nem reabrir bloco", () => {
+  const p = buildTailContinuation();
+  assert.match(p, /CONTINUE/);
+  assert.match(p, /restante|próximos arquivos/i);
+  assert.match(p, /NÃO reabra/i);
+});
+
+test("buildProjectPrompt ajusta arquitetura, manifesto e interface por linguagem", () => {
+  const go = buildProjectPrompt("p", "go", "clean");
+  assert.match(go, /\bGo\b/);
+  assert.match(go, /clean/i);
+  assert.match(go, /interface Go/);
+  assert.match(go, /go\.mod/);
+  const ts = buildProjectPrompt("p", "typescript", "mvc");
+  assert.match(ts, /MVC/i);
+  assert.match(ts, /package\.json/);
 });
