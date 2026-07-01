@@ -3,6 +3,8 @@ import { Icon } from "../icons";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
+import { isRenderablePath } from "../../../src/shared/protocol";
+import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -500,6 +502,9 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
   const labels = v?.results.map((r) => r.label).join(" + ") || "validação";
   const skipped = v?.results.filter((r) => r.status === "skipped").map((r) => r.label) ?? [];
   const cell = p.proposal.cell;
+  // Artefato renderável (.html/.svg): "executar" vira "visualizar" (abre no painel de preview).
+  const renderable = !cell && isRenderablePath(p.proposal.filePath);
+  const openPreview = () => post({ type: "preview/open", filePath: p.proposal.filePath, proposalId: p.proposal.id });
   const [menuOpen, setMenuOpen] = useState(false);
   const applyLabel = cell ? (cell.op === "add" ? "Inserir célula" : `Substituir célula [${cell.index}]`) : "Aplicar e abrir";
 
@@ -552,6 +557,10 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             <button className="btn" title="Executar esta célula (captura a saída)" onClick={() => post({ type: "cell/run", proposalId: p.proposal.id })}>
               <Icon name="player-play" size={12} /> Executar célula
             </button>
+          ) : renderable ? (
+            <button className="btn" title="Abrir o preview deste arquivo (painel ao lado)" onClick={openPreview}>
+              <Icon name="eye" size={12} /> Visualizar
+            </button>
           ) : p.run?.running ? (
             <button className="btn" disabled title="Execução em andamento">
               <Icon name="refresh" size={12} className="spin" /> Executando…
@@ -588,10 +597,12 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             <button
               className="btn"
               disabled={!!(v && (v.running || gateFailed))}
-              title="Aplicar o arquivo e executá-lo no terminal"
-              onClick={() => post({ type: "proposal/applyAndRun", proposalId: p.proposal.id })}
+              title={renderable ? "Gravar o arquivo e abrir o preview" : "Aplicar o arquivo e executá-lo no terminal"}
+              onClick={() =>
+                post({ type: renderable ? "proposal/applyAndPreview" : "proposal/applyAndRun", proposalId: p.proposal.id })
+              }
             >
-              <Icon name="player-play" size={13} /> Aplicar e executar
+              <Icon name={renderable ? "eye" : "player-play"} size={13} /> {renderable ? "Aplicar e visualizar" : "Aplicar e executar"}
             </button>
           )}
           <button className="btn" onClick={() => post({ type: "proposal/viewDiff", proposalId: p.proposal.id })}>
@@ -653,13 +664,30 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
     if (running) outRef.current?.scrollTo({ top: outRef.current.scrollHeight });
   }, [run.output, running]);
 
-  const status = running ? "run" : run.skippedReason ? "skip" : run.ok ? "ok" : "fail";
   const isTests = run.label === "testes";
+  const outcome: TestOutcome | null = isTests && !running ? pytestOutcome(run.exitCode, run.output) : null;
+  // Para testes, o status vem do outcome semântico (exit 5 = neutro, não vermelho). Para execução de
+  // arquivo, segue o ok booleano. "Corrigir com FORGE" só faz sentido quando os testes de fato falharam.
+  const status = running
+    ? "run"
+    : run.skippedReason
+    ? "skip"
+    : outcome
+    ? outcome === "passed"
+      ? "ok"
+      : outcome === "no-tests"
+      ? "skip"
+      : "fail"
+    : run.ok
+    ? "ok"
+    : "fail";
+  const canFix = outcome ? outcome === "failed" : status === "fail";
   const title = run.label ? run.label : run.command || "execução";
   const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
-  const fixText = isTests
-    ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
-    : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
+  const fixText =
+    outcome === "failed"
+      ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
+      : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
   return (
     <div className="run-card">
       <div className={`run-head ${status}`} onClick={() => !running && setOpen((v) => !v)}>
@@ -674,7 +702,7 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           <span>indisponível</span>
         ) : (
           <span>
-            {run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
+            {outcome ? testOutcomeLabel(outcome, run.exitCode) : run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
           </span>
         )}
         {!running && (
@@ -701,7 +729,7 @@ function RunCard({ run, dispatch }: { run: RunResultData; dispatch: React.Dispat
           )}
         </div>
       ) : (
-        status === "fail" && (
+        canFix && (
           <div className="actions" style={{ marginTop: 7 }}>
             <button
               className="btn p"
@@ -762,6 +790,10 @@ type DodStatus = "ok" | "fail" | "pending";
 
 function runStatus(r: RunResultData | null): DodStatus {
   if (!r || r.skippedReason) return "pending";
+  if (r.label === "testes") {
+    const o = pytestOutcome(r.exitCode, r.output);
+    return o === "passed" ? "ok" : o === "no-tests" ? "pending" : "fail"; // sem testes = pendente, não falha
+  }
   return r.ok ? "ok" : "fail";
 }
 

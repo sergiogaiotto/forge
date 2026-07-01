@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,7 +24,9 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { findVenvPython, resolveTestCommand } from "../util/pythonEnv";
 import { deriveBudget } from "./ContextBudget";
+import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -91,6 +94,7 @@ export class Controller {
   private attachmentSeq = 0;
   private currentTask: Task | undefined;
   private readonly runService: RunService;
+  private readonly previewService: PreviewService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   private poster: ((msg: ExtToWebview) => void) | undefined;
@@ -117,11 +121,17 @@ export class Controller {
       new LangfuseDirectSink(() => this.config.observability(), () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET), this.egress),
       { onError: (m) => log.warn(m) }
     );
+    this.previewService = new PreviewService({
+      workspaceRoot: () => this.workspaceRoot(),
+      post: (msg) => this.post(msg),
+    });
+    context.subscriptions.push(this.previewService);
     this.runService = new RunService({
       post: (msg) => this.post(msg),
       workspaceRoot: () => this.workspaceRoot(),
       runConfig: () => this.config.run(),
       onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
+      openPreview: (relPath) => void this.previewService.openPreview(relPath),
     });
     context.subscriptions.push(this.runService);
 
@@ -574,6 +584,9 @@ export class Controller {
       case "proposal/applyAndRun":
         await this.applyAndRun(msg.proposalId);
         break;
+      case "proposal/applyAndPreview":
+        await this.applyAndPreview(msg.proposalId);
+        break;
       case "proposal/discard": {
         const fp = this.currentTask?.getProposal(msg.proposalId)?.proposal.filePath ?? "";
         this.post({ type: "proposal/discarded", proposalId: msg.proposalId });
@@ -588,6 +601,10 @@ export class Controller {
         break;
       case "run/file":
         await this.runService.runFile(msg.filePath, msg.proposalId);
+        break;
+      case "preview/open":
+        await this.previewService.openPreview(msg.filePath);
+        this.obs.record({ type: "run.result", filePath: msg.filePath, label: "preview", ok: true, exitCode: 0, durationMs: 0 });
         break;
       case "run/cancel":
         this.runService.cancel(msg.runId);
@@ -1254,6 +1271,17 @@ export class Controller {
     }
   }
 
+  // Grava o arquivo E abre o preview — num único handler, garantindo a ordem (o preview lê o arquivo
+  // só depois de gravado), diferente de postar apply + preview/open como mensagens concorrentes.
+  async applyAndPreview(proposalId: string): Promise<void> {
+    const entry = this.currentTask?.getProposal(proposalId);
+    const applied = await this.applyProposal(proposalId);
+    if (applied && entry && !entry.proposal.cell) {
+      await this.previewService.openPreview(entry.proposal.filePath);
+      this.obs.record({ type: "run.result", filePath: entry.proposal.filePath, label: "preview", ok: true, exitCode: 0, durationMs: 0 });
+    }
+  }
+
   // Roda a suíte de testes (pytest por padrão) — TDD / quality gate de testes.
   async runTests(): Promise<void> {
     const testCfg = this.config.test();
@@ -1267,7 +1295,11 @@ export class Controller {
       return;
     }
     const runner = new Runner(ws);
-    const result = await runner.runRaw(testCfg.command, this.config.run().timeoutSeconds * 1000);
+    // Roda pytest pelo interpretador do venv do projeto (python -m pytest), não pelo PATH global —
+    // elimina o "ModuleNotFoundError: No module named pytest" quando o venv não está ativado no shell.
+    const venvPython = findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV);
+    const command = resolveTestCommand(testCfg.command, venvPython);
+    const result = await runner.runRaw(command, this.config.run().timeoutSeconds * 1000);
     this.post({
       type: "run/result",
       filePath: "",

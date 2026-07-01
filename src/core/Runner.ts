@@ -1,5 +1,6 @@
 import { exec } from "node:child_process";
 import * as path from "node:path";
+import { isRenderablePath } from "../shared/protocol";
 
 export interface RunResult {
   command: string;
@@ -23,16 +24,16 @@ export const DEFAULT_RUN_COMMANDS: Record<string, string> = {
   ".go": "go run {file}",
 };
 
-export type ResolvedRun = { template: string } | { skippedReason: string };
+export type ResolvedRun = { template: string } | { renderable: true; ext: string } | { skippedReason: string };
 
-// Decide o comando de execucao para um arquivo (funcao pura, testavel).
+// Decide como "executar" um arquivo (funcao pura, testavel): comando de processo, PREVIEW (artefato
+// renderavel como .html/.svg) ou pular. Um comando custom configurado tem prioridade sobre o preview.
 export function resolveRunCommand(relPath: string, commands: Record<string, string>): ResolvedRun {
   const ext = path.extname(relPath).toLowerCase();
   const tpl = commands[ext] ?? DEFAULT_RUN_COMMANDS[ext];
-  if (!tpl) {
-    return { skippedReason: `Tipo "${ext || "(sem extensão)"}" não tem comando de execução. Configure em forge.run.commands.` };
-  }
-  return { template: tpl };
+  if (tpl) return { template: tpl };
+  if (isRenderablePath(relPath)) return { renderable: true, ext };
+  return { skippedReason: `Tipo "${ext || "(sem extensão)"}" não tem comando de execução. Configure em forge.run.commands.` };
 }
 
 // Monta o comando final substituindo {file} pelo caminho absoluto (citando se houver espaco).
@@ -104,6 +105,9 @@ export class Runner {
     const resolved = resolveRunCommand(relPath, commands);
     if ("skippedReason" in resolved) {
       return { command: "", ok: false, exitCode: null, output: "", durationMs: 0, skippedReason: resolved.skippedReason };
+    }
+    if ("renderable" in resolved) {
+      return { command: "", ok: false, exitCode: null, output: "", durationMs: 0, skippedReason: `Artefato "${resolved.ext}" se visualiza (preview), não executa.` };
     }
     const abs = this.cwd ? path.join(this.cwd, relPath) : relPath;
     const command = buildCommand(resolved.template, abs);
