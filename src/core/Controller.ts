@@ -56,6 +56,7 @@ import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
 import { parseBlueprint, topoSort } from "../util/blueprint";
+import { stripHarmony } from "../util/harmony";
 import { classifyProjectIntent } from "../util/projectIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
@@ -522,7 +523,9 @@ export class Controller {
         }
       }
       if (error) this.post({ type: "charter/error", section, message: error });
-      else this.post({ type: "charter/drafted", section, text: text.trim() });
+      // stripHarmony: remove o raciocínio/canal de análise que o gpt-oss pode vazar no content
+      // (ex.: "Now final output is markdown string. Proceed.") antes de cair no campo do wizard.
+      else this.post({ type: "charter/drafted", section, text: stripHarmony(text) });
     } catch (e) {
       error = (e as Error)?.message ?? String(e);
       this.post({ type: "charter/error", section, message: error });
