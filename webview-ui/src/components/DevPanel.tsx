@@ -755,7 +755,10 @@ function CharterWizard({
               <button
                 className="btn p"
                 disabled={anyDrafting}
-                onClick={() => post({ type: "charter/save", sections: charter.sections })}
+                onClick={() => {
+                  post({ type: "charter/save", sections: charter.sections });
+                  onClose(); // fecha o modal e volta à tela principal (o toast "Charter salvo…" confirma)
+                }}
               >
                 <Icon name="check" size={13} /> Salvar
               </button>
