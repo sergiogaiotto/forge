@@ -263,3 +263,33 @@ test("project/closed fecha o modal do projeto SEM toast de erro (diferente de bl
   assert.equal(s.project, null, "modal fechado");
   assert.equal(s.toast, null, "sem toast de erro (ao contrário de project/blueprintError)");
 });
+
+test("project/fileStatus patcha o status de UM arquivo (progresso um-a-um) sem tocar nos demais", () => {
+  const bp = {
+    language: "python" as const,
+    architecture: "hexagonal" as const,
+    brief: "x",
+    files: [
+      { path: "a.py", purpose: "", deps: [], status: "generating" as const },
+      { path: "b.py", purpose: "", deps: [], status: "generating" as const },
+    ],
+  };
+  let s = apply(initialState, { type: "project/blueprint", blueprint: bp });
+  s = apply(s, { type: "project/fileStatus", path: "a.py", status: "complete" });
+  assert.equal(s.project?.blueprint?.files.find((f) => f.path === "a.py")?.status, "complete");
+  assert.equal(s.project?.blueprint?.files.find((f) => f.path === "b.py")?.status, "generating", "b.py intacto");
+  // path inexistente → no-op (não quebra nem cria arquivo)
+  s = apply(s, { type: "project/fileStatus", path: "z.py", status: "complete" });
+  assert.equal(s.project?.blueprint?.files.length, 2);
+});
+
+test("project/planStep narra a etapa atual do planejamento (antes do blueprint chegar)", () => {
+  let s = reducer(initialState, { kind: "project/planning" });
+  assert.equal(s.project?.planStep, undefined, "sem etapa até o host narrar");
+  s = apply(s, { type: "project/planStep", label: "Analisando os requisitos…" });
+  assert.equal(s.project?.planStep, "Analisando os requisitos…");
+  s = apply(s, { type: "project/planStep", label: "Ordenando por dependência…" });
+  assert.equal(s.project?.planStep, "Ordenando por dependência…");
+  // planStep sem projeto ativo é ignorado (no-op seguro)
+  assert.equal(apply(initialState, { type: "project/planStep", label: "x" }).project, null);
+});

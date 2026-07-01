@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  closedBlockPaths,
   parseFileBlocks,
   parsePartialFileBlocks,
   stripFileBlockOfPath,
   stripFileBlocksFromText,
 } from "../util/fileBlocks";
 import { parseCellBlocks } from "../util/cellBlocks";
+
+test("closedBlockPaths retorna só blocos FECHADOS com path (progresso um-a-um do Modo Projeto)", () => {
+  const closedA = ["```forge-file path=a.py", "x = 1", "```"].join("\n");
+  const openB = ["```forge-file path=b.py", "def f():"].join("\n"); // sem cerca de fechamento → aberto
+  assert.deepEqual(closedBlockPaths(closedA + "\n" + openB), ["a.py"]); // b.py aberto não conta
+  const closedC = ["```forge-file path=c.py", "y = 2", "```"].join("\n");
+  assert.deepEqual(closedBlockPaths(closedA + "\n" + closedC), ["a.py", "c.py"]); // dois fechados, em ordem
+  assert.deepEqual(closedBlockPaths("só prosa, sem cercas"), []);
+});
 
 test("extracts a single file block", () => {
   const text = [

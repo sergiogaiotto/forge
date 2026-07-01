@@ -594,16 +594,24 @@ export class Controller {
       this.post({ type: "project/blueprintError", message: (e as Error)?.message ?? String(e) });
       return;
     }
+    // Narração do planejamento (o modal mostra a etapa atual em vez de um spinner estático).
+    this.post({ type: "project/planStep", label: "Analisando os requisitos e desenhando a arquitetura…" });
     let out = "";
     try {
       const provider = createProvider(runtime, this.egress);
       const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "project");
+      let gotText = false;
       for await (const chunk of provider.createMessage(buildBlueprintSystemPrompt(language, architecture), [{ role: "user", content: text.slice(0, 6000) }], {
         timeoutMs: runtime.timeoutSeconds * 1000,
         extraHeaders: headers,
       })) {
-        if (chunk.kind === "text") out += chunk.text;
-        else if (chunk.kind === "error") {
+        if (chunk.kind === "text") {
+          if (!gotText) {
+            gotText = true;
+            this.post({ type: "project/planStep", label: "Recebendo o plano do modelo…" });
+          }
+          out += chunk.text;
+        } else if (chunk.kind === "error") {
           this.post({ type: "project/blueprintError", message: chunk.message });
           return;
         }
@@ -612,6 +620,7 @@ export class Controller {
       this.post({ type: "project/blueprintError", message: (e as Error)?.message ?? String(e) });
       return;
     }
+    this.post({ type: "project/planStep", label: "Ordenando os arquivos por dependência…" });
     const files = topoSort(parseBlueprint(out));
     if (files.length === 0) {
       this.post({ type: "project/blueprintError", message: "Não consegui montar o plano (resposta sem blueprint válido). Ajuste a descrição e tente de novo." });
@@ -656,6 +665,20 @@ export class Controller {
     this.currentTask?.abort(); // aborta a geração em andamento, se houver
     this.projectSession = null;
     this.post({ type: "project/done" });
+  }
+
+  // Fase F: durante a geração guiada, marca UM arquivo como "gerado" assim que seu bloco fecha no
+  // streaming (progresso um-a-um). Só promove 'generating' → 'complete' (não mexe em 'applied'/'failed');
+  // idempotente por arquivo. A reconciliação final em startTask continua sendo a autoridade.
+  private markProjectFileComplete(filePath: string): void {
+    const s = this.projectSession;
+    if (!s) return;
+    const norm = (p: string) => p.replace(/^[./\\]+/, ""); // casa './x' da proposta com 'x' do blueprint
+    const f = s.files.find((x) => norm(x.path) === norm(filePath));
+    if (f && f.status === "generating") {
+      f.status = "complete";
+      this.post({ type: "project/fileStatus", path: f.path, status: "complete" }); // patch pontual (não o array todo)
+    }
   }
 
   // Passo 3: aplica TODAS as propostas, na ordem topológica do blueprint quando houver. NÃO aplica em
@@ -1342,6 +1365,10 @@ export class Controller {
         org: this.context.globalState.get<{ org?: string }>(GS_LICENSE_META)?.org,
       },
       post: (m) => this.post(m),
+      // Modo Projeto: à medida que cada bloco de arquivo FECHA no streaming, marca "gerado" um a um,
+      // em vez de tudo em lote no fim. A reconciliação final (complete/failed) segue autoritativa.
+      onFileClosed:
+        mode === "project" && this.projectSession ? (filePath) => this.markProjectFileComplete(filePath) : undefined,
     });
     this.currentTask = task;
 
