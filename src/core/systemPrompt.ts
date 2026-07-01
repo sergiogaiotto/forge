@@ -204,6 +204,7 @@ export function buildContinuationPrompt(filePath: string | undefined): string {
   return `Sua resposta anterior foi CORTADA no meio de ${alvo} — a cerca de fechamento não chegou.
 CONTINUE a geração EXATAMENTE do ponto onde parou, no MESMO arquivo. Regras estritas:
 - NÃO repita nada do que já escreveu; recomece exatamente no próximo caractere que faltou.
+- Responda APENAS com o conteúdo do arquivo. NADA de saudação, confirmação ("ok", "claro", "vou continuar", "will do") nem comentário sobre a tarefa (ex.: "adicionando nova linha"). O PRIMEIRO caractere da sua resposta já é a continuação do código.
 - NÃO reabra a cerca \`${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG}\` nem o cabeçalho \`path=\` — apenas siga o conteúdo.
 - Escreva o restante do arquivo até o fim e FECHE a cerca (\`${FORGE_FENCE}\`) corretamente.
 - ${NO_ELLIPSIS_RULE}`;
@@ -216,6 +217,7 @@ export function buildTailContinuation(): string {
   return `Sua resposta anterior foi CORTADA por limite de tokens ANTES de terminar. CONTINUE de onde parou:
 - Emita o RESTANTE do que faltava — os próximos arquivos como blocos \`${FORGE_FILE_BLOCK_LANG}\` completos
   (ou, se o último arquivo ficou aberto, feche-o primeiro).
+- Responda APENAS com código/blocos de arquivo. NADA de saudação, confirmação ("ok", "vou continuar", "will do") nem comentário sobre a tarefa. O PRIMEIRO caractere já é a continuação.
 - NÃO repita nada do que já escreveu; NÃO reabra um bloco já fechado.
 - ${NO_ELLIPSIS_RULE}`;
 }
