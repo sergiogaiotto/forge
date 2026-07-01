@@ -344,6 +344,7 @@ export type WebviewToExt =
   | { type: "context/pickWorkspaceFile" }
   | { type: "context/pickLocalFile" }
   | { type: "context/addSelection" }
+  | { type: "context/addTerminalSelection" }
   | { type: "context/removeAttachment"; id: string }
   | { type: "context/search" }
   | { type: "context/webInfo" }

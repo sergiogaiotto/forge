@@ -1023,6 +1023,9 @@ export class Controller {
       case "context/addSelection":
         await this.addSelectionAttachment();
         break;
+      case "context/addTerminalSelection":
+        await this.addTerminalSelectionAttachment();
+        break;
       case "context/removeAttachment":
         this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== msg.id);
         this.postAttachments();
@@ -1540,6 +1543,36 @@ export class Controller {
     }
     const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, editor.document.uri.fsPath) : editor.document.fileName;
     this.addAttachment(`${path.basename(rel)} (seleção)`, "selection", editor.document.getText(editor.selection));
+  }
+
+  // Anexa a seleção do TERMINAL. Não há API pública para ler a seleção de um terminal (a interface
+  // Terminal não expõe `selection`), então o caminho realista é copiá-la via comando do workbench e ler
+  // o clipboard — SEMPRE restaurando o conteúdo anterior depois (efeito colateral zero, mesmo sob erro).
+  async addTerminalSelectionAttachment(): Promise<void> {
+    const terminal = vscode.window.activeTerminal;
+    if (!terminal) {
+      this.post({ type: "notice", level: "warn", message: "Nenhum terminal ativo. Abra um terminal e selecione um trecho para anexar." });
+      return;
+    }
+    const prev = await vscode.env.clipboard.readText();
+    let sel = prev;
+    try {
+      terminal.show(true); // torna o terminal ativo VISÍVEL sem roubar o foco do chat
+      await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+      // A escrita no clipboard pode ser assíncrona ALÉM do await do comando (renderer/pty) — relê por um
+      // curto período até o valor mudar, evitando um falso-negativo intermitente por corrida.
+      for (let i = 0; i < 8 && sel === prev; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+        sel = await vscode.env.clipboard.readText();
+      }
+    } finally {
+      await vscode.env.clipboard.writeText(prev); // restaura o clipboard do usuário haja o que houver
+    }
+    if (!sel || sel === prev) {
+      this.post({ type: "notice", level: "warn", message: "Selecione um trecho no terminal para anexar e tente novamente." });
+      return;
+    }
+    this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
   }
 
   // Busca interna GOVERNADA via MCP — substitui a "web" pública por uma fonte
