@@ -435,14 +435,22 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
 
         {!bp ? (
           <div className="profile-empty">
-            <Icon name="refresh" size={13} className="spin" /> Planejando o projeto…
+            <Icon name="refresh" size={13} className="spin" /> {proj.planStep ?? "Planejando o projeto…"}
           </div>
         ) : (
           <>
-            <div className="plan-hint">Revise o plano. Ao aprovar, o FORGE gera cada arquivo na ordem de dependência.</div>
+            <div className="plan-hint">
+              {proj.done
+                ? "Arquivos gerados. Clique em “Aplicar tudo” para gravá-los no workspace, ou feche para revisar antes."
+                : "Revise os arquivos abaixo — passe o mouse para ver o objetivo e as dependências de cada um. “Aprovar e gerar” cria todos na ordem de dependência; “Cancelar” descarta o plano."}
+            </div>
             <div className="plan-list">
               {files.map((f) => (
-                <div key={f.path} className="plan-item">
+                <div
+                  key={f.path}
+                  className="plan-item"
+                  title={`${f.path}\n\n${f.purpose || "(sem descrição)"}${f.deps.length ? `\n\nDepende de: ${f.deps.join(", ")}` : ""}`}
+                >
                   <span className="dot" style={{ background: STATUS_DOT[f.status] }} title={STATUS_LABEL[f.status]} />
                   <div className="plan-file">
                     <span className="mono">{f.path}</span>

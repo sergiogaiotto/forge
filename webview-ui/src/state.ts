@@ -82,7 +82,8 @@ export interface UIState {
   profile: ProfileView | null;
   charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
   // Fase F: blueprint do Modo Projeto + fase (planejando/gerando). Null = sem fluxo de projeto ativo.
-  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean } | null;
+  // planStep: etapa atual do planejamento (narração), mostrada enquanto o blueprint não chegou.
+  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string } | null;
   // Seq monotônico incrementado a cada "project/appliedAll" (aplicou todos os arquivos). O DevPanel
   // observa a mudança para desmarcar o Modo Projeto automaticamente (0 = nunca ocorreu).
   appliedAllAt: number;
@@ -279,6 +280,23 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return state.project?.blueprint
         ? { ...state, project: { ...state.project, blueprint: { ...state.project.blueprint, files: msg.files } } }
         : state;
+    case "project/fileStatus":
+      // Patch pontual de UM arquivo (progresso um-a-um) — não reconstrói o array a partir do host.
+      return state.project?.blueprint
+        ? {
+            ...state,
+            project: {
+              ...state.project,
+              blueprint: {
+                ...state.project.blueprint,
+                files: state.project.blueprint.files.map((f) => (f.path === msg.path ? { ...f, status: msg.status } : f)),
+              },
+            },
+          }
+        : state;
+    case "project/planStep":
+      // Narração do planejamento (só relevante enquanto o blueprint não chegou).
+      return state.project ? { ...state, project: { ...state.project, planStep: msg.label } } : state;
     case "project/done":
       return state.project ? { ...state, project: { ...state.project, busy: false, done: true } } : state;
     case "project/appliedAll":

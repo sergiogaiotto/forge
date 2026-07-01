@@ -281,9 +281,15 @@ export type ExtToWebview =
   | { type: "skills/body"; name: string; body: string }
   | { type: "rag/inspect"; index: RagInspectView }
   | { type: "rag/file"; relPath: string; chunks: RagChunkView[] }
+  // Etapa do PLANEJAMENTO (antes do blueprint chegar): narra o progresso ("analisando requisitos" →
+  // "montando a árvore" → "ordenando por dependência") em vez de um spinner estático.
+  | { type: "project/planStep"; label: string }
   | { type: "project/blueprint"; blueprint: ProjectBlueprintView }
   | { type: "project/blueprintError"; message: string }
   | { type: "project/status"; files: BlueprintFileView[] }
+  // Atualização PONTUAL do status de UM arquivo (progresso um-a-um durante a geração) — evita reenviar
+  // o array inteiro a cada arquivo que fecha.
+  | { type: "project/fileStatus"; path: string; status: ProjectFileStatus }
   | { type: "project/done" }
   // Todos os arquivos do projeto foram APLICADOS (após "Aplicar tudo"). O webview desmarca o Modo
   // Projeto automaticamente — fim de fluxo: a próxima mensagem volta a ser chat/diagnóstico normal.

@@ -8,7 +8,7 @@ import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
 import { CompletenessResult, partialFilePath, resilientGenerate } from "../util/completeness";
-import { parseFileBlocks } from "../util/fileBlocks";
+import { closedBlockPaths, parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 import { safeWorkspacePath } from "../util/safePath";
 import { buildContinuationPrompt, buildTailContinuation } from "./systemPrompt";
@@ -21,6 +21,10 @@ const MAX_CONTINUATIONS = 6;
 // inteiro): evita inflar a ENTRADA a cada rodada e estourar a janela do servidor (HTTP 400). A cauda
 // dá contexto de sobra para o modelo continuar, e o stitch (teto 400) dedupa a sobreposição.
 const CONTINUATION_ANCHOR_CHARS = 8000;
+// Modo Projeto: re-parsear o texto acumulado para detectar arquivos fechados custa O(n) por vez; para
+// não virar O(n²) no host, só re-parseia após crescer este tanto (o status um-a-um é cosmético — a
+// reconciliação final é a autoridade, então um atraso de ~1 KB no dot é imperceptível).
+const STATUS_SCAN_DELTA = 1200;
 
 let proposalCounter = 0;
 
@@ -36,6 +40,9 @@ export interface TaskDeps {
   timeoutMs: number;
   extraHeaders?: Record<string, string>;
   post: (msg: ExtToWebview) => void;
+  // Chamado (Modo Projeto) assim que um bloco de arquivo FECHA no streaming — habilita o status
+  // "gerando…" → "gerado" um a um no modal, em vez de tudo em lote no fim.
+  onFileClosed?: (path: string) => void;
   emit?: (e: ObsEvent) => void; // observabilidade (geração + workflow)
   obsMeta?: { mode: "normal" | "tdd" | "review" | "project"; model: string; provider: string; sessionId: string; userId: string; org?: string };
 }
@@ -47,6 +54,8 @@ const LANG_BY_EXT: Record<string, string> = {
 
 export class Task {
   private readonly controller = new AbortController();
+  // Caminhos já notificados como "bloco fechado" (Modo Projeto), para não repetir o evento por arquivo.
+  private readonly closedNotified = new Set<string>();
   // Propostas geradas nesta task, mantidas para que o Controller possa aplicá-las/validá-las.
   // `cellIndex` é resolvido na aplicação de uma proposta de célula (para executá-la depois).
   readonly proposals = new Map<
@@ -164,6 +173,7 @@ export class Task {
     const d = this.deps;
     let text = "";
     let truncated = false;
+    let lastScanLen = 0; // (Modo Projeto) último tamanho em que varremos por blocos fechados — throttle
     try {
       for await (const chunk of d.provider.createMessage(d.systemPrompt, messages, {
         timeoutMs: d.timeoutMs,
@@ -177,6 +187,12 @@ export class Task {
           case "text":
             text += chunk.text;
             d.post({ type: "stream/text", taskId: d.taskId, delta: chunk.text });
+            // Só re-parseia quando o chunk traz uma crase (possível fronteira de cerca) E o texto cresceu
+            // um mínimo desde a última varredura (throttle) — evita O(n²) no host em projetos grandes.
+            if (d.onFileClosed && chunk.text.includes("`") && text.length - lastScanLen >= STATUS_SCAN_DELTA) {
+              lastScanLen = text.length;
+              this.notifyClosedBlocks(text);
+            }
             break;
           case "warning":
             truncated = true; // provider sinalizou corte por limite (finish_reason=length/max_tokens)
@@ -194,6 +210,21 @@ export class Task {
       return { text, error: (err as Error).message, truncated };
     }
     return { text, truncated };
+  }
+
+  // Detecta blocos de arquivo que acabaram de FECHAR no texto acumulado e notifica cada caminho uma
+  // única vez (Modo Projeto → status "gerado" um a um). `accumulated` é o texto DESTA passagem; num
+  // multi-passe (continuação), um arquivo aberto no passe anterior e fechado agora não é visto aqui
+  // (a passagem não tem a linha de abertura) — é best-effort: a reconciliação final marca-o "gerado".
+  private notifyClosedBlocks(accumulated: string): void {
+    const d = this.deps;
+    if (!d.onFileClosed) return;
+    for (const path of closedBlockPaths(accumulated)) {
+      if (!this.closedNotified.has(path)) {
+        this.closedNotified.add(path);
+        d.onFileClosed(path);
+      }
+    }
   }
 
   private async makeCellProposal(cb: import("../util/cellBlocks").CellBlock): Promise<DiffProposal> {

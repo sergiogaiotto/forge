@@ -165,6 +165,14 @@ export function parsePartialFileBlocks(text: string): PartialFileBlock[] {
     .map(({ path, content, closed }) => ({ path, content, closed }));
 }
 
+// Caminhos dos blocos forge-file JÁ FECHADOS no texto (com path). O Modo Projeto usa isto durante o
+// streaming para marcar cada arquivo como "gerado" assim que sua cerca de fechamento chega. Puro/testável.
+export function closedBlockPaths(text: string): string[] {
+  return parsePartialFileBlocks(text)
+    .filter((b) => b.closed && b.path)
+    .map((b) => b.path);
+}
+
 // Remove os blocos forge-file (os mesmos que parsePartialFileBlocks reconhece) do texto exibido
 // como prosa DURANTE o streaming, para que a cerca crua nunca apareça no chat. Blocos inválidos
 // (fechado sem path, prefixo falso) NÃO são removidos — permanecem como texto, em sintonia com o host
