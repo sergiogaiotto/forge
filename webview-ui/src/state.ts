@@ -5,12 +5,17 @@ import type {
   ExtToWebview,
   ForgeState,
   ProfileView,
+  ProjectArchitecture,
   ProjectBlueprintView,
+  ProjectLanguage,
   RagChunkView,
   RagInspectView,
   SkillInspectView,
   ValidatorResult,
 } from "../../src/shared/protocol";
+
+// Pedido de projeto em curso (o brief), retido para o "Tentar de novo" após uma falha do blueprint.
+export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 export type { ProfileView } from "../../src/shared/protocol";
 
@@ -83,7 +88,9 @@ export interface UIState {
   charter: { sections: CharterSections; drafting: Record<CharterKey, boolean> } | null;
   // Fase F: blueprint do Modo Projeto + fase (planejando/gerando). Null = sem fluxo de projeto ativo.
   // planStep: etapa atual do planejamento (narração), mostrada enquanto o blueprint não chegou.
-  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string } | null;
+  // error: falha do blueprint — o modal FICA ABERTO mostrando o erro + "Tentar de novo" (não some).
+  // brief: o pedido em curso, para o retry reenviar sem redigitar.
+  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string; error?: string; brief?: ProjectBrief } | null;
   // Seq monotônico incrementado a cada "project/appliedAll" (aplicou todos os arquivos). O DevPanel
   // observa a mudança para desmarcar o Modo Projeto automaticamente (0 = nunca ocorreu).
   appliedAllAt: number;
@@ -130,7 +137,7 @@ export type Action =
   | { kind: "clearProfile" }
   | { kind: "run/dismiss"; id: string }
   | { kind: "charter/edit"; section: CharterKey; text: string }
-  | { kind: "project/planning" }
+  | { kind: "project/planning"; brief: ProjectBrief }
   | { kind: "project/generating" }
   | { kind: "project/close" }
   | { kind: "clearToast" };
@@ -193,9 +200,9 @@ export function reducer(state: UIState, action: Action): UIState {
       if (!state.charter) return state;
       return { ...state, charter: { ...state.charter, sections: { ...state.charter.sections, [action.section]: action.text } } };
     case "project/planning":
-      return { ...state, project: { blueprint: null, busy: true, done: false } };
+      return { ...state, project: { blueprint: null, busy: true, done: false, brief: action.brief } };
     case "project/generating":
-      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false } };
+      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false, error: undefined } };
     case "project/close":
       return { ...state, project: null };
     case "newConversation":
@@ -273,9 +280,14 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "profile/state":
       return { ...state, profile: msg.profile };
     case "project/blueprint":
-      return { ...state, project: { blueprint: msg.blueprint, busy: false, done: false } };
+      // Blueprint chegou → limpa qualquer erro anterior, preserva o brief (para retry futuro).
+      return { ...state, project: { ...state.project, blueprint: msg.blueprint, busy: false, done: false, error: undefined } };
     case "project/blueprintError":
-      return { ...state, project: null, toast: { level: "error", message: msg.message, seq: ++toastSeq } };
+      // NÃO fecha o modal: mantém aberto com o erro real + "Tentar de novo" (o brief está retido).
+      // Fallback ao toast só se, por acaso, não houver modal (state.project null).
+      return state.project
+        ? { ...state, project: { ...state.project, busy: false, error: msg.message } }
+        : { ...state, toast: { level: "error", message: msg.message, seq: ++toastSeq } };
     case "project/status":
       return state.project?.blueprint
         ? { ...state, project: { ...state.project, blueprint: { ...state.project.blueprint, files: msg.files } } }

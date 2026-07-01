@@ -605,6 +605,8 @@ export class Controller {
       const provider = createProvider(runtime, this.egress);
       const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "project");
       let gotText = false;
+      const started = Date.now();
+      let lastBeat = 0;
       for await (const chunk of provider.createMessage(buildBlueprintSystemPrompt(language, architecture), [{ role: "user", content: text.slice(0, 6000) }], {
         timeoutMs: runtime.timeoutSeconds * 1000,
         extraHeaders: headers,
@@ -615,6 +617,15 @@ export class Controller {
             this.post({ type: "project/planStep", label: "Recebendo o plano do modelo…" });
           }
           out += chunk.text;
+        } else if (chunk.kind === "reasoning") {
+          // Feedback VIVO durante o raciocínio: o gpt-oss (esforço alto) pensa longamente ANTES de emitir
+          // o plano. Sem isto o modal ficava congelado em "Analisando…". Atualiza com o tempo decorrido,
+          // limitado a 1/1.5s, para mostrar que está trabalhando (não travado).
+          const now = Date.now();
+          if (!gotText && now - lastBeat >= 1500) {
+            lastBeat = now;
+            this.post({ type: "project/planStep", label: `Raciocinando sobre a arquitetura… (${Math.round((now - started) / 1000)}s)` });
+          }
         } else if (chunk.kind === "error") {
           this.post({ type: "project/blueprintError", message: chunk.message });
           return;
@@ -1404,10 +1415,17 @@ export class Controller {
         }
       }
       this.post({ type: "project/status", files: this.projectSession.files });
-      this.post({ type: "project/done" });
       const total = this.projectSession.files.length;
-      if (done < total) {
-        this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
+      if (done === 0) {
+        // Falha TOTAL da geração (ex.: erro do provedor no meio do stream, que vira stream/error e NÃO
+        // gera propostas). Em vez de um project/done silencioso (modal "concluído" sem nada), mantém o
+        // modal com o erro + a lista (vermelha) + "Aprovar e gerar" habilitado — o dev vê e regenera.
+        this.post({ type: "project/blueprintError", message: 'Não consegui gerar nenhum arquivo (falha do provedor ou limite de tokens). Ajuste e clique em "Aprovar e gerar" para tentar de novo.' });
+      } else {
+        this.post({ type: "project/done" });
+        if (done < total) {
+          this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
+        }
       }
     }
     // Mantém o histórico limitado.
