@@ -153,6 +153,9 @@ export interface DiffProposal {
   activatedSkills: string[];
   // Presente quando a proposta é uma edição de CÉLULA de notebook (.ipynb).
   cell?: { op: "add" | "replace"; index?: number; after?: number };
+  // true quando a geração esgotou as tentativas de continuação e o arquivo pode estar incompleto —
+  // entrega honesta, em vez de um arquivo truncado disfarçado de completo.
+  partial?: boolean;
 }
 
 // ---- Host da extensão → Webview ------------------------------------------------

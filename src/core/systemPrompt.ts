@@ -135,3 +135,16 @@ ${FORGE_FENCE}
 O fechamento (\`${FORGE_FENCE}\`) fica sozinho na linha; quatro crases preservam cercas de três que o
 conteúdo porventura tenha. ${NO_ELLIPSIS_RULE} Caso contrário, apenas descreva a correção.`;
 }
+
+// Instrução (mensagem de USUÁRIO) para o modelo CONTINUAR uma resposta que foi cortada no meio de um
+// arquivo (cerca de fechamento não emitida por limite de tokens). Usada pela engine de geração
+// resiliente: costura-se a continuação ao texto acumulado até o arquivo fechar de verdade.
+export function buildContinuationPrompt(filePath: string | undefined): string {
+  const alvo = filePath ? `o arquivo \`${filePath}\`` : "o último arquivo";
+  return `Sua resposta anterior foi CORTADA no meio de ${alvo} — a cerca de fechamento não chegou.
+CONTINUE a geração EXATAMENTE do ponto onde parou, no MESMO arquivo. Regras estritas:
+- NÃO repita nada do que já escreveu; recomece exatamente no próximo caractere que faltou.
+- NÃO reabra a cerca \`${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG}\` nem o cabeçalho \`path=\` — apenas siga o conteúdo.
+- Escreva o restante do arquivo até o fim e FECHE a cerca (\`${FORGE_FENCE}\`) corretamente.
+- ${NO_ELLIPSIS_RULE}`;
+}
