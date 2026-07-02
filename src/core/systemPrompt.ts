@@ -192,6 +192,27 @@ export function buildBlueprintSystemPrompt(language: ProjectLanguage, architectu
   ].join("\n");
 }
 
+// Fase F — 2ª TENTATIVA do blueprint (a 1ª resposta não trouxe um array JSON parseável). Duas formas:
+// com `previous` (o modelo RESPONDEU, mas em prosa/formato errado) → pede a CONVERSÃO da própria
+// resposta no array exato — tarefa mecânica, quase sempre converge; sem `previous` (resposta vazia,
+// ex.: tudo foi para o canal de raciocínio) → repete o pedido com a exigência de formato reforçada.
+// Mensagem de USUÁRIO (o system prompt do blueprint continua o mesmo). Pura/testável.
+export function buildBlueprintRetryRequest(brief: string, previous: string): string {
+  const cappedPrev = previous.trim().slice(0, 4000);
+  if (cappedPrev) {
+    return `Sua resposta anterior NÃO continha o array JSON no formato exigido. CONVERTA o plano abaixo no ARRAY JSON exato do formato pedido — o PRIMEIRO caractere da sua resposta deve ser '[' e o ÚLTIMO deve ser ']'. NADA de prosa, raciocínio, comentários ou cercas.
+
+Pedido original:
+${brief}
+
+Sua resposta anterior (converta/corrija):
+${cappedPrev}`;
+  }
+  return `${brief}
+
+ATENÇÃO (2ª tentativa — a anterior veio vazia): responda APENAS com o array JSON do plano de arquivos. O PRIMEIRO caractere da sua resposta deve ser '[' e o ÚLTIMO deve ser ']'. NADA de prosa, raciocínio ou cercas.`;
+}
+
 // Fase F — GERAÇÃO GUIADA: gera EXATAMENTE os arquivos do blueprint aprovado, na ordem, cada um como um
 // bloco forge-file completo. Herda o prompt base; reusa a continuação resiliente (Task).
 export function buildProjectFromBlueprintPrompt(

@@ -5,8 +5,25 @@ import {
   effectiveTimeoutSeconds,
   REASONING_EFFORTS,
   supportsReasoningEffort,
+  supportsTemperature,
   TIMEOUT_BY_EFFORT,
 } from "../shared/protocol";
+
+// Os modelos de raciocínio da OpenAI (o-series, gpt-5) rejeitam temperature != 1 com 400 — o campo
+// NÃO deve ser enviado a eles (regressão: blueprint/charter quebravam com 400 nesses modelos).
+test("supportsTemperature: falso só para modelos de raciocínio da OpenAI; verdadeiro no resto", () => {
+  assert.equal(supportsTemperature("openai", "o1"), false);
+  assert.equal(supportsTemperature("openai", "o3-mini"), false);
+  assert.equal(supportsTemperature("openai", "o4-mini"), false);
+  assert.equal(supportsTemperature("openai", "gpt-5"), false);
+  assert.equal(supportsTemperature("openai", "gpt-4o"), true);
+  assert.equal(supportsTemperature("openai", "gpt-4.1"), true);
+  // gateways OpenAI-compatíveis (HubGPU/vLLM) e Anthropic aceitam temperature 0
+  assert.equal(supportsTemperature("openai-compatible", "openai/gpt-oss-120b"), true);
+  assert.equal(supportsTemperature("anthropic", "claude-sonnet-4-6"), true);
+  // fronteira: "o1"/"o3" só como token isolado (não casar substring tipo "solo13")
+  assert.equal(supportsTemperature("openai", "solo13-custom"), true);
+});
 
 test("timeout efetivo cresce monotonicamente com o esforço (low < medium < high)", () => {
   assert.equal(effectiveTimeoutSeconds("low"), 120);

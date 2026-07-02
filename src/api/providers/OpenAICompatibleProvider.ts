@@ -38,6 +38,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
     // gpt-oss e afins aceitam `reasoning_effort` (low/medium/high) no corpo Chat Completions.
     if (this.cfg.reasoningEffort) body.reasoning_effort = this.cfg.reasoningEffort;
+    // `!== undefined` (não truthiness): temperature 0 é um valor VÁLIDO e o mais usado aqui.
+    if (this.cfg.temperature !== undefined) body.temperature = this.cfg.temperature;
     if (opts.tools && opts.tools.length > 0) {
       body.tools = opts.tools.map(toOpenAITool);
       body.tool_choice = "auto";
@@ -69,7 +71,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
       let hint = "";
       if (res.status === 400) {
         const low = text.toLowerCase();
-        if (low.includes("reasoning_effort") || low.includes("unknown") || low.includes("unexpected") || low.includes("parameter")) {
+        // Ordem importa: "temperature" antes do check genérico de "parameter" — senão a dica mandaria
+        // o usuário ajustar o esforço de raciocínio para um erro causado pela temperature.
+        if (low.includes("temperature")) {
+          hint = " (o modelo não aceita o parâmetro temperature enviado — modelos de raciocínio da OpenAI só aceitam o default)";
+        } else if (low.includes("reasoning_effort") || low.includes("unknown") || low.includes("unexpected") || low.includes("parameter")) {
           hint = " (o gateway pode não aceitar o parâmetro reasoning_effort — reduza/ajuste o esforço de raciocínio)";
         } else if (low.includes("token") || low.includes("context") || low.includes("length")) {
           hint = " (o limite de tokens de saída somado ao contexto pode exceder a janela do modelo no gateway)";

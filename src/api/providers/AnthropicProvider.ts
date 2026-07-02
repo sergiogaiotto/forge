@@ -38,6 +38,8 @@ export class AnthropicProvider implements LLMProvider {
     if (opts.tools && opts.tools.length > 0) {
       body.tools = opts.tools.map(toAnthropicTool);
     }
+    // `!== undefined` (não truthiness): temperature 0 é um valor VÁLIDO e o mais usado aqui.
+    if (this.cfg.temperature !== undefined) body.temperature = this.cfg.temperature;
 
     const headers: Record<string, string> = {
       "content-type": "application/json",

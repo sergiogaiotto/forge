@@ -1,6 +1,44 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseBlueprint, topoSort } from "../util/blueprint";
+import { parseBlueprint, pickBlueprintFromChannels, topoSort } from "../util/blueprint";
+
+// pickBlueprintFromChannels: escolha do plano entre content/raciocínio (revisão adversarial pinou
+// o vetor: eco do schema no CoT BRUTO fabricava plano de 1 arquivo e PULAVA a 2ª tentativa).
+const PLAN3 = '[{"path":"src/a.py","purpose":"porta","deps":[]},{"path":"src/b.py","purpose":"impl","deps":["src/a.py"]},{"path":"README.md","purpose":"docs","deps":[]}]';
+
+test("pickBlueprintFromChannels: eco do schema no raciocínio BRUTO (sem marcador) NÃO fabrica plano", () => {
+  const echo = 'We need JSON like [{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase","deps":["outro/arquivo.ext"]}] then answer.';
+  const r = pickBlueprintFromChannels({ text: "", reasoning: echo, truncated: false });
+  assert.deepEqual(r.files, []); // inválido → chamador escala para a 2ª tentativa (conversão)
+  assert.equal(r.fromReasoning, false);
+});
+
+test("pickBlueprintFromChannels: raciocínio COM marcador de canal final → resgata o plano real", () => {
+  const reasoning = `rascunho... penso em [{"path":"x"}] etc.<|channel|>final<|message|>${PLAN3}`;
+  const r = pickBlueprintFromChannels({ text: "", reasoning, truncated: false });
+  assert.deepEqual(r.files.map((f) => f.path), ["src/a.py", "src/b.py", "README.md"]);
+  assert.equal(r.fromReasoning, true);
+});
+
+test("pickBlueprintFromChannels: plano de 1 arquivo (mesmo no content) é INVÁLIDO — projeto completo tem >=2", () => {
+  const r = pickBlueprintFromChannels({ text: '[{"path":"main.py","purpose":"tudo"}]', reasoning: "", truncated: false });
+  assert.deepEqual(r.files, []);
+});
+
+test("pickBlueprintFromChannels: content com plano completo vence sem olhar o raciocínio", () => {
+  const r = pickBlueprintFromChannels({ text: PLAN3, reasoning: "qualquer coisa", truncated: false });
+  assert.equal(r.files.length, 3);
+  assert.equal(r.fromReasoning, false);
+});
+
+test("pickBlueprintFromChannels: truncado com só 1 objeto completo salvageável → inválido (conversão)", () => {
+  const cut = '[{"path":"src/a.py","purpose":"porta","deps":[]},{"path":"src/b.py","purp';
+  const r = pickBlueprintFromChannels({ text: cut, reasoning: "", truncated: true });
+  assert.deepEqual(r.files, []); // 1 < MIN → a 2ª tentativa converte a resposta truncada
+  const cut2 = PLAN3.slice(0, PLAN3.length - 20); // corta no fim: 2 completos sobram
+  const r2 = pickBlueprintFromChannels({ text: cut2, reasoning: "", truncated: true });
+  assert.equal(r2.files.length, 2); // >= MIN → plano parcial utilizável (com aviso no modal)
+});
 
 test("parseBlueprint extrai o array JSON mesmo cercado por prosa/```json", () => {
   const text = 'Aqui está o plano:\n```json\n[{"path":"src/a.py","purpose":"porta","deps":[]},{"path":"src/b.py","purpose":"impl","deps":["src/a.py"]}]\n```\npronto!';

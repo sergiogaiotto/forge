@@ -55,6 +55,9 @@ export interface ProviderRuntimeConfig {
   maxTokens?: number;
   // Esforço de raciocínio (gpt-oss/OpenAI-compatível). Enviado como `reasoning_effort` no corpo.
   reasoningEffort?: ReasoningEffort;
+  // Temperatura de amostragem. Ausente = default do servidor. As tarefas ESTRUTURADAS one-shot
+  // (blueprint/charter) fixam 0: variância de amostragem é inimiga de JSON/formato estrito.
+  temperature?: number;
 }
 
 export function buildAuthHeaders(cfg: ProviderRuntimeConfig): Record<string, string> {

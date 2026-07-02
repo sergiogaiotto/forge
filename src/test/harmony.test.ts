@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { stripHarmony } from "../util/harmony";
+import { extractFinalChannel, stripHarmony } from "../util/harmony";
 
 test("stripHarmony: canal final delimitado — mantém só o conteúdo após <|channel|>final<|message|>", () => {
   const leak = "Now final output is markdown string. Proceed.<|channel|>final<|message|># Título\nconteúdo real";
@@ -61,6 +61,15 @@ test("stripHarmony: teto de 8 linhas protege contra stripping exagerado de preâ
 test("stripHarmony: preâmbulo com muitas linhas em branco intercaladas ainda é removido", () => {
   const leak = ".\n\n\n\n\nNow final output is markdown string.\n\n\nProceed.\n\n- RF-01: conteudo";
   assert.equal(stripHarmony(leak), "- RF-01: conteudo");
+});
+
+// Resgate conservador do canal de raciocínio (gateway roteia a resposta p/ reasoning_content):
+// SÓ devolve conteúdo se o marcador do canal final existir; raciocínio bruto → null (nunca é resposta).
+test("extractFinalChannel: com marcador devolve o conteúdo final; sem marcador devolve null", () => {
+  assert.equal(extractFinalChannel("penso A, penso B<|channel|>final<|message|># Seção\ntexto"), "# Seção\ntexto");
+  assert.equal(extractFinalChannel("analysis rascunho…assistantfinal- RF-01: ok<|end|>"), "- RF-01: ok");
+  assert.equal(extractFinalChannel("apenas raciocínio bruto, sem canal final"), null);
+  assert.equal(extractFinalChannel(""), null);
 });
 
 // REGRESSÃO (revisão adversarial): com o marcador do canal final presente, TUDO após ele é conteúdo

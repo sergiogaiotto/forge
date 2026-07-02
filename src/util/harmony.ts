@@ -56,3 +56,16 @@ export function stripHarmony(text: string): string {
   // definição, o canal final — prosa legítima começando com "The final output …" seria destruída.
   return (last ? body : dropHarmonyPreamble(body)).trim();
 }
+
+// Devolve o conteúdo do canal final SÓ se o marcador harmony existir no texto (senão null).
+// Fallback CONSERVADOR para quando o gateway roteia a resposta inteira para `reasoning_content`
+// (gpt-oss sem canal final isolado): o raciocínio bruto NÃO é resposta — mas, se ele contém o
+// marcador do canal final, o que vem depois do ÚLTIMO marcador é a resposta final real.
+export function extractFinalChannel(text: string): string | null {
+  if (!text) return null;
+  const re = new RegExp(FINAL_CHANNEL_RE.source, "gi");
+  let last: RegExpExecArray | null = null;
+  for (let m = re.exec(text); m; m = re.exec(text)) last = m;
+  if (!last) return null;
+  return text.slice(last.index + last[0].length).replace(HARMONY_TOKEN_RE, "").trim();
+}
