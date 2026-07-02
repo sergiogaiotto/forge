@@ -3,6 +3,24 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.0.1] — 2026-07-01
+
+### Fixed
+- **Blueprint/Charter truncados pelo raciocínio do `gpt-oss` em esforço alto.** No gpt-oss o raciocínio
+  **compartilha o `max_tokens` com a resposta final**; em esforço alto ele consumia o orçamento inteiro e
+  o plano saía truncado (`finish_reason=length`) → "resposta sem blueprint válido", e as seções do
+  Charter eram salvas **cortadas no meio da palavra**. Agora as tarefas one-shot estruturais
+  (Blueprint/Charter) rodam com esforço **"low"** (a geração de código mantém o esforço do usuário), e o
+  `parseBlueprint` **repara um array truncado** (recupera os arquivos completos) — só com truncamento
+  confirmado e preferindo o candidato mais tardio (um rascunho vazado do raciocínio não vira plano).
+- **Preâmbulo do canal de análise vazado sem marcador** ("Now final output is markdown string." /
+  "Proceed.") não polui mais o Charter salvo; conteúdo após o marcador do canal final nunca é tocado.
+- **Avisos de truncamento agora aparecem DENTRO dos modais** (Blueprint: "plano parcial — revise antes
+  de aprovar"; Charter: aviso ancorado na seção). Antes eram toasts que renderizavam **atrás** do modal
+  e sumiam em 5s — invisíveis exatamente no cenário em que importavam.
+- **Resposta vazia ao redigir uma seção do Charter não apaga mais o rascunho digitado** — vira um erro
+  na própria seção (com proteção duplicada no reducer da webview).
+
 ## [2.0.0] — 2026-07-01
 
 ### Added — Modo Projeto (Blueprint aprovável), Charter e anexos
