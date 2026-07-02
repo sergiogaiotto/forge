@@ -1,6 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildCharterSystemPrompt, buildContinuationPrompt, buildProjectPrompt, buildReviewPrompt, buildTailContinuation, buildTddPrompt } from "../core/systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildCharterSystemPrompt, buildContinuationPrompt, buildProjectPrompt, buildReviewPrompt, buildTailContinuation, buildTddPrompt } from "../core/systemPrompt";
+
+// 2ª tentativa do blueprint: com resposta anterior → CONVERSÃO da própria resposta no array exato;
+// sem resposta (veio vazia) → repete o pedido com o formato reforçado. Sempre exige '[' … ']'.
+test("buildBlueprintRetryRequest: com resposta anterior pede a CONVERSÃO e inclui o texto capado", () => {
+  const p = buildBlueprintRetryRequest("crie uma app de senhas", "Aqui está meu plano em prosa: main.py, util.py…");
+  assert.match(p, /CONVERTA/);
+  assert.match(p, /PRIMEIRO caractere/);
+  assert.ok(p.includes("crie uma app de senhas"));
+  assert.ok(p.includes("main.py, util.py"));
+  // resposta anterior gigante é capada (teto de 4000) para não estourar a janela
+  const big = buildBlueprintRetryRequest("brief", "x".repeat(20_000));
+  assert.ok(big.length < 6000);
+});
+
+test("buildBlueprintRetryRequest: sem resposta anterior reforça o formato no pedido original", () => {
+  const p = buildBlueprintRetryRequest("crie uma app de senhas", "   ");
+  assert.match(p, /2ª tentativa/);
+  assert.match(p, /APENAS com o array JSON/);
+  assert.ok(p.includes("crie uma app de senhas"));
+  assert.ok(!p.includes("CONVERTA"));
+});
 
 test("prompt TDD inclui o prompt base e instruções de test-first", () => {
   const p = buildTddPrompt("meu-projeto");

@@ -57,6 +57,14 @@ export function supportsReasoningEffort(type: ProviderType | undefined, modelId:
   return type === "openai-compatible" && /gpt-oss/i.test(modelId ?? "");
 }
 
+// Os modelos de RACIOCÍNIO da OpenAI (o-series, gpt-5) REJEITAM temperature != 1 com 400
+// ("Unsupported value: 'temperature' does not support 0 with this model") — não enviar o campo a
+// eles. Gateways OpenAI-compatíveis (HubGPU/vLLM/Ollama) e a Anthropic aceitam temperature 0.
+export function supportsTemperature(type: ProviderType | undefined, modelId: string | undefined): boolean {
+  if (type !== "openai") return true;
+  return !/(^|\/)(o[134](\b|-)|gpt-5)/i.test(modelId ?? "");
+}
+
 // Linguagens das cercas de código que o modelo emite e a extensão faz parse em propostas.
 // Ficam AQUI (módulo sem dependências) para que tanto o host quanto a webview possam importá-las
 // sem arrastar o systemPrompt/node para o bundle do navegador.

@@ -49,14 +49,15 @@ import {
   ReasoningEffort,
   SkillView,
   supportsReasoningEffort,
+  supportsTemperature,
   WebviewToExt,
 } from "../shared/protocol";
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
-import { parseBlueprint, topoSort } from "../util/blueprint";
-import { stripHarmony } from "../util/harmony";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
+import { extractFinalChannel, stripHarmony } from "../util/harmony";
 import { classifyProjectIntent } from "../util/projectIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
@@ -508,17 +509,20 @@ export class Controller {
       userId: this.resolveIdentity().email ?? "",
     });
     let text = "";
+    let delivered = ""; // o texto EFETIVAMENTE entregue ao wizard (pode vir do resgate do raciocínio)
     let error: string | undefined;
     try {
-      const sr = this.structuredRuntime(runtime); // esforço "low" — evita truncar a seção do charter
+      const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
       const provider = createProvider(sr, this.egress);
       const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "charter");
       let truncated = false;
+      let reasoning = "";
       for await (const chunk of provider.createMessage(buildCharterSystemPrompt(section), [{ role: "user", content: userMsg }], {
         timeoutMs: runtime.timeoutSeconds * 1000,
         extraHeaders: headers,
       })) {
         if (chunk.kind === "text") text += chunk.text;
+        else if (chunk.kind === "reasoning") reasoning += chunk.text; // p/ resgate se o content vier vazio
         else if (chunk.kind === "warning") truncated = true; // finish_reason=length: seção cortada
         else if (chunk.kind === "error") {
           error = chunk.message;
@@ -529,18 +533,32 @@ export class Controller {
       else {
         // stripHarmony: remove o raciocínio/canal de análise que o gpt-oss pode vazar no content
         // (ex.: "Now final output is markdown string. Proceed.") antes de cair no campo do wizard.
-        const clean = stripHarmony(text);
+        // Content vazio → resgate CONSERVADOR do canal de raciocínio: só se o marcador do canal final
+        // existir lá (o gateway roteou a resposta inteira p/ reasoning_content); raciocínio bruto NUNCA.
+        let clean = stripHarmony(text);
+        if (!clean.trim() && reasoning.trim()) {
+          clean = extractFinalChannel(reasoning) ?? "";
+          if (clean) log.info("charter: seção recuperada do canal de raciocínio (content vazio)");
+        }
         if (!clean.trim()) {
           // Resposta VAZIA (típico: o raciocínio consumiu todo o max_tokens e nenhum texto saiu).
           // charter/error preserva o rascunho digitado — postar drafted:"" APAGARIA o texto do dev.
+          log.warn("charter: sem conteúdo utilizável", {
+            section,
+            truncated,
+            contentChars: text.length,
+            reasoningChars: reasoning.length,
+            reasoningHead: reasoning.slice(0, 300),
+          });
           this.post({
             type: "charter/error",
             section,
             message: truncated
               ? "O modelo atingiu o limite de tokens antes de redigir a seção. Tente de novo; se persistir, aumente forge.provider.maxOutput."
-              : "O modelo não retornou conteúdo para a seção. Tente de novo.",
+              : "O modelo não retornou conteúdo para a seção. Tente de novo (detalhes no painel Output → FORGE).",
           });
         } else {
+          delivered = clean; // o trace obs reflete o que o dev recebeu (inclusive resgatado do raciocínio)
           // NUNCA salvar seção cortada silenciosamente (aconteceu num project.md real: frases terminando
           // no meio da palavra). O aviso vai ancorado NA SEÇÃO, dentro do modal — um toast ficaria
           // atrás do backdrop do wizard e sumiria em 5s sem ser visto.
@@ -558,7 +576,7 @@ export class Controller {
       error = (e as Error)?.message ?? String(e);
       this.post({ type: "charter/error", section, message: error });
     } finally {
-      this.obs.record({ type: "generation.end", taskId, durationMs: Date.now() - started, model: runtime.modelId, input: userMsg, output: text, proposals: 0, error });
+      this.obs.record({ type: "generation.end", taskId, durationMs: Date.now() - started, model: runtime.modelId, input: userMsg, output: delivered || text, proposals: 0, error });
     }
   }
 
@@ -628,17 +646,120 @@ export class Controller {
     }
     // Narração do planejamento (o modal mostra a etapa atual em vez de um spinner estático).
     this.post({ type: "project/planStep", label: "Analisando os requisitos e desenhando a arquitetura…" });
-    let out = "";
-    let truncated = false; // finish_reason=length em algum ponto do stream (consultada após o try)
+    const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
+    const system = buildBlueprintSystemPrompt(language, architecture);
+    const brief = text.slice(0, 6000);
+    const taskId = `project_plan_${this.sessionId}_${Date.now()}`;
+    const started = Date.now();
+    this.obs.record({
+      type: "generation.start",
+      taskId,
+      mode: "project",
+      model: sr.modelId,
+      provider: sr.type,
+      skills: [],
+      sessionId: this.sessionId,
+      userId: this.resolveIdentity().email ?? "",
+    });
+    let obsOutput = "";
+    let obsError: string | undefined;
     try {
-      const sr = this.structuredRuntime(runtime); // esforço "low" — evita o raciocínio truncar o plano
-      const provider = createProvider(sr, this.egress);
-      const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "project");
-      let gotText = false;
-      const started = Date.now();
-      let lastBeat = 0;
-      for await (const chunk of provider.createMessage(buildBlueprintSystemPrompt(language, architecture), [{ role: "user", content: text.slice(0, 6000) }], {
-        timeoutMs: runtime.timeoutSeconds * 1000,
+      // Tentativa 1: pedido normal.
+      const a1 = await this.streamBlueprintAttempt(sr, system, brief, "Raciocinando sobre a arquitetura…");
+      obsOutput = a1.text || a1.reasoning;
+      if (a1.error) {
+        obsError = a1.error;
+        this.post({ type: "project/blueprintError", message: a1.error });
+        return;
+      }
+      this.post({ type: "project/planStep", label: "Ordenando os arquivos por dependência…" });
+      let picked = this.pickBlueprint(a1);
+      // Tentativa 2 (escalada): a 1ª não trouxe array parseável em NENHUM canal. Se o modelo chegou a
+      // responder, pedimos a CONVERSÃO da própria resposta (mecânica, quase sempre converge); se veio
+      // vazio, repetimos com a exigência de formato reforçada. temperature 0 já reduz a variância.
+      if (!picked.files.length) {
+        log.warn("blueprint: 1ª tentativa sem array parseável — escalando para a conversão", {
+          contentChars: a1.text.length,
+          reasoningChars: a1.reasoning.length,
+          truncated: a1.truncated,
+          contentHead: a1.text.slice(0, 300),
+          reasoningHead: a1.reasoning.slice(0, 300),
+        });
+        this.post({ type: "project/planStep", label: "A resposta veio sem o plano — pedindo a conversão…" });
+        const a2 = await this.streamBlueprintAttempt(sr, system, buildBlueprintRetryRequest(brief, a1.text || a1.reasoning), "Convertendo o plano…");
+        obsOutput = a2.text || a2.reasoning || obsOutput;
+        if (a2.error) {
+          obsError = a2.error;
+          this.post({ type: "project/blueprintError", message: a2.error });
+          return;
+        }
+        picked = this.pickBlueprint(a2);
+        // Herda o truncamento da 1ª SÓ quando a 2ª CONVERTEU a resposta truncada (havia texto prévio);
+        // num pedido FRESCO completo, avisar "plano parcial" seria factualmente falso.
+        if ((a1.text || a1.reasoning).trim()) picked.truncated = picked.truncated || a1.truncated;
+      }
+      if (!picked.files.length) {
+        // Diagnóstico de campo: o motivo REAL fica no Output → FORGE (o modal mostra o resumo).
+        log.warn("blueprint: sem array válido após 2 tentativas", {
+          truncated: picked.truncated,
+          contentChars: obsOutput.length,
+          head: obsOutput.slice(0, 400),
+        });
+        const detail = picked.truncated
+          ? "O modelo atingiu o limite de tokens de saída antes de terminar o plano — aumente forge.provider.maxOutput ou reduza o escopo da descrição."
+          : obsOutput.trim()
+            ? "O modelo respondeu, mas sem um array JSON de plano válido, mesmo após pedir a conversão."
+            : "O modelo não retornou conteúdo (a resposta veio vazia nas duas tentativas).";
+        obsError = detail;
+        this.post({
+          type: "project/blueprintError",
+          message: `${detail} Detalhes técnicos no painel Output → FORGE. Tente de novo — ou ajuste o modelo/esforço no rodapé.`,
+        });
+        return;
+      }
+      if (picked.fromReasoning) {
+        // O gateway roteou a resposta final para o canal de raciocínio (harmony sem canal final).
+        // O plano recuperado é o array COMPLETO que o modelo emitiu — registra para diagnóstico.
+        log.info("blueprint: plano recuperado do canal de raciocínio (content vazio/sem array)");
+      }
+      this.projectSession = { language, architecture, brief: text, files: picked.files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
+      this.post({
+        type: "project/blueprint",
+        blueprint: { language, architecture, brief: text, files: this.projectSession.files },
+        // Truncou mas o reparo recuperou os objetos completos: plano PARCIAL utilizável. O aviso vai
+        // DENTRO do modal (um toast ficaria atrás do backdrop e sumiria em 5s sem ser visto).
+        warning: picked.truncated
+          ? "A resposta truncou no limite de tokens e recuperei um plano parcial — arquivos do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
+          : undefined,
+      });
+    } catch (e) {
+      obsError = (e as Error)?.message ?? String(e);
+      this.post({ type: "project/blueprintError", message: obsError });
+    } finally {
+      this.obs.record({ type: "generation.end", taskId, durationMs: Date.now() - started, model: sr.modelId, input: brief, output: obsOutput, proposals: 0, error: obsError });
+    }
+  }
+
+  // Uma tentativa de streaming do blueprint: acumula content E raciocínio (o gateway pode rotear a
+  // resposta final para reasoning_content quando o gpt-oss não emite o canal final), marca truncamento
+  // (finish_reason=length) e narra o progresso no modal (heartbeat durante o raciocínio).
+  private async streamBlueprintAttempt(
+    sr: ProviderRuntimeConfig,
+    system: string,
+    userMsg: string,
+    beatLabel: string
+  ): Promise<{ text: string; reasoning: string; truncated: boolean; error?: string }> {
+    const provider = createProvider(sr, this.egress);
+    const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "project");
+    let text = "";
+    let reasoning = "";
+    let truncated = false;
+    let gotText = false;
+    const started = Date.now();
+    let lastBeat = 0;
+    try {
+      for await (const chunk of provider.createMessage(system, [{ role: "user", content: userMsg }], {
+        timeoutMs: sr.timeoutSeconds * 1000,
         extraHeaders: headers,
       })) {
         if (chunk.kind === "text") {
@@ -646,50 +767,37 @@ export class Controller {
             gotText = true;
             this.post({ type: "project/planStep", label: "Recebendo o plano do modelo…" });
           }
-          out += chunk.text;
+          text += chunk.text;
         } else if (chunk.kind === "reasoning") {
-          // Feedback VIVO durante o raciocínio: o gpt-oss (esforço alto) pensa longamente ANTES de emitir
-          // o plano. Sem isto o modal ficava congelado em "Analisando…". Atualiza com o tempo decorrido,
-          // limitado a 1/1.5s, para mostrar que está trabalhando (não travado).
+          reasoning += chunk.text;
+          // Feedback VIVO durante o raciocínio (limitado a 1/1.5s) — sem isto o modal parece travado.
           const now = Date.now();
           if (!gotText && now - lastBeat >= 1500) {
             lastBeat = now;
-            this.post({ type: "project/planStep", label: `Raciocinando sobre a arquitetura… (${Math.round((now - started) / 1000)}s)` });
+            this.post({ type: "project/planStep", label: `${beatLabel} (${Math.round((now - started) / 1000)}s)` });
           }
         } else if (chunk.kind === "warning") {
           truncated = true; // finish_reason=length: o raciocínio/output estourou o max_tokens
         } else if (chunk.kind === "error") {
-          this.post({ type: "project/blueprintError", message: chunk.message });
-          return;
+          return { text, reasoning, truncated, error: chunk.message };
         }
       }
     } catch (e) {
-      this.post({ type: "project/blueprintError", message: (e as Error)?.message ?? String(e) });
-      return;
+      return { text, reasoning, truncated, error: (e as Error)?.message ?? String(e) };
     }
-    this.post({ type: "project/planStep", label: "Ordenando os arquivos por dependência…" });
-    // O reparo de array truncado SÓ é habilitado com truncamento confirmado (finish_reason=length) —
-    // sem isso ele poderia fabricar um plano a partir de eco de schema no raciocínio vazado.
-    const files = topoSort(parseBlueprint(out, { salvageTruncated: truncated }));
-    if (files.length === 0) {
-      this.post({
-        type: "project/blueprintError",
-        message: truncated
-          ? "O modelo atingiu o limite de tokens de saída antes de terminar o plano. Tente de novo; se persistir, aumente forge.provider.maxOutput ou reduza o escopo da descrição."
-          : "Não consegui montar o plano (resposta sem blueprint válido). Ajuste a descrição e tente de novo.",
-      });
-      return;
-    }
-    this.projectSession = { language, architecture, brief: text, files: files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
-    this.post({
-      type: "project/blueprint",
-      blueprint: { language, architecture, brief: text, files: this.projectSession.files },
-      // Truncou mas o reparo recuperou os objetos completos: plano PARCIAL utilizável. O aviso vai
-      // DENTRO do modal (um toast ficaria atrás do backdrop e sumiria em 5s sem ser visto).
-      warning: truncated
-        ? "A resposta truncou no limite de tokens e recuperei um plano parcial — arquivos do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
-        : undefined,
-    });
+    return { text, reasoning, truncated };
+  }
+
+  // Extrai o plano de uma tentativa (lógica pura em pickBlueprintFromChannels): content tolerante;
+  // canal de raciocínio SÓ via marcador de canal final (o raciocínio bruto ecoa o schema do prompt —
+  // parseá-lo fabricaria plano falso e pularia a conversão); plano com <2 arquivos é inválido.
+  private pickBlueprint(a: { text: string; reasoning: string; truncated: boolean }): {
+    files: BlueprintFile[];
+    truncated: boolean;
+    fromReasoning: boolean;
+  } {
+    const picked = pickBlueprintFromChannels(a);
+    return { files: topoSort(picked.files), truncated: a.truncated, fromReasoning: picked.fromReasoning };
   }
 
   // Passo 2: gera o projeto GUIADO pelo blueprint aprovado (Task reusa continuação/proposta/validação).
@@ -1262,9 +1370,14 @@ export class Controller {
   // quando o modelo o suporta (gpt-oss). Esforço ALTO faz o raciocínio DEVORAR o max_tokens e TRUNCAR o
   // output final — o array do plano fica incompleto (parseBlueprint → []) e as seções do charter são
   // cortadas no meio da palavra. Essas tarefas são estruturais, não precisam de raciocínio profundo;
-  // "low" garante que o output caiba. (A geração de CÓDIGO em startTask mantém o esforço do usuário.)
+  // "low" garante que o output caiba. temperature 0: amostragem determinística — variância é inimiga
+  // de formato estrito (JSON) — mas SÓ onde o modelo aceita (os modelos de raciocínio da OpenAI
+  // rejeitam temperature != 1 com 400). (A geração de CÓDIGO mantém o esforço/temperatura do usuário.)
   private structuredRuntime(runtime: ProviderRuntimeConfig): ProviderRuntimeConfig {
-    return runtime.reasoningEffort ? { ...runtime, reasoningEffort: "low" } : runtime;
+    const sr: ProviderRuntimeConfig = { ...runtime };
+    if (supportsTemperature(sr.type, sr.modelId)) sr.temperature = 0;
+    if (sr.reasoningEffort) sr.reasoningEffort = "low";
+    return sr;
   }
 
   async testProvider(setup: ProviderSetup): Promise<void> {

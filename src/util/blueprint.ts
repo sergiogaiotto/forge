@@ -3,7 +3,7 @@
 // JSON top-level válido do texto, mesmo cercado por prosa/```json/raciocínio vazado) e normaliza.
 // Puro/testável.
 import type { BlueprintFile } from "../shared/protocol";
-import { stripHarmony } from "./harmony";
+import { extractFinalChannel, stripHarmony } from "./harmony";
 import { isSafeRelPath } from "./safePath";
 
 // Encontra o array JSON top-level BALANCEADO que MAIS PARECE um blueprint. Varre cada '[' candidato,
@@ -144,6 +144,38 @@ export function parseBlueprint(text: string, opts?: ParseBlueprintOptions): Blue
     });
   }
   return out;
+}
+
+// Um projeto COMPLETO tem sempre >=2 arquivos (manifesto + código + README no mínimo). Um "plano" de
+// 1 arquivo é quase certamente eco do exemplo do system prompt ou fragmento de rascunho — tratá-lo
+// como inválido dispara a 2ª tentativa (conversão), que produz o plano real.
+export const MIN_BLUEPRINT_FILES = 2;
+
+// Escolhe o plano entre os CANAIS de uma resposta de modelo de raciocínio, na ordem de confiança:
+// 1) content — parser tolerante (reparo de truncamento gated por finish_reason=length);
+// 2) canal de raciocínio — SÓ o conteúdo após o marcador do canal final (extractFinalChannel).
+//    O raciocínio BRUTO ecoa o schema/rascunhos do system prompt: parseá-lo fabricaria um plano
+//    falso e PULARIA a 2ª tentativa de conversão (confirmado em revisão adversarial). Sem marcador,
+//    o raciocínio vai para a 2ª tentativa como matéria-prima da conversão — não para o parser.
+// Plano com menos de MIN_BLUEPRINT_FILES é inválido ([]) — deixa o chamador escalar/errar com clareza.
+export function pickBlueprintFromChannels(a: { text: string; reasoning: string; truncated: boolean }): {
+  files: BlueprintFile[];
+  fromReasoning: boolean;
+} {
+  let files = parseBlueprint(a.text, { salvageTruncated: a.truncated });
+  let fromReasoning = false;
+  if (files.length < MIN_BLUEPRINT_FILES && a.reasoning.trim()) {
+    const final = extractFinalChannel(a.reasoning);
+    if (final) {
+      const rescued = parseBlueprint(final, { salvageTruncated: a.truncated });
+      if (rescued.length > files.length) {
+        files = rescued;
+        fromReasoning = true;
+      }
+    }
+  }
+  if (files.length < MIN_BLUEPRINT_FILES) return { files: [], fromReasoning: false };
+  return { files, fromReasoning };
 }
 
 // Ordena os arquivos em ordem topológica pelas dependências declaradas (deps antes dos dependentes).

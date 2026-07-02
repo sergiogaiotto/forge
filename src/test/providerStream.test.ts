@@ -130,6 +130,43 @@ test("envia reasoning_effort no corpo quando configurado; omite quando ausente",
   }
 });
 
+// temperature 0 é FALSY: o provider tem de checar `!== undefined`, não truthiness — regressão aqui
+// devolveria a variância de amostragem às tarefas estruturadas (blueprint/charter) silenciosamente.
+test("envia temperature no corpo quando configurada (inclusive 0); omite quando ausente", async () => {
+  let body: any;
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      body = JSON.parse(raw);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const egress = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, () => undefined);
+    const zero = new OpenAICompatibleProvider(
+      { type: "openai-compatible", modelId: "m", baseUrl: `http://127.0.0.1:${port}`, apiKey: "not-needed", timeoutSeconds: 10, temperature: 0 },
+      egress
+    );
+    await collect(zero.createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000 }));
+    assert.equal(body.temperature, 0);
+    body = undefined;
+    const absent = new OpenAICompatibleProvider(
+      { type: "openai-compatible", modelId: "m", baseUrl: `http://127.0.0.1:${port}`, apiKey: "not-needed", timeoutSeconds: 10 },
+      egress
+    );
+    await collect(absent.createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000 }));
+    assert.ok(body && !("temperature" in body), "sem temperature configurada, não deve enviar o campo");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("emite warning NÃO-fatal quando finish_reason é 'length' (truncamento)", async () => {
   const srv = await sseServer([
     JSON.stringify({ choices: [{ delta: { content: "início do arquivo…" } }] }),
