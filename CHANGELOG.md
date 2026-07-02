@@ -3,6 +3,24 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.0.2] — 2026-07-01
+
+### Fixed
+- **Blueprint que ainda falhava com "resposta sem blueprint válido" em campo (HubGPU/gpt-oss).** O
+  gateway pode rotear a resposta inteira para o canal de raciocínio (`reasoning_content`) — o content
+  chega vazio — e o "Tentar de novo" repetia a mesma requisição determinística. Agora: (1) o plano é
+  procurado também no **canal de raciocínio**, mas só após o marcador de canal final (o CoT bruto ecoa
+  o schema do prompt — parseá-lo fabricaria plano falso); (2) sem plano na 1ª tentativa, uma **2ª
+  chamada automática pede a conversão da própria resposta anterior** no array JSON exato; (3) plano
+  com menos de 2 arquivos é inválido (projeto completo tem manifesto+código+README) e escala para a
+  conversão; (4) o Charter ganhou o mesmo resgate conservador.
+- **`temperature: 0` nas tarefas estruturadas** (blueprint/charter) para saída determinística — exceto
+  nos modelos de raciocínio da OpenAI (o-series/gpt-5), que rejeitam o parâmetro com 400 e não o recebem.
+- **Diagnóstico de campo**: toda falha do blueprint/charter grava no painel **Output → FORGE** o que
+  chegou de verdade (tamanhos e trechos de content/raciocínio); a mensagem de erro aponta para lá e
+  distingue as causas (truncou / respondeu sem array / veio vazio). O planejamento do blueprint agora
+  emite trace de observabilidade (Langfuse).
+
 ## [2.0.1] — 2026-07-01
 
 ### Fixed
