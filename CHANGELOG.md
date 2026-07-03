@@ -3,6 +3,19 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.1.2] — 2026-07-03
+
+### Fixed
+- **Blueprint com JSON garantido pelo decoder**: o planejamento agora pede
+  `response_format: json_object` (guided decoding do vLLM/OpenAI) — o servidor só emite JSON válido,
+  eliminando de vez a loteria do parse. Gateways sem suporte ganham **degradação automática** (uma
+  reemissão sem o campo; todo o pipeline tolerante anterior segue como rede de segurança).
+
+### Added
+- **Seletor de framework web para projetos Python**: com Projeto ligado e Python selecionado, escolha
+  entre **FastAPI, Flask ou Litestar** (ou deixe em "auto") — a escolha entra no blueprint e na
+  geração como instrução explícita, convivendo com o seletor de camada de UI.
+
 ## [2.1.1] — 2026-07-03
 
 ### Fixed
