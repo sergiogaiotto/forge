@@ -27,6 +27,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { id: "revisar", label: "/revisar", hint: "Revisão multi-lente das alterações do workspace (git diff)", icon: "git-compare", aliases: ["review"] },
   { id: "resumir", label: "/resumir", hint: "Compacta o histórico da conversa num resumo (libera a janela)", icon: "copy", aliases: ["compactar"] },
   { id: "diagrama", label: "/diagrama", hint: "Gera diagrama Mermaid da codebase (proposta em docs/diagramas/)", icon: "network", aliases: ["diagram", "mermaid"], acceptsArgs: true },
+  {
+    id: "sumario",
+    label: "/sumário projeto",
+    hint: "Documentação funcional do projeto, padrão de mercado (proposta em docs/SUMARIO_FUNCIONAL.md)",
+    icon: "file-code",
+    aliases: ["sumario-projeto", "summary"],
+    acceptsArgs: true, // aceita a forma completa "/sumário projeto" (a cauda é ignorada)
+  },
 ];
 
 // Normalização para matching: minúsculas + remoção de diacríticos (á→a, ç→c) — o dev digita
@@ -87,6 +95,32 @@ export function buildDiagramRequest(theme: string): string {
     "   com nós nomeados pelos MÓDULOS/ARQUIVOS reais do projeto (não invente componentes);",
     "3. Uma legenda curta explicando os agrupamentos.",
     "NÃO gere nenhum outro arquivo. NÃO modifique código.",
+  ].join("\n");
+}
+
+// Prompt do "/sumário projeto": DOCUMENTAÇÃO FUNCIONAL padrão de mercado, gerada do código real +
+// charter, como PROPOSTA de arquivo versionável — o dev revisa o markdown no diff e aplica.
+// `todayIso` injetável (default = hoje): o MODELO não tem relógio — sem a data no prompt, o
+// Histórico de Revisões sairia com data fabricada e confiante (pior que sem data).
+export function buildProjectSummaryRequest(todayIso: string = new Date().toISOString().slice(0, 10)): string {
+  return [
+    "Gere a DOCUMENTAÇÃO FUNCIONAL deste projeto, no padrão de mercado, analisando o código REAL",
+    "(o contexto fornecido traz a stack detectada, o charter do projeto e os arquivos indexados).",
+    "Produza UM único arquivo `docs/SUMARIO_FUNCIONAL.md` como bloco forge-file completo, com EXATAMENTE estas seções:",
+    "1. **Visão Geral e Objetivo de Negócio** — o que o sistema faz, para quem e qual valor entrega;",
+    "2. **Escopo** — o que está dentro e o que está explicitamente fora;",
+    "3. **Personas e Usuários** — quem usa e com que objetivo;",
+    "4. **Funcionalidades** — tabela: código (F-01…), nome, descrição, prioridade (SÓ quando o charter a declarar; senão 'n/d' — não invente);",
+    "5. **Fluxos Principais** — passo a passo dos 2-3 fluxos centrais + UM diagrama ```mermaid (flowchart ou sequence);",
+    "6. **Arquitetura e Módulos** — camadas/módulos REAIS do código (caminhos), responsabilidade de cada um;",
+    "7. **Modelo de Dados** — entidades e relações (do código real; se não houver persistência, diga);",
+    "8. **Requisitos Funcionais e Não Funcionais** — herde do charter quando existir; senão, derive do código e marque como inferido;",
+    "9. **Integrações e Dependências** — externas (APIs, bancos, filas) e principais bibliotecas;",
+    "10. **Como Executar** — comandos reais, na ordem, em blocos de shell copiáveis;",
+    "11. **Glossário** — termos do domínio;",
+    `12. **Histórico de Revisões** — tabela iniciada com a versão 1.0 (data ${todayIso}, autor FORGE).`,
+    "Seja FIEL ao código: cite caminhos reais, não invente funcionalidades. Seções sem evidência no código",
+    "devem dizer 'não identificado no código' em vez de especular. NÃO gere nenhum outro arquivo.",
   ].join("\n");
 }
 

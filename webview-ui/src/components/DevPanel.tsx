@@ -16,7 +16,7 @@ import {
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
-import { buildDiagramRequest, exactSlashCommand, matchSlashCommands, renderHelp, renderTokensReport, slashWithArgs, type SlashCommand } from "../commands";
+import { buildDiagramRequest, buildProjectSummaryRequest, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashWithArgs, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -112,6 +112,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       case "diagrama":
         runDiagram(""); // sem argumento = tema default (arquitetura do projeto)
         break;
+      case "sumario":
+        runSummary();
+        break;
     }
   };
 
@@ -120,6 +123,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const runDiagram = (theme: string) => {
     dispatch({ kind: "pushUser", text: `[/diagrama] ${theme.trim() || "arquitetura do projeto"}` });
     post({ type: "chat/send", text: buildDiagramRequest(theme) });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
+  };
+
+  // /sumário projeto: documentação funcional padrão de mercado como PROPOSTA versionável
+  // (docs/SUMARIO_FUNCIONAL.md) — geração normal com prompt craftado, zero protocolo novo.
+  const runSummary = () => {
+    dispatch({ kind: "pushUser", text: "[/sumário projeto] Gerar a documentação funcional do projeto." });
+    post({ type: "chat/send", text: buildProjectSummaryRequest() });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
   };
@@ -141,8 +153,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     }
     const withArgs = slashWithArgs(text);
     if (withArgs) {
-      if (withArgs.cmd.id === "diagrama") runDiagram(withArgs.args);
-      return;
+      if (withArgs.cmd.id === "diagrama") {
+        runDiagram(withArgs.args); // a cauda É o argumento (tema)
+        return;
+      }
+      if (withArgs.cmd.id === "sumario" && normalizeSlash(withArgs.args) === "projeto") {
+        runSummary(); // só a forma completa "/sumário projeto" executa
+        return;
+      }
+      // Cauda que NÃO é o argumento esperado ("/sumario o que ficou pendente?") é mensagem do dev —
+      // cai no fluxo normal em vez de disparar a geração e descartar o texto (anti-sequestro).
     }
     // No Modo Projeto, só um PEDIDO de gerar abre o Blueprint. Pergunta/diagnóstico (ex.: logs colados
     // + "o que aconteceu?") é respondido no chat normal — sem sequestrar a mensagem para o Blueprint.
