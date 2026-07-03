@@ -10,6 +10,7 @@ import type {
   ProjectLanguage,
   RagChunkView,
   RagInspectView,
+  RoleCard,
   SkillInspectView,
   ValidatorResult,
 } from "../../src/shared/protocol";
@@ -100,6 +101,8 @@ export interface UIState {
   appliedAllAt: number;
   // Usage REAL de tokens (stream/end): última geração + acumulado da sessão — /tokens e barra de status.
   usage: { lastIn: number; lastOut: number; sessionIn: number; sessionOut: number } | null;
+  // Cartão pós-seleção do papel (o que o papel carrega) — dispensável pelo dev.
+  roleCard: RoleCard | null;
   inspect: {
     skills: SkillInspectView[];
     rag: RagInspectView | null;
@@ -133,6 +136,7 @@ export const initialState: UIState = {
   project: null,
   appliedAllAt: 0,
   usage: null,
+  roleCard: null,
   inspect: null,
 };
 
@@ -140,6 +144,7 @@ export type Action =
   | { kind: "ext"; msg: ExtToWebview }
   | { kind: "pushUser"; text: string }
   | { kind: "pushLocal"; text: string }
+  | { kind: "roleCard/dismiss" }
   | { kind: "providerTestPending" }
   | { kind: "embeddingsTestPending" }
   | { kind: "newConversation" }
@@ -241,6 +246,8 @@ export function reducer(state: UIState, action: Action): UIState {
     case "pushLocal":
       // Mensagem LOCAL do assistente (cartões da paleta: /ajuda, /tokens) — nunca vai ao host.
       return pushLocalMessage(state, action.text);
+    case "roleCard/dismiss":
+      return { ...state, roleCard: null };
     case "ext":
       return applyExt(state, action.msg);
     default:
@@ -460,6 +467,8 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "context/report":
       // /contexto: o relatório vira uma mensagem local do assistente (markdown), na própria thread.
       return pushLocalMessage(state, renderContextReport(msg.report));
+    case "profile/roleCard":
+      return { ...state, roleCard: msg.card };
     case "stream/error": {
       // usage parcial da geração que morreu — os tokens foram consumidos; acumula como no stream/end.
       const usage = msg.usage

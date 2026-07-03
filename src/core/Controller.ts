@@ -67,7 +67,7 @@ import { safeWorkspacePath } from "../util/safePath";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
-import { Role, resolveRole, roleGuidance, roleLabel, setRole, stripFrontmatter } from "../util/roleDefaults";
+import { Role, resolveRole, roleGuidance, roleGuidanceLine, roleLabel, roleSkills, setRole, stripFrontmatter } from "../util/roleDefaults";
 import { Observability } from "../obs/Observability";
 import { LangfuseDirectSink } from "../obs/LangfuseDirectSink";
 import { Runner } from "./Runner";
@@ -437,7 +437,13 @@ export class Controller {
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, setRole(existing, pick.role), "utf8");
-    this.post({ type: "notice", level: "info", message: `Papel definido: ${pick.label}.` });
+    // Cartão ancorado no chat (em vez do toast de 5s): mostra a linha de estilo que passa a entrar
+    // em todo prompt e as skills managed relacionadas ao papel — transparência do que mudou.
+    const related = roleSkills(pick.role).map((name) => {
+      const s = this.skills.find((k) => k.name === name);
+      return { name, enabled: s?.enabled ?? false, installed: !!s };
+    });
+    this.post({ type: "profile/roleCard", card: { role: pick.role, label: pick.label, guidance: roleGuidanceLine(pick.role), skills: related } });
     this.obs.record({ type: "profile.roleSet", role: pick.role });
     void this.postProfileState();
   }

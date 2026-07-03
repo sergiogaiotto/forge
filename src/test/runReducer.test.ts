@@ -153,6 +153,14 @@ test("context/report adiciona um cartão local do assistente com o relatório", 
   assert.match(last.text, /Janela de contexto/);
 });
 
+test("profile/roleCard seta o cartão do papel; roleCard/dismiss dá baixa", () => {
+  const card = { role: "engenheiro-de-dados", label: "Engenheiro de dados", guidance: "…", skills: [{ name: "dbt-modeling", enabled: true, installed: true }] };
+  let s = apply(initialState, { type: "profile/roleCard", card });
+  assert.equal(s.roleCard?.label, "Engenheiro de dados");
+  s = reducer(s, { kind: "roleCard/dismiss" });
+  assert.equal(s.roleCard, null);
+});
+
 test("pushLocal adiciona mensagem local do assistente (cartões /ajuda e /tokens)", () => {
   const s = reducer(initialState, { kind: "pushLocal", text: "### Paleta" });
   assert.equal(s.messages.length, 1);

@@ -1,6 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normalizeRole, parseRole, resolveRole, roleGuidance, setRole, stripFrontmatter } from "../util/roleDefaults";
+import { normalizeRole, parseRole, resolveRole, roleGuidance, roleGuidanceLine, roleSkills, setRole, stripFrontmatter, type Role } from "../util/roleDefaults";
+import { readdirSync } from "node:fs";
+import * as path from "node:path";
+
+// papel→skills: cada papel aponta skills que EXISTEM no pacote managed (skills/ do repo) — um
+// rename de diretório de skill quebraria o cartão silenciosamente sem este teste.
+test("roleSkills: todo papel tem skills relacionadas e todas existem em skills/", () => {
+  const installed = new Set(
+    readdirSync(path.join(__dirname, "..", "..", "skills"), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  );
+  const roles: Role[] = ["cientista-de-dados", "engenheiro-de-dados", "engenheiro-de-ml", "engenheiro-de-ia", "engenheiro-de-software"];
+  for (const r of roles) {
+    const list = roleSkills(r);
+    assert.ok(list.length >= 2, `${r} deve ter >= 2 skills relacionadas`);
+    for (const s of list) assert.ok(installed.has(s), `skill "${s}" (papel ${r}) não existe em skills/`);
+  }
+});
+
+test("roleGuidanceLine: linha crua sem o header de bloco (alimenta o cartão)", () => {
+  const line = roleGuidanceLine("engenheiro-de-dados");
+  assert.match(line, /^Engenheiro de Dados/);
+  assert.ok(!line.includes("##"));
+  assert.ok(roleGuidance("engenheiro-de-dados").includes(line)); // mesma fonte
+});
 
 test("normalizeRole reconhece variações e desambigua ML vs dados", () => {
   assert.equal(normalizeRole("engenheiro de dados"), "engenheiro-de-dados");
