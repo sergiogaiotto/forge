@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { ContextReport } from "../shared/protocol";
 import {
   buildDiagramRequest,
+  buildProjectSummaryRequest,
   exactSlashCommand,
   matchSlashCommands,
   normalizeSlash,
@@ -108,6 +109,42 @@ test("buildDiagramRequest: pede UM arquivo docs/diagramas/<slug>.md com bloco me
   assert.match(req, /NÃO gere nenhum outro arquivo/);
   // tema vazio → default de arquitetura
   assert.match(buildDiagramRequest(""), /docs\/diagramas\/arquitetura/);
+});
+
+// Adendo 1 do plano: "/sumário projeto" — documentação funcional padrão de mercado.
+test("/sumário projeto: casa com e sem acento, nu ou com a cauda 'projeto'", () => {
+  assert.equal(exactSlashCommand("/sumario")?.id, "sumario");
+  assert.equal(exactSlashCommand("/sumário")?.id, "sumario");
+  assert.equal(slashWithArgs("/sumário projeto")?.cmd.id, "sumario");
+  assert.equal(slashWithArgs("/sumario projeto")?.cmd.id, "sumario");
+});
+
+test("buildProjectSummaryRequest: pede docs/SUMARIO_FUNCIONAL.md com as 12 seções padrão de mercado", () => {
+  const req = buildProjectSummaryRequest("2026-07-03");
+  // a DATA vai no prompt (o modelo não tem relógio — sem ela o histórico sairia com data fabricada)
+  assert.ok(req.includes("data 2026-07-03"));
+  // prioridade nunca é inventada: só quando o charter declarar
+  assert.match(req, /SÓ quando o charter a declarar/);
+  assert.match(req, /docs\/SUMARIO_FUNCIONAL\.md/);
+  for (const sec of [
+    "Visão Geral e Objetivo de Negócio",
+    "Escopo",
+    "Personas e Usuários",
+    "Funcionalidades",
+    "Fluxos Principais",
+    "Arquitetura e Módulos",
+    "Modelo de Dados",
+    "Requisitos Funcionais e Não Funcionais",
+    "Integrações e Dependências",
+    "Como Executar",
+    "Glossário",
+    "Histórico de Revisões",
+  ]) {
+    assert.ok(req.includes(sec), `faltou a seção ${sec}`);
+  }
+  assert.match(req, /```mermaid/); // fluxo principal com diagrama
+  assert.match(req, /FIEL ao código/); // anti-alucinação
+  assert.match(req, /NÃO gere nenhum outro arquivo/);
 });
 
 test("renderSummarized: cartão explica a compactação e traz o resumo (concordância no singular)", () => {
