@@ -715,7 +715,12 @@ export class Controller {
           reasoningHead: a1.reasoning.slice(0, 300),
         });
         this.post({ type: "project/planStep", label: "A resposta veio sem o plano — pedindo a conversão…" });
-        const a2 = await this.streamBlueprintAttempt(sr, system, buildBlueprintRetryRequest(brief, a1.text || a1.reasoning), "Convertendo o plano…");
+        // A 2ª tentativa AMOSTRA (temperatura default do servidor) em vez de repetir a greedy: com
+        // temperature 0 as duas tentativas eram deterministicamente idênticas — se a 1ª degenerou
+        // (greedy no gpt-oss pode repetir/derivar), a 2ª degenerava igual, e o "Tentar de novo" também.
+        const srRetry: ProviderRuntimeConfig = { ...sr };
+        delete srRetry.temperature;
+        const a2 = await this.streamBlueprintAttempt(srRetry, system, buildBlueprintRetryRequest(brief, a1.text || a1.reasoning), "Convertendo o plano…");
         obsOutput = a2.text || a2.reasoning || obsOutput;
         addUsage(a2.usage);
         if (a2.error) {
@@ -741,9 +746,13 @@ export class Controller {
             ? "O modelo respondeu, mas sem um array JSON de plano válido, mesmo após pedir a conversão."
             : "O modelo não retornou conteúdo (a resposta veio vazia nas duas tentativas).";
         obsError = detail;
+        // Trecho do que veio DENTRO do modal: diagnóstico instantâneo sem abrir o Output (o log
+        // completo continua lá). Whitespace colapsado para caber numa linha do modal.
+        const flat = obsOutput.trim().replace(/\s+/g, " ");
+        const head = flat.slice(0, 140) + (flat.length > 140 ? "…" : ""); // … só quando cortou de fato
         this.post({
           type: "project/blueprintError",
-          message: `${detail} Detalhes técnicos no painel Output → FORGE. Tente de novo — ou ajuste o modelo/esforço no rodapé.`,
+          message: `${detail} Detalhes técnicos no painel Output → FORGE. Tente de novo — ou ajuste o modelo/esforço no rodapé.${head ? ` Início da resposta: "${head}"` : ""}`,
         });
         return;
       }

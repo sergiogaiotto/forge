@@ -9,8 +9,39 @@ const PLAN3 = '[{"path":"src/a.py","purpose":"porta","deps":[]},{"path":"src/b.p
 test("pickBlueprintFromChannels: eco do schema no raciocínio BRUTO (sem marcador) NÃO fabrica plano", () => {
   const echo = 'We need JSON like [{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase","deps":["outro/arquivo.ext"]}] then answer.';
   const r = pickBlueprintFromChannels({ text: "", reasoning: echo, truncated: false });
-  assert.deepEqual(r.files, []); // inválido → chamador escala para a 2ª tentativa (conversão)
+  assert.deepEqual(r.files, []); // eco tem 1 objeto < MIN → inválido (conversão)
   assert.equal(r.fromReasoning, false);
+});
+
+// REGRESSÃO (blueprint FinOps em campo): gateway roteia TUDO para reasoning_content SEM marcador de
+// canal final e o content vem VAZIO — o plano completo estava no CoT e era descartado. Resgate
+// ESTRITO (arrays completos, >= MIN arquivos) só nesse cenário; content não-vazio nunca usa o CoT bruto.
+test("pickBlueprintFromChannels: content VAZIO + plano completo no CoT bruto → resgata (estrito)", () => {
+  const reasoning = `pensando na arquitetura… ${PLAN3} pronto.`;
+  const r = pickBlueprintFromChannels({ text: "", reasoning, truncated: false });
+  assert.deepEqual(r.files.map((f) => f.path), ["src/a.py", "src/b.py", "README.md"]);
+  assert.equal(r.fromReasoning, true);
+  // content NÃO-vazio (prosa sem array): o CoT bruto NÃO é usado — vai para a conversão
+  const r2 = pickBlueprintFromChannels({ text: "não entendi o pedido", reasoning, truncated: false });
+  assert.deepEqual(r2.files, []);
+  // rascunho NÃO FECHADO no CoT com content vazio: extração estrita não repara → [] (sem plano falso)
+  const cut = pickBlueprintFromChannels({ text: "", reasoning: 'draft: [{"path":"a.py","purpose":"x"},{"path":"b.py","purp', truncated: false });
+  assert.deepEqual(cut.files, []);
+});
+
+// REGRESSÃO (revisão adversarial do fix): no CoT o modelo REVISA — rascunho de 3 arquivos seguido do
+// plano final de 2 ("simplifico"). Por score o rascunho REJEITADO venceria; por posição (latest-wins
+// com piso >= MIN) vence o plano FINAL — o último array qualificado que o modelo escreveu.
+test("pickBlueprintFromChannels: revisão-para-baixo no CoT → o plano FINAL vence o rascunho maior", () => {
+  const draft = '[{"path":"draft/a.py","purpose":"a"},{"path":"draft/b.py","purpose":"b"},{"path":"draft/c.py","purpose":"c"}]';
+  const final = '[{"path":"src/app.py","purpose":"app"},{"path":"README.md","purpose":"docs"}]';
+  const reasoning = `primeira ideia: ${draft}\nnão — simplifico: ${final}`;
+  const r = pickBlueprintFromChannels({ text: "", reasoning, truncated: false });
+  assert.deepEqual(r.files.map((f) => f.path), ["src/app.py", "README.md"]);
+  // eco de schema (1 objeto) DEPOIS do plano final não rouba a seleção (piso >= MIN qualifica)
+  const withEcho = `${reasoning}\nformato: [{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase"}]`;
+  const r2 = pickBlueprintFromChannels({ text: "", reasoning: withEcho, truncated: false });
+  assert.deepEqual(r2.files.map((f) => f.path), ["src/app.py", "README.md"]);
 });
 
 test("pickBlueprintFromChannels: raciocínio COM marcador de canal final → resgata o plano real", () => {

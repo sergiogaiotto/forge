@@ -224,7 +224,12 @@ export function buildBlueprintSystemPrompt(language: ProjectLanguage, architectu
 // ex.: tudo foi para o canal de raciocínio) → repete o pedido com a exigência de formato reforçada.
 // Mensagem de USUÁRIO (o system prompt do blueprint continua o mesmo). Pura/testável.
 export function buildBlueprintRetryRequest(brief: string, previous: string): string {
-  const cappedPrev = previous.trim().slice(0, 4000);
+  // Cap BIPARTIDO preservando as duas pontas: o array final vive no FIM (o raciocínio vem antes),
+  // mas um plano MAIOR que o cap tem o '[' e os primeiros objetos no COMEÇO — cortar qualquer ponta
+  // perde metade da história. (slice(0,4000) descartava o array do fim — raiz do "sem array válido
+  // mesmo após pedir a conversão" em campo; cauda pura perderia o início de planos longos.)
+  const trimmed = previous.trim();
+  const cappedPrev = trimmed.length <= 4000 ? trimmed : `${trimmed.slice(0, 1500)}\n[… trecho intermediário omitido …]\n${trimmed.slice(-2500)}`;
   if (cappedPrev) {
     return `Sua resposta anterior NÃO continha o array JSON no formato exigido. CONVERTA o plano abaixo no ARRAY JSON exato do formato pedido — o PRIMEIRO caractere da sua resposta deve ser '[' e o ÚLTIMO deve ser ']'. NADA de prosa, raciocínio, comentários ou cercas.
 
