@@ -388,6 +388,11 @@
           "default": "pytest -q",
           "markdownDescription": "Comando da suíte de testes, executado na raiz do workspace (ex.: `pytest -q`, `pytest tests/`, `npm test`)."
         },
+        "forge.test.autoInstall": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Quando o **pytest não está instalado** no ambiente, instala automaticamente no venv antes de rodar (sem perguntar). Desligado = pergunta antes."
+        },
         "forge.search.server": {
           "type": "string",
           "default": "",

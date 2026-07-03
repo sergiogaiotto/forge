@@ -1,7 +1,50 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { test } from "node:test";
-import { buildVenvSetupCommand, findVenvPython, resolvePythonRunCommand, resolveTestCommand, venvPythonCandidates } from "../util/pythonEnv";
+import {
+  buildPytestInstall,
+  buildPytestProbe,
+  buildVenvSetupCommand,
+  chooseTestCommand,
+  findVenvPython,
+  isPytestCommand,
+  resolvePythonRunCommand,
+  resolveTestCommand,
+  venvPythonCandidates,
+} from "../util/pythonEnv";
+
+test("isPytestCommand: pytest nu e python -m pytest; wrappers/npm ficam de fora", () => {
+  assert.ok(isPytestCommand("pytest -q"));
+  assert.ok(isPytestCommand("python -m pytest tests/"));
+  assert.ok(isPytestCommand("python3 -m pytest"));
+  assert.ok(!isPytestCommand("poetry run pytest"));
+  assert.ok(!isPytestCommand("npm test"));
+  assert.ok(!isPytestCommand("uv run pytest"));
+});
+
+test("chooseTestCommand: default + stack Node + script test real → npm test; senão pytest fica", () => {
+  assert.equal(chooseTestCommand("pytest -q", "pytest -q", "vitest", true), "npm test");
+  assert.equal(chooseTestCommand("pytest -q", "pytest -q", "jest", true), "npm test");
+  // REGRESSÃO: vitest detectado mas SEM scripts.test → npm test falharia com "Missing script"
+  assert.equal(chooseTestCommand("pytest -q", "pytest -q", "vitest", false), "pytest -q");
+  assert.equal(chooseTestCommand("pytest -q", "pytest -q", "pytest", true), "pytest -q");
+  assert.equal(chooseTestCommand("pytest -q", "pytest -q", undefined, true), "pytest -q");
+  assert.equal(chooseTestCommand("pytest tests/ -x", "pytest -q", "vitest", true), "pytest tests/ -x"); // override
+});
+
+test("buildPytestProbe: proba o ambiente onde os testes VÃO RODAR (venv → módulo; sem venv → binário do PATH)", () => {
+  assert.equal(buildPytestProbe("C:/p/.venv/Scripts/python.exe"), "C:/p/.venv/Scripts/python.exe -m pytest --version");
+  // REGRESSÃO: sem venv o comando real é `pytest` do PATH (pipx/scoop) — probar `python -m pytest`
+  // divergia e declarava falso "ausente" num setup que funcionava.
+  assert.equal(buildPytestProbe(undefined), "pytest --version");
+  // caminho com espaço → aspas
+  assert.equal(buildPytestProbe("C:/meu proj/.venv/Scripts/python.exe"), '"C:/meu proj/.venv/Scripts/python.exe" -m pytest --version');
+});
+
+test("buildPytestInstall: instala no venv EXISTENTE (o caso sem venv passa antes pelo prepareEnv)", () => {
+  assert.equal(buildPytestInstall("C:/p/.venv/Scripts/python.exe"), "C:/p/.venv/Scripts/python.exe -m pip install pytest");
+  assert.equal(buildPytestInstall("C:/meu proj/.venv/Scripts/python.exe"), '"C:/meu proj/.venv/Scripts/python.exe" -m pip install pytest');
+});
 
 // REGRESSÃO (print do dev: ModuleNotFoundError com venv preparado): o "Executar" rodava o python do
 // PATH. O rewrite troca `python`/`python3` NU pelo interpretador do venv; caminhos/execs próprios passam.

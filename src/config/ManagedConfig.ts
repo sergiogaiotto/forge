@@ -122,11 +122,13 @@ export class ManagedConfig {
     return { timeoutSeconds: this.cfg().get<number>("env.timeoutSeconds", 900) };
   }
 
-  test(): { enabled: boolean; command: string } {
+  test(): { enabled: boolean; command: string; autoInstall: boolean } {
     const c = this.cfg();
     return {
       enabled: c.get<boolean>("test.enabled", true),
       command: c.get<string>("test.command", "pytest -q"),
+      // pytest ausente no pré-flight: true instala direto no venv; false pergunta (diálogo nativo).
+      autoInstall: c.get<boolean>("test.autoInstall", false),
     };
   }
 
