@@ -3,6 +3,51 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.1.0] — 2026-07-03
+
+### Added — Paleta de comandos "/"
+- **Digite `/` no chat** para a paleta com autocomplete (↑↓/Enter/Tab/Esc; acentos normalizados —
+  `/sumário` ≡ `/sumario`). Comando só executa **nu e exato**: "/testes estão falhando?" é pergunta
+  e vai ao modelo; typo orienta sem apagar o rascunho.
+- **`/contexto`** — orçamento REAL da janela (mesmo cálculo da geração): janela, reservas, fixo,
+  histórico, anexos pendentes na barra de ocupação, RAG e uso da sessão.
+- **`/tokens`** + medidor na barra de status — uso real de tokens (última geração + acumulado; inclui
+  gerações que falharam no meio, charter e blueprint).
+- **`/limpar`** — limpa a conversa DE VERDADE (histórico e anexos do host; aborta geração em voo).
+  Corrige o bug do "Nova conversa" que só limpava a tela e o modelo seguia vendo o histórico antigo.
+- **`/resumir`** — compacta o histórico num resumo técnico (libera janela sem perder o fio), com
+  guarda de concorrência (nunca perde turnos) e cartão mostrando o que o modelo passa a receber.
+- **`/revisar`** — revisão multi-lente das alterações (espelho do botão).
+- **`/diagrama [tema]`** — diagrama Mermaid da codebase como proposta versionável em `docs/diagramas/`.
+- **`/sumário projeto`** — documentação funcional padrão de mercado (12 seções, fiel ao código, data
+  real injetada) como proposta em `docs/SUMARIO_FUNCIONAL.md`.
+- Atalhos: `/ambiente` `/testes` `/perfil` `/indice` `/projeto` `/ajuda`.
+
+### Added — Ambiente e testes autocuráveis
+- **Preparar ambiente cria tudo do zero**: sem `requirements.txt`/`pyproject`, os imports do código
+  viram um `requirements.txt` gerado (docstrings/locais/stdlib filtrados; mapa PyPI: sklearn→
+  scikit-learn etc.); com requirements existente, **incrementa com confirmação**. Timeout próprio
+  (`forge.env.timeoutSeconds`, 900s) para pip pesado.
+- **"Executar" usa o venv do projeto** — fim do `ModuleNotFoundError` com ambiente preparado; cartão
+  de falha por dependência oferece "Preparar ambiente".
+- **Testes com pré-flight**: pytest ausente → instala no venv com confirmação (ou
+  `forge.test.autoInstall`); sem venv, cria o ambiente completo antes. Estado "pytest ausente" é
+  neutro-acionável (botão "Instalar pytest e rodar"), não erro morto. Projeto Node com script `test`
+  real usa `npm test` automaticamente.
+
+### Added — Modo Projeto e papel
+- **Seletor opcional de camada de UI** no Modo Projeto: auto (modelo decide), sem UI, **template
+  engine** (Jinja2/EJS/Thymeleaf/html-template conforme a linguagem), SPA React ou Streamlit (Python).
+  A escolha entra no blueprint e na geração; o retry a reenvia.
+- **Papel transparente**: escolher o papel mostra um cartão com a linha de estilo que entra em todo
+  prompt e as skills relacionadas — chips clicáveis abrem direto o SKILL.md no Índice.
+
+### Changed — Modais
+- **Perfil do projeto**: 640px em grid de 2 colunas, header/footer fixos e scroll só no miolo (em
+  laptop de pouca altura os botões exigiam rolagem).
+- **Índice**: navegação empilhada — lista em largura total com descrição; detalhe em tela cheia com
+  "← voltar" (as colunas espremidas dificultavam a leitura).
+
 ## [2.0.2] — 2026-07-01
 
 ### Fixed
