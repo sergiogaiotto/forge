@@ -40,21 +40,39 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (this.cfg.reasoningEffort) body.reasoning_effort = this.cfg.reasoningEffort;
     // `!== undefined` (não truthiness): temperature 0 é um valor VÁLIDO e o mais usado aqui.
     if (this.cfg.temperature !== undefined) body.temperature = this.cfg.temperature;
+    // JSON GARANTIDO pelo decoder (guided decoding do vLLM/OpenAI): para tarefas de saída JSON
+    // estrita (blueprint), elimina a loteria do parse — o servidor só emite JSON válido.
+    if (opts.jsonResponse) body.response_format = { type: "json_object" };
     if (opts.tools && opts.tools.length > 0) {
       body.tools = opts.tools.map(toOpenAITool);
       body.tool_choice = "auto";
     }
 
     const signal = combineSignals(opts.signal, opts.timeoutMs);
-    let res: Response;
-    try {
-      res = await fetch(url, {
+    const doFetch = (payload: Record<string, unknown>): Promise<Response> =>
+      fetch(url, {
         method: "POST",
         headers: { ...buildAuthHeaders(this.cfg), ...(opts.extraHeaders ?? {}) },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
         signal,
       });
+    let res: Response;
+    try {
+      res = await doFetch(body);
+      // Degradação automática: gateway antigo pode rejeitar response_format (400). Reenvia UMA vez
+      // sem o campo — o chamador segue com o pipeline tolerante de parse (comportamento anterior).
+      if (!res.ok && res.status === 400 && opts.jsonResponse) {
+        const errText = await safeText(res);
+        if (/response_format|json_object|guided/i.test(errText)) {
+          delete body.response_format;
+          res = await doFetch(body);
+        } else {
+          // 400 por OUTRA causa: re-embrulha para o tratamento padrão abaixo (corpo já consumido).
+          throw new HttpError(400, `Provedor retornou 400${hintFor400(errText)}: ${errText.slice(0, 500)}`);
+        }
+      }
     } catch (err) {
+      if (err instanceof HttpError) throw err;
       const e = err as Error;
       if (e.name === "TimeoutError" || e.name === "AbortError") {
         yield { kind: "error", message: `Tempo limite (${this.cfg.timeoutSeconds}s) ou cancelado.` };
@@ -66,21 +84,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok) {
       const text = await safeText(res);
-      // Damos uma dica acionável em pt-BR conforme a causa provável do 400, em vez de só repassar o
-      // corpo cru (técnico, em inglês). A dica é específica: reasoning_effort não aceito vs. janela de tokens.
-      let hint = "";
-      if (res.status === 400) {
-        const low = text.toLowerCase();
-        // Ordem importa: "temperature" antes do check genérico de "parameter" — senão a dica mandaria
-        // o usuário ajustar o esforço de raciocínio para um erro causado pela temperature.
-        if (low.includes("temperature")) {
-          hint = " (o modelo não aceita o parâmetro temperature enviado — modelos de raciocínio da OpenAI só aceitam o default)";
-        } else if (low.includes("reasoning_effort") || low.includes("unknown") || low.includes("unexpected") || low.includes("parameter")) {
-          hint = " (o gateway pode não aceitar o parâmetro reasoning_effort — reduza/ajuste o esforço de raciocínio)";
-        } else if (low.includes("token") || low.includes("context") || low.includes("length")) {
-          hint = " (o limite de tokens de saída somado ao contexto pode exceder a janela do modelo no gateway)";
-        }
-      }
+      const hint = res.status === 400 ? hintFor400(text) : "";
       throw new HttpError(res.status, `Provedor retornou ${res.status}${hint}: ${text.slice(0, 500)}`);
     }
 
@@ -164,4 +168,21 @@ async function safeText(res: Response): Promise<string> {
   } catch {
     return "";
   }
+}
+
+// Dica acionável em pt-BR conforme a causa provável do 400, em vez de só repassar o corpo cru.
+// Ordem importa: "temperature" antes do check genérico de "parameter" — senão a dica mandaria o
+// usuário ajustar o esforço de raciocínio para um erro causado pela temperature.
+function hintFor400(text: string): string {
+  const low = text.toLowerCase();
+  if (low.includes("temperature")) {
+    return " (o modelo não aceita o parâmetro temperature enviado — modelos de raciocínio da OpenAI só aceitam o default)";
+  }
+  if (low.includes("reasoning_effort") || low.includes("unknown") || low.includes("unexpected") || low.includes("parameter")) {
+    return " (o gateway pode não aceitar o parâmetro reasoning_effort — reduza/ajuste o esforço de raciocínio)";
+  }
+  if (low.includes("token") || low.includes("context") || low.includes("length")) {
+    return " (o limite de tokens de saída somado ao contexto pode exceder a janela do modelo no gateway)";
+  }
+  return "";
 }

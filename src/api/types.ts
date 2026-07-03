@@ -30,6 +30,10 @@ export interface CreateMessageOptions {
   // Headers de metadados de trace (x-forge-*) propagados ao gateway para a
   // observabilidade (login, sessão, skills, modelo). Nunca contêm segredos.
   extraHeaders?: Record<string, string>;
+  // Saída JSON GARANTIDA pelo decoder (response_format json_object — guided decoding do vLLM/
+  // OpenAI). Para tarefas de JSON estrito (blueprint). O provider degrada automaticamente (reenvia
+  // sem o campo) se o gateway rejeitar com 400; provedores sem suporte (Anthropic) ignoram.
+  jsonResponse?: boolean;
 }
 
 export interface LLMProvider {

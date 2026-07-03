@@ -803,6 +803,9 @@ export class Controller {
       for await (const chunk of provider.createMessage(system, [{ role: "user", content: userMsg }], {
         timeoutMs: sr.timeoutSeconds * 1000,
         extraHeaders: headers,
+        // JSON garantido pelo decoder (vLLM guided decoding) — o provider degrada sozinho se o
+        // gateway rejeitar; o pipeline tolerante de parse continua como rede de segurança.
+        jsonResponse: true,
       })) {
         if (chunk.kind === "text") {
           if (!gotText) {

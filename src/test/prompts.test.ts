@@ -45,7 +45,7 @@ test("prompts do projeto propagam a camada de UI escolhida (blueprint, guiado e 
 test("buildBlueprintRetryRequest: com resposta anterior pede a CONVERSÃO e inclui o texto capado", () => {
   const p = buildBlueprintRetryRequest("crie uma app de senhas", "Aqui está meu plano em prosa: main.py, util.py…");
   assert.match(p, /CONVERTA/);
-  assert.match(p, /PRIMEIRO caractere/);
+  assert.match(p, /\{"files":\[/); // aceita o objeto do modo json_object
   assert.ok(p.includes("crie uma app de senhas"));
   assert.ok(p.includes("main.py, util.py"));
   // resposta anterior gigante é capada (teto de 4000) para não estourar a janela
@@ -72,7 +72,7 @@ test("buildBlueprintRetryRequest: o cap bipartido preserva a CAUDA (array no fim
 test("buildBlueprintRetryRequest: sem resposta anterior reforça o formato no pedido original", () => {
   const p = buildBlueprintRetryRequest("crie uma app de senhas", "   ");
   assert.match(p, /2ª tentativa/);
-  assert.match(p, /APENAS com o array JSON/);
+  assert.match(p, /APENAS com o JSON do plano/);
   assert.ok(p.includes("crie uma app de senhas"));
   assert.ok(!p.includes("CONVERTA"));
 });
