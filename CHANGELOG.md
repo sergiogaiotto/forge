@@ -3,6 +3,16 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.1.3] — 2026-07-03
+
+### Fixed
+- **Blueprint cortado sem sinal de truncamento** (caso do print: `finish_reason=stop` com o plano
+  `{"files":[…]}` interrompido no meio): o reparo agora roda **mesmo sem o sinal** de limite —
+  protegido pelo piso de 2 arquivos, pela seleção pelo candidato mais tardio e pelo aviso de "plano
+  parcial" no modal. Um eco de exemplo fechado antes do plano não bloqueia mais o resgate. E a
+  **conversão roda primeiro** (frequentemente recupera o plano completo), com o parcial reparado
+  como fallback garantido — o "Tentar de novo" deixa de ser a única saída.
+
 ## [2.1.2] — 2026-07-03
 
 ### Fixed
