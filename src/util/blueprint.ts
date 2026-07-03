@@ -182,9 +182,27 @@ export const MIN_BLUEPRINT_FILES = 2;
 export function pickBlueprintFromChannels(a: { text: string; reasoning: string; truncated: boolean }): {
   files: BlueprintFile[];
   fromReasoning: boolean;
+  salvaged: boolean;
 } {
   let files = parseBlueprint(a.text, { salvageTruncated: a.truncated });
   let fromReasoning = false;
+  let salvaged = false;
+  // Reparo SEM sinal de truncamento (caso real de campo: o stream termina "limpo" com
+  // finish_reason=stop mas o array veio cortado no meio — sem o sinal `length` o reparo ficava
+  // desligado e um plano com N objetos completos era jogado fora). Seguro AGORA porque: o piso
+  // MIN_BLUEPRINT_FILES barra o eco de schema (1 objeto), o próprio reparo é latest-wins (rascunho
+  // anterior não vence) e o plano vai à APROVAÇÃO humana com aviso de "plano parcial" no modal.
+  if (files.length < MIN_BLUEPRINT_FILES && !a.truncated && a.text.trim()) {
+    // minFiles no resgate: um eco de schema FECHADO (1 objeto) antes do plano cortado satisfaria a
+    // extração normal e BLOQUEARIA o reparo (o salvage só roda quando a extração falha). Com o piso,
+    // arrays fechados sub-piso são ignorados e o reparo alcança o plano real — seguro: qualquer
+    // array fechado com >=2 já teria sido tomado pelo primeiro parse acima.
+    const rescued = parseBlueprint(a.text, { salvageTruncated: true, minFiles: MIN_BLUEPRINT_FILES });
+    if (rescued.length >= MIN_BLUEPRINT_FILES) {
+      files = rescued;
+      salvaged = true;
+    }
+  }
   if (files.length < MIN_BLUEPRINT_FILES && a.reasoning.trim()) {
     const final = extractFinalChannel(a.reasoning);
     if (final) {
@@ -205,8 +223,8 @@ export function pickBlueprintFromChannels(a: { text: string; reasoning: string; 
       }
     }
   }
-  if (files.length < MIN_BLUEPRINT_FILES) return { files: [], fromReasoning: false };
-  return { files, fromReasoning };
+  if (files.length < MIN_BLUEPRINT_FILES) return { files: [], fromReasoning: false, salvaged: false };
+  return { files, fromReasoning, salvaged };
 }
 
 // Ordena os arquivos em ordem topológica pelas dependências declaradas (deps antes dos dependentes).
