@@ -318,7 +318,9 @@ export type ExtToWebview =
   | { type: "context/report"; report: ContextReport }
   // Cartão pós-seleção do PAPEL: o que o papel carrega (linha de estilo + skills relacionadas) —
   // substitui o toast de 5s que sumia antes de o dev ler.
-  | { type: "profile/roleCard"; card: RoleCard };
+  | { type: "profile/roleCard"; card: RoleCard }
+  // /resumir concluído: o histórico do host virou este resumo (turns = quantos turnos compactou).
+  | { type: "chat/summarized"; summary: string; turns: number };
 
 export interface RoleCard {
   role: string; // slug canônico
@@ -357,6 +359,8 @@ export type WebviewToExt =
   | { type: "chat/send"; text: string; tdd?: boolean }
   // /limpar: zera o histórico e os anexos DO HOST (o "Nova conversa" da webview limpa só a UI).
   | { type: "chat/clear" }
+  // /resumir: compacta o histórico do host num turno sintético (o host responde chat/summarized).
+  | { type: "chat/summarize" }
   // /contexto: pede o relatório do orçamento da janela (o host responde com context/report).
   | { type: "context/inspect" }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI }

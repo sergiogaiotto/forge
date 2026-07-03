@@ -20,7 +20,7 @@ import type {
 // `ui` viaja junto para o retry reenviar a mesma escolha de camada de UI.
 export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
-import { renderContextReport } from "./commands";
+import { renderContextReport, renderSummarized } from "./commands";
 export type { ProfileView } from "../../src/shared/protocol";
 
 // Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
@@ -471,6 +471,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return pushLocalMessage(state, renderContextReport(msg.report));
     case "profile/roleCard":
       return { ...state, roleCard: msg.card };
+    case "chat/summarized":
+      // /resumir: o host compactou o histórico — o cartão mostra exatamente o que o modelo passa a ver.
+      return pushLocalMessage(state, renderSummarized(msg.turns, msg.summary));
     case "stream/error": {
       // usage parcial da geração que morreu — os tokens foram consumidos; acumula como no stream/end.
       const usage = msg.usage

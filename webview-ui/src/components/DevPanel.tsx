@@ -16,7 +16,7 @@ import {
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
-import { exactSlashCommand, matchSlashCommands, renderHelp, renderTokensReport, type SlashCommand } from "../commands";
+import { buildDiagramRequest, exactSlashCommand, matchSlashCommands, renderHelp, renderTokensReport, slashWithArgs, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -101,14 +101,35 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         setProjectMode((v) => !v);
         setTdd(false);
         break;
+      case "revisar":
+        // Espelha o botão de revisão do cabeçalho.
+        dispatch({ kind: "pushUser", text: "Revisar minhas alterações (git diff)." });
+        post({ type: "review/changes" });
+        break;
+      case "resumir":
+        post({ type: "chat/summarize" }); // o host responde chat/summarized → cartão na thread
+        break;
+      case "diagrama":
+        runDiagram(""); // sem argumento = tema default (arquitetura do projeto)
+        break;
     }
+  };
+
+  // /diagrama [tema]: geração normal com prompt craftado — o diagrama nasce como PROPOSTA de arquivo
+  // versionável (docs/diagramas/*.md), reusando todo o pipeline de propostas/aplicação/continuação.
+  const runDiagram = (theme: string) => {
+    dispatch({ kind: "pushUser", text: `[/diagrama] ${theme.trim() || "arquitetura do projeto"}` });
+    post({ type: "chat/send", text: buildDiagramRequest(theme) });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
   };
 
   const send = () => {
     const text = input.trim();
     if (!text || state.busy) return;
     // Paleta "/": SÓ o comando exato e nu executa. Typo de um token orienta SEM apagar o rascunho;
-    // "/algo com cauda" é mensagem legítima do dev e segue para o modelo (nunca sequestrar).
+    // "/algo com cauda" é mensagem legítima do dev e segue para o modelo (nunca sequestrar) —
+    // EXCETO comandos declarados acceptsArgs (a cauda é o argumento esperado: "/diagrama fluxo X").
     if (text.startsWith("/") && !/\s/.test(text)) {
       const cmd = exactSlashCommand(text);
       if (cmd) {
@@ -116,6 +137,11 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       } else {
         dispatch({ kind: "pushLocal", text: `Comando desconhecido: \`${text}\` — digite \`/\` para ver a paleta ou \`/ajuda\`.` });
       }
+      return;
+    }
+    const withArgs = slashWithArgs(text);
+    if (withArgs) {
+      if (withArgs.cmd.id === "diagrama") runDiagram(withArgs.args);
       return;
     }
     // No Modo Projeto, só um PEDIDO de gerar abre o Blueprint. Pergunta/diagnóstico (ex.: logs colados
