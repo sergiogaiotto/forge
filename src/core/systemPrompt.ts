@@ -1,6 +1,6 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-import { BlueprintFile, CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
+import { BlueprintFile, CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage, ProjectUI } from "../shared/protocol";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -177,12 +177,38 @@ function archetypeLayers(architecture: ProjectArchitecture): string {
   }
 }
 
+// Camada de UI OPCIONAL do Modo Projeto (seletor no composer). "auto"/undefined = o modelo decide
+// (comportamento clássico); as demais opções viram instrução explícita no plano E na geração.
+// A UI entra sempre como ADAPTER de entrada — a arquitetura escolhida continua mandando.
+const TEMPLATE_ENGINE: Record<ProjectLanguage, string> = {
+  python: "Jinja2 (rotas de página + templates/ + estáticos)",
+  typescript: "EJS (Express + views/ + estáticos)",
+  java: "Thymeleaf (Spring MVC + resources/templates/)",
+  go: "html/template (net/http + templates/)",
+};
+export function uiLayerInstruction(language: ProjectLanguage, ui: ProjectUI | undefined): string {
+  switch (ui) {
+    case "none":
+      return "CAMADA DE UI: NÃO inclua interface — entregue somente API/CLI e testes.";
+    case "template-engine":
+      return `CAMADA DE UI: inclua uma interface web SERVER-SIDE com template engine — ${TEMPLATE_ENGINE[language]} — como adapter de entrada da arquitetura.`;
+    case "spa-react":
+      return "CAMADA DE UI: inclua um frontend SPA em React (diretório frontend/ com Vite, package.json próprio) consumindo a API via HTTP; documente os dois lados no README.";
+    case "streamlit":
+      // Python-only (a webview filtra; defensivo aqui: outra linguagem cai no "auto").
+      return language === "python" ? "CAMADA DE UI: a interface é um app Streamlit (arquivo de UI chamando o núcleo como biblioteca)." : "";
+    default:
+      return ""; // auto — o modelo decide pela descrição do dev
+  }
+}
+
 // Fase F — BLUEPRINT: pede ao modelo o PLANO de arquivos (aprovável) ANTES do código. Saída = SÓ um
 // array JSON [{path, purpose, deps}] em ordem de dependência (parseado por parseBlueprint). Sem código.
-export function buildBlueprintSystemPrompt(language: ProjectLanguage, architecture: ProjectArchitecture): string {
+export function buildBlueprintSystemPrompt(language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI): string {
   return [
     `Você é o FORGE. Planeje um PROJETO completo em ${LANG_LABEL[language]}, na arquitetura ${ARCH_LABEL[architecture]}.`,
     archetypeLayers(architecture),
+    ...(uiLayerInstruction(language, ui) ? [uiLayerInstruction(language, ui)] : []),
     "NÃO gere código agora — só o PLANO de arquivos.",
     "Responda APENAS com um ARRAY JSON dos arquivos, em ORDEM DE DEPENDÊNCIA (interfaces/portas primeiro,",
     "depois domínio, adaptadores, wiring e por fim os testes), no formato exato:",
@@ -219,9 +245,11 @@ export function buildProjectFromBlueprintPrompt(
   workspaceName: string,
   language: ProjectLanguage,
   architecture: ProjectArchitecture,
-  files: BlueprintFile[]
+  files: BlueprintFile[],
+  ui?: ProjectUI
 ): string {
   const list = files.map((f) => `- ${f.path} — ${f.purpose}${f.deps.length ? ` (usa: ${f.deps.join(", ")})` : ""}`).join("\n");
+  const uiLine = uiLayerInstruction(language, ui);
   return (
     buildBasePrompt(workspaceName) +
     `
@@ -232,7 +260,7 @@ arquitetura ${ARCH_LABEL[architecture]}, NA ORDEM, cada um como um bloco \`${FOR
 
 ${list}
 
-${archetypeLayers(architecture)}
+${archetypeLayers(architecture)}${uiLine ? `\n${uiLine}` : ""}
 COERÊNCIA entre arquivos: reuse os mesmos nomes/assinaturas (o adaptador implementa a MESMA interface —
 ${INTERFACE_MECH[language]} — que o domínio declara; imports e assinaturas casam). Inclua o manifesto
 (${MANIFEST[language]}). O README.md deve ser COMPLETO: propósito, funcionalidades e uma seção
@@ -243,13 +271,14 @@ ${SETUP_HINT[language]}. ${NO_ELLIPSIS_RULE}`
 
 // Modo Projeto: gera um PROJETO COMPLETO na linguagem + arquitetura escolhidas, reusando o protocolo
 // forge-file (cada arquivo vira uma proposta aplicável). Herda o prompt base (idioma, protocolo, anti-elipse).
-export function buildProjectPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture): string {
+export function buildProjectPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI): string {
+  const uiLine = uiLayerInstruction(language, ui);
   return (
     buildBasePrompt(workspaceName) +
     `
 
 MODO PROJETO (OBRIGATÓRIO nesta tarefa): gere um PROJETO COMPLETO em ${LANG_LABEL[language]}, na
-arquitetura ${ARCH_LABEL[architecture]}. Siga à risca:
+arquitetura ${ARCH_LABEL[architecture]}.${uiLine ? ` ${uiLine}` : ""} Siga à risca:
 1. Comece com uma LISTA ENXUTA dos arquivos (um caminho por linha), em ordem de DEPENDÊNCIA:
    interfaces/portas primeiro, depois domínio, adaptadores, wiring e testes. Declare também os NOMES
    exatos das portas/interfaces principais e suas assinaturas-chave. Sem parágrafos — a responsabilidade

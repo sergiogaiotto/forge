@@ -38,6 +38,11 @@ export type ProjectLanguage = "python" | "typescript" | "java" | "go";
 export type ProjectArchitecture = "hexagonal" | "clean" | "layered" | "mvc";
 export const PROJECT_LANGUAGES: ProjectLanguage[] = ["python", "typescript", "java", "go"];
 export const PROJECT_ARCHITECTURES: ProjectArchitecture[] = ["hexagonal", "clean", "layered", "mvc"];
+// Camada de UI OPCIONAL do Modo Projeto: "auto" = o modelo decide (comportamento clássico);
+// as demais viram instrução explícita no blueprint e na geração. Streamlit é Python-only (a webview
+// filtra; o host trata como "auto" defensivamente para outras linguagens).
+export type ProjectUI = "auto" | "none" | "template-engine" | "spa-react" | "streamlit";
+export const PROJECT_UIS: ProjectUI[] = ["auto", "none", "template-engine", "spa-react", "streamlit"];
 
 // Esforço de raciocínio do modelo (gpt-oss e afins). Mais esforço = raciocínio mais longo e melhor,
 // porém mais lento — por isso o timeout é elevado automaticamente junto (ver TIMEOUT_BY_EFFORT).
@@ -354,8 +359,8 @@ export type WebviewToExt =
   | { type: "chat/clear" }
   // /contexto: pede o relatório do orçamento da janela (o host responde com context/report).
   | { type: "context/inspect" }
-  | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
-  | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
+  | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI }
+  | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI }
   | { type: "project/generate" }
   | { type: "project/cancel" }
   | { type: "proposal/applyAll" }

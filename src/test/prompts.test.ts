@@ -1,6 +1,44 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildCharterSystemPrompt, buildContinuationPrompt, buildProjectPrompt, buildReviewPrompt, buildTailContinuation, buildTddPrompt } from "../core/systemPrompt";
+import {
+  buildAcceptanceTestsRequest,
+  buildBasePrompt,
+  buildBlueprintRetryRequest,
+  buildBlueprintSystemPrompt,
+  buildCharterSystemPrompt,
+  buildContinuationPrompt,
+  buildProjectFromBlueprintPrompt,
+  buildProjectPrompt,
+  buildReviewPrompt,
+  buildTailContinuation,
+  buildTddPrompt,
+  uiLayerInstruction,
+} from "../core/systemPrompt";
+
+// Camada de UI OPCIONAL do Modo Projeto (seletor no composer): "auto" não injeta nada (comportamento
+// clássico); as demais viram instrução explícita no blueprint E na geração, por linguagem.
+test("uiLayerInstruction: auto/undefined vazio; none/template/spa/streamlit por linguagem", () => {
+  assert.equal(uiLayerInstruction("python", undefined), "");
+  assert.equal(uiLayerInstruction("python", "auto"), "");
+  assert.match(uiLayerInstruction("python", "none"), /NÃO inclua interface/);
+  assert.match(uiLayerInstruction("python", "template-engine"), /Jinja2/);
+  assert.match(uiLayerInstruction("typescript", "template-engine"), /EJS/);
+  assert.match(uiLayerInstruction("java", "template-engine"), /Thymeleaf/);
+  assert.match(uiLayerInstruction("go", "template-engine"), /html\/template/);
+  assert.match(uiLayerInstruction("python", "spa-react"), /React/);
+  assert.match(uiLayerInstruction("python", "streamlit"), /Streamlit/);
+  // Streamlit é Python-only: outra linguagem cai no vazio (defensivo — a webview já filtra).
+  assert.equal(uiLayerInstruction("typescript", "streamlit"), "");
+});
+
+test("prompts do projeto propagam a camada de UI escolhida (blueprint, guiado e direto)", () => {
+  assert.match(buildBlueprintSystemPrompt("python", "hexagonal", "template-engine"), /Jinja2/);
+  assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("CAMADA DE UI")); // auto = como antes
+  const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "a.py", purpose: "p", deps: [] }], "none");
+  assert.match(guided, /NÃO inclua interface/);
+  assert.match(buildProjectPrompt("proj", "python", "hexagonal", "streamlit"), /Streamlit/);
+  assert.ok(!buildProjectPrompt("proj", "python", "hexagonal").includes("CAMADA DE UI"));
+});
 
 // 2ª tentativa do blueprint: com resposta anterior → CONVERSÃO da própria resposta no array exato;
 // sem resposta (veio vazia) → repete o pedido com o formato reforçado. Sempre exige '[' … ']'.

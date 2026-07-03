@@ -8,8 +8,10 @@ import {
   isRenderablePath,
   PROJECT_ARCHITECTURES,
   PROJECT_LANGUAGES,
+  PROJECT_UIS,
   ProjectArchitecture,
   ProjectLanguage,
+  ProjectUI,
 } from "../../../src/shared/protocol";
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
@@ -22,6 +24,13 @@ import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, t
 const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "baixo", medium: "médio", high: "alto" };
 const PROJ_LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript", java: "Java", go: "Go" };
 const PROJ_ARCH_LABEL: Record<ProjectArchitecture, string> = { hexagonal: "Hexagonal", clean: "Clean", layered: "Camadas", mvc: "MVC" };
+const PROJ_UI_LABEL: Record<ProjectUI, string> = {
+  auto: "UI: auto",
+  none: "Sem UI",
+  "template-engine": "Template engine",
+  "spa-react": "SPA React",
+  streamlit: "Streamlit",
+};
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
@@ -30,6 +39,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [projectMode, setProjectMode] = useState(false);
   const [language, setLanguage] = useState<ProjectLanguage>("python");
   const [architecture, setArchitecture] = useState<ProjectArchitecture>("hexagonal");
+  // Camada de UI OPCIONAL do projeto (adendo do plano): "auto" = o modelo decide (default histórico).
+  const [projUi, setProjUi] = useState<ProjectUI>("auto");
   const [attachMenu, setAttachMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showCharter, setShowCharter] = useState(false);
@@ -111,10 +122,13 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     // + "o que aconteceu?") é respondido no chat normal — sem sequestrar a mensagem para o Blueprint.
     if (projectMode && classifyProjectIntent(text) === "generate") {
       // Fase F: planeja um BLUEPRINT aprovável antes de gerar código. Guarda o brief (para o "Tentar
-      // de novo" caso o planejamento falhe).
-      dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}] ${text}` });
-      dispatch({ kind: "project/planning", brief: { text, language, architecture } });
-      post({ type: "project/blueprint", text, language, architecture });
+      // de novo" caso o planejamento falhe). Streamlit é Python-only — o select filtra, e aqui o
+      // guard defensivo garante ("auto") caso a linguagem mude depois da escolha.
+      const ui = projUi === "streamlit" && language !== "python" ? "auto" : projUi;
+      const uiTag = ui !== "auto" ? `/${PROJ_UI_LABEL[ui]}` : "";
+      dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}${uiTag}] ${text}` });
+      dispatch({ kind: "project/planning", brief: { text, language, architecture, ui } });
+      post({ type: "project/blueprint", text, language, architecture, ui });
     } else {
       dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
       post({ type: "chat/send", text, tdd });
@@ -417,7 +431,18 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             </span>
             {projectMode && (
               <>
-                <select className="proj-select" title="Linguagem" value={language} onChange={(e) => setLanguage(e.target.value as ProjectLanguage)}>
+                <select
+                  className="proj-select"
+                  title="Linguagem"
+                  value={language}
+                  onChange={(e) => {
+                    const l = e.target.value as ProjectLanguage;
+                    setLanguage(l);
+                    // Streamlit é Python-only: sem o reset o select controlado fica com value
+                    // ÓRFÃO (dropdown em branco) e o dev não vê o que será enviado.
+                    if (l !== "python" && projUi === "streamlit") setProjUi("auto");
+                  }}
+                >
                   {PROJECT_LANGUAGES.map((l) => (
                     <option key={l} value={l}>
                       {PROJ_LANG_LABEL[l]}
@@ -428,6 +453,18 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                   {PROJECT_ARCHITECTURES.map((a) => (
                     <option key={a} value={a}>
                       {PROJ_ARCH_LABEL[a]}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="proj-select"
+                  title="Camada de UI do projeto (opcional): auto deixa o modelo decidir; as demais viram instrução explícita no blueprint e na geração"
+                  value={projUi}
+                  onChange={(e) => setProjUi(e.target.value as ProjectUI)}
+                >
+                  {PROJECT_UIS.filter((u) => u !== "streamlit" || language === "python").map((u) => (
+                    <option key={u} value={u}>
+                      {PROJ_UI_LABEL[u]}
                     </option>
                   ))}
                 </select>
