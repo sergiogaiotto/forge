@@ -1,7 +1,29 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { test } from "node:test";
-import { buildVenvSetupCommand, findVenvPython, resolveTestCommand, venvPythonCandidates } from "../util/pythonEnv";
+import { buildVenvSetupCommand, findVenvPython, resolvePythonRunCommand, resolveTestCommand, venvPythonCandidates } from "../util/pythonEnv";
+
+// REGRESSÃO (print do dev: ModuleNotFoundError com venv preparado): o "Executar" rodava o python do
+// PATH. O rewrite troca `python`/`python3` NU pelo interpretador do venv; caminhos/execs próprios passam.
+test("resolvePythonRunCommand: troca python nu pelo venv; respeita caminho absoluto e outros executáveis", () => {
+  const venv = "C:/proj/.venv/Scripts/python.exe";
+  assert.equal(resolvePythonRunCommand('python "C:/proj/app.py"', venv), `${venv} "C:/proj/app.py"`);
+  assert.equal(resolvePythonRunCommand("python3 app.py", venv), `${venv} app.py`);
+  // interpretador com caminho explícito → o admin escolheu; não mexe
+  assert.equal(resolvePythonRunCommand("/usr/bin/python3 app.py", venv), "/usr/bin/python3 app.py");
+  // outros executáveis (node, bash) → intactos
+  assert.equal(resolvePythonRunCommand("node app.js", venv), "node app.js");
+  // sem venv → intacto
+  assert.equal(resolvePythonRunCommand("python app.py", undefined), "python app.py");
+  // venv com espaço no caminho → aspas (RunService força spawn nesse caso)
+  assert.equal(resolvePythonRunCommand("python app.py", "C:/meu proj/.venv/Scripts/python.exe"), '"C:/meu proj/.venv/Scripts/python.exe" app.py');
+  // REGRESSÃO (revisão adversarial): interpretador VERSIONADO/suffixado não pode ser corrompido
+  // (`python3.11` virava `<venv>.exe.11` com \b) — é escolha do admin, passa intacto.
+  assert.equal(resolvePythonRunCommand("python3.11 app.py", venv), "python3.11 app.py");
+  assert.equal(resolvePythonRunCommand("python3.12 app.py", venv), "python3.12 app.py");
+  assert.equal(resolvePythonRunCommand("python-config app.py", venv), "python-config app.py");
+  assert.equal(resolvePythonRunCommand("pythonw app.py", venv), "pythonw app.py");
+});
 
 test("venvPythonCandidates: caminhos por SO (.venv/venv/.env)", () => {
   const win = venvPythonCandidates("C:/proj", true);

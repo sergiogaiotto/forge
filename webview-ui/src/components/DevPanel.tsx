@@ -1214,6 +1214,9 @@ function RunCard({
     ? "ok"
     : "fail";
   const canFix = outcome ? outcome === "failed" : status === "fail";
+  // Falha por dependência ausente (ModuleNotFoundError) é problema de AMBIENTE, não de código:
+  // oferece "Preparar ambiente" (venv + install) em vez de mandar o modelo "corrigir" o import.
+  const envIssue = !running && status === "fail" && /ModuleNotFoundError|No module named/.test(run.output);
   const title = run.label ? run.label : run.command || "execução";
   const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
   const fixText =
@@ -1261,11 +1264,20 @@ function RunCard({
           )}
         </div>
       ) : (
-        (canFix || onDismiss) && (
+        (canFix || envIssue || onDismiss) && (
           <div className="actions" style={{ marginTop: 7 }}>
-            {canFix && (
+            {envIssue && (
               <button
                 className="btn p"
+                title="Criar o venv e instalar as dependências detectadas (depois clique em Reexecutar)"
+                onClick={() => post({ type: "env/prepare" })}
+              >
+                <Icon name="plug" size={12} /> Preparar ambiente
+              </button>
+            )}
+            {canFix && (
+              <button
+                className={envIssue ? "btn" : "btn p"}
                 onClick={() => {
                   dispatch({ kind: "pushUser", text: fixText });
                   post({ type: "chat/send", text: fixText });

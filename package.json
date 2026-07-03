@@ -368,6 +368,11 @@
           "default": 120,
           "markdownDescription": "Tempo máximo (s) de execução antes de abortar."
         },
+        "forge.env.timeoutSeconds": {
+          "type": "number",
+          "default": 900,
+          "markdownDescription": "Tempo máximo (s) do **Preparar ambiente** (venv + pip install) — instalações pesadas em cache frio passam fácil do timeout de execução normal."
+        },
         "forge.run.commands": {
           "type": "object",
           "default": {},

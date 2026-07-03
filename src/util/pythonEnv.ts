@@ -49,6 +49,21 @@ export function buildVenvSetupCommand(o: {
   return `${py} -m venv .venv && ${venvPy} -m pip install --upgrade pip${installStep}`;
 }
 
+// Reescreve o comando do "Executar" para usar o interpretador do VENV quando o comando começa com
+// `python`/`python3` NU (sem caminho). Sem isto o Executar roda o python do PATH e toma
+// ModuleNotFoundError mesmo com o ambiente preparado (raiz do print do dev). Um interpretador com
+// caminho (ex.: /usr/bin/python3) ou outro executável é respeitado como está.
+export function resolvePythonRunCommand(command: string, venvPython: string | undefined): string {
+  const cmd = command.trim();
+  if (!venvPython) return cmd;
+  // (?=\s|$): o nome tem que TERMINAR ali — `python3.11`/`python-config` (interpretador versionado/
+  // suffixado escolhido pelo admin) passam intactos; `\b` sozinho os corromperia (`<venv>.11`).
+  const m = cmd.match(/^python3?(?=\s|$)(.*)$/i);
+  if (!m) return cmd;
+  const q = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${q}${m[1]}`;
+}
+
 // Monta o comando de teste usando o interpretador do venv quando o comando é pytest. Cobre:
 //   "pytest -q"           → `"<venv>" -m pytest -q`
 //   "python -m pytest -q" → `"<venv>" -m pytest -q`  (python/python3 SEM caminho — nome nu)

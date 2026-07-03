@@ -2,6 +2,7 @@ import { ChildProcess, spawn } from "node:child_process";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ExtToWebview } from "../shared/protocol";
+import { resolvePythonRunCommand } from "../util/pythonEnv";
 import { buildCommand, chooseRunMode, makeAnsiFilter, resolveRunCommand } from "./Runner";
 
 const TERMINAL_NAME = "FORGE · Run";
@@ -18,6 +19,9 @@ export interface RunServiceDeps {
   runConfig: () => { enabled: boolean; commands: Record<string, string>; timeoutSeconds: number };
   onResult?: (r: { filePath: string; label?: string; ok: boolean; exitCode: number | null; durationMs: number }) => void;
   openPreview?: (relPath: string) => void; // artefatos renderáveis (.html/.svg) abrem no PreviewService
+  // Interpretador Python do venv do projeto (findVenvPython), quando existe. O "Executar" de .py usa
+  // este interpretador em vez do python do PATH — o mesmo ambiente do "Preparar ambiente"/"Testes".
+  venvPython?: () => string | undefined;
 }
 
 interface FinishData {
@@ -98,10 +102,14 @@ export class RunService implements vscode.Disposable {
         return;
       }
       const abs = path.join(ws, relPath);
-      const command = buildCommand(resolved.template, abs);
+      // Reescreve `python {file}` para o interpretador do venv (ambiente preparado). Se o caminho
+      // precisou de aspas (espaços), força o spawn: no terminal integrado o shell pode ser PowerShell,
+      // que não invoca executável por string entre aspas sem `&` — cmd.exe/sh (spawn) aceitam.
+      const command = resolvePythonRunCommand(buildCommand(resolved.template, abs), this.deps.venvPython?.());
       const timeoutMs = Math.max(1000, cfg.timeoutSeconds * 1000);
+      const forceSpawn = command.startsWith('"');
 
-      const { term, si } = await this.acquireTerminal(ws);
+      const { term, si } = forceSpawn ? { term: undefined, si: undefined } : await this.acquireTerminal(ws);
       const where = chooseRunMode(!!si);
       this.deps.post({ type: "run/start", runId, proposalId, filePath: relPath, command, where });
 
@@ -124,7 +132,7 @@ export class RunService implements vscode.Disposable {
   // cartão lateral. Usa SEMPRE o spawn (cmd.exe/sh via shell:true), não o terminal integrado — assim o
   // encadeamento `&&` funciona mesmo quando o terminal do usuário é PowerShell 5.1 (que não aceita `&&`).
   // É cancelável (killTree) e serializado pela mesma flag `busy` das execuções de arquivo.
-  async runCommand(label: string, command: string): Promise<void> {
+  async runCommand(label: string, command: string, timeoutMsOverride?: number): Promise<void> {
     const cfg = this.deps.runConfig();
     if (!cfg.enabled) return this.notice("warn", "Execução desabilitada (forge.run.enabled = false).");
     const ws = this.deps.workspaceRoot();
@@ -135,7 +143,8 @@ export class RunService implements vscode.Disposable {
     this.activeRunId = runId;
     this.activeCancel = undefined;
     try {
-      const timeoutMs = Math.max(1000, cfg.timeoutSeconds * 1000);
+      // Override p/ comandos longos por natureza (ex.: "ambiente": pip install pesado > 120s do run).
+      const timeoutMs = Math.max(1000, timeoutMsOverride ?? cfg.timeoutSeconds * 1000);
       this.deps.post({ type: "run/start", runId, filePath: "", label, command, where: "panel" });
       let data: FinishData;
       try {

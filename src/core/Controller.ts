@@ -24,6 +24,7 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { mapImportsToPackages, mergeRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildVenvSetupCommand, findVenvPython, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { deriveBudget } from "./ContextBudget";
@@ -150,6 +151,11 @@ export class Controller {
       runConfig: () => this.config.run(),
       onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, label: r.label, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
       openPreview: (relPath) => void this.previewService.openPreview(relPath),
+      // O "Executar" de .py usa o python do venv do projeto (mesmo ambiente do Preparar/Testes).
+      venvPython: () => {
+        const ws = this.workspaceRoot();
+        return ws ? findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV) : undefined;
+      },
     });
     context.subscriptions.push(this.runService);
 
@@ -2099,32 +2105,53 @@ export class Controller {
     this.obs.record({ type: "run.result", filePath: "", label: "testes", ok: result.ok, exitCode: result.exitCode, durationMs: result.durationMs });
   }
 
-  // "Preparar ambiente": cria o venv do projeto e instala as dependências (requirements.txt/pyproject).
-  // Ataca a raiz do "No module named pytest" — o ambiente não estava preparado. Streaming pelo spawn
-  // (cmd.exe/sh), então o encadeamento `&&` funciona mesmo com o terminal em PowerShell.
+  // "Preparar ambiente": cria o venv do projeto e instala as dependências. Três modos:
+  //   requirements.txt existe → instala + INCREMENTA (imports do código ausentes do arquivo, com
+  //     confirmação nativa); pyproject instalável → `pip install -e .` como antes;
+  //   NENHUM manifesto → detecta os imports do código, GERA o requirements.txt e instala (antes
+  //     desistia com um aviso — agora o ambiente nasce do zero).
+  // Streaming pelo spawn (cmd.exe/sh), então o `&&` funciona mesmo com o terminal em PowerShell.
   async prepareEnv(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
       this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para preparar o ambiente." });
       return;
     }
-    const hasReq = existsSync(path.join(ws, "requirements.txt"));
+    const reqPath = path.join(ws, "requirements.txt");
+    const hasReq = existsSync(reqPath);
     const hasPyproject = existsSync(path.join(ws, "pyproject.toml"));
-    if (!hasReq && !hasPyproject) {
-      this.post({
-        type: "notice",
-        level: "warn",
-        message: "Preparar ambiente: nenhum requirements.txt ou pyproject.toml na raiz (suporte a projetos Python por ora).",
-      });
-      return;
-    }
-    // requirements.txt tem prioridade. Só usa `pip install -e .` se o pyproject for INSTALÁVEL
-    // ([build-system] ou [project]); um pyproject só-de-ferramentas (ruff/pytest/black) quebraria o
-    // `-e .` — nesse caso apenas cria o venv (não falha no cenário que deveria resolver).
     let install: "requirements" | "editable" | "none";
     if (hasReq) {
       install = "requirements";
-    } else {
+      // INCREMENTO: pacotes usados no código e ausentes do requirements — pergunta antes de mexer
+      // em arquivo do dev (diálogo nativo; um toast não coleta resposta).
+      const detected = await this.detectWorkspacePackages(ws);
+      if (detected.length > 0) {
+        try {
+          const existing = await fs.readFile(reqPath, "utf8");
+          // Arquivo em UTF-16 (BOM FF FE) decodificado como utf8 vira lixo com bytes NUL — o merge
+          // "não reconheceria" nada e a reescrita CORROMPERIA o arquivo do dev. Pula o incremento.
+          if (existing.includes("\u0000")) throw new Error("requirements.txt em encoding não-UTF-8");
+          const merged = mergeRequirements(existing, detected);
+          if (merged.added.length > 0) {
+            const addAndInstall = "Adicionar e instalar";
+            const pick = await vscode.window.showInformationMessage(
+              `Detectei no código pacote(s) ausente(s) do requirements.txt: ${merged.added.join(", ")}. Adicionar?`,
+              addAndInstall,
+              "Instalar só o que está listado"
+            );
+            if (pick === addAndInstall) {
+              await fs.writeFile(reqPath, merged.content, "utf8");
+              this.post({ type: "notice", level: "info", message: `requirements.txt incrementado: ${merged.added.join(", ")}.` });
+            }
+          }
+        } catch {
+          /* requirements ilegível → segue com o install normal */
+        }
+      }
+    } else if (hasPyproject) {
+      // Só usa `pip install -e .` se o pyproject for INSTALÁVEL ([build-system]/[project]); um
+      // pyproject só-de-ferramentas (ruff/pytest/black) quebraria o `-e .` — nesse caso só cria o venv.
       let pyproject = "";
       try {
         pyproject = await fs.readFile(path.join(ws, "pyproject.toml"), "utf8");
@@ -2139,11 +2166,58 @@ export class Controller {
           message: "pyproject.toml sem [project]/[build-system]: crio o venv e atualizo o pip (adicione requirements.txt ou torne o pacote instalável para instalar dependências).",
         });
       }
+    } else {
+      // SEM manifesto: o ambiente nasce do código. Detecta os imports de terceiros e gera o
+      // requirements.txt (arquivo NOVO — nada é sobrescrito; o cabeçalho explica a origem).
+      const detected = await this.detectWorkspacePackages(ws);
+      if (detected.length > 0) {
+        await fs.writeFile(reqPath, renderRequirements(detected), "utf8");
+        this.post({
+          type: "notice",
+          level: "info",
+          message: `requirements.txt gerado com ${detected.length} pacote(s) detectado(s) no código: ${detected.join(", ")}. Revise à vontade.`,
+        });
+        install = "requirements";
+      } else {
+        install = "none";
+        this.post({ type: "notice", level: "info", message: "Nenhuma dependência de terceiros detectada — crio o venv (.venv) e atualizo o pip." });
+      }
     }
     const isWin = process.platform === "win32";
     const venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
     const command = buildVenvSetupCommand({ isWindows: isWin, venvPython, install });
-    await this.runService.runCommand("ambiente", command);
+    // Timeout próprio (forge.env.timeoutSeconds, default 900s): pip install pesado em cache frio
+    // passa fácil dos 120s do run normal — matar no meio deixa o venv meio-populado.
+    await this.runService.runCommand("ambiente", command, this.config.env().timeoutSeconds * 1000);
+  }
+
+  // Varre os .py do workspace (com tetos) e devolve os pacotes PyPI de terceiros usados no código.
+  // Lê só o INÍCIO de cada arquivo (imports vivem no topo) para não pesar em projetos grandes.
+  private async detectWorkspacePackages(ws: string): Promise<string[]> {
+    // `env/` (python -m venv env é invocação padrão), .tox e site-packages também são excluídos —
+    // senão os imports das libs INSTALADAS poluem a detecção e estouram o teto de 300 arquivos.
+    const uris = await vscode.workspace.findFiles(
+      "**/*.py",
+      "{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.venv/**,**/venv/**,**/env/**,**/.tox/**,**/site-packages/**,**/__pycache__/**,**/.env/**}",
+      300
+    );
+    const sources: string[] = [];
+    const local = new Set<string>();
+    for (const uri of uris) {
+      const rel = path.relative(ws, uri.fsPath).replace(/\\/g, "/");
+      // Módulos LOCAIS: o basename de cada .py e TODOS os segmentos de diretório do caminho —
+      // num layout src/, `from adapters import x` referencia src/adapters/, que não é o 1º segmento
+      // (e "adapters" EXISTE no PyPI: instalaria uma lib de ML errada silenciosamente).
+      local.add(path.basename(rel, ".py"));
+      for (const seg of rel.split("/").slice(0, -1)) if (seg) local.add(seg);
+      try {
+        const content = await fs.readFile(uri.fsPath, "utf8");
+        sources.push(content.slice(0, 16_000));
+      } catch {
+        /* ilegível → ignora */
+      }
+    }
+    return mapImportsToPackages(scanPythonImports(sources), local);
   }
 
   // ---- revisão de código (in-network) ----------------------------------------
