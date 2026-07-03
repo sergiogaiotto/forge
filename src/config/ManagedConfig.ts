@@ -115,6 +115,13 @@ export class ManagedConfig {
     };
   }
 
+  // Timeout PRÓPRIO do "Preparar ambiente" (venv + pip install): instalar pacotes pesados
+  // (scikit-learn, pyspark…) num cache frio passa fácil dos 120s do run — matar o pip no meio
+  // deixa o venv meio-populado e o dev num loop de reexecutar/falhar.
+  env(): { timeoutSeconds: number } {
+    return { timeoutSeconds: this.cfg().get<number>("env.timeoutSeconds", 900) };
+  }
+
   test(): { enabled: boolean; command: string } {
     const c = this.cfg();
     return {
