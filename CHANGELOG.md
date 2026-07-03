@@ -3,6 +3,19 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.1.1] — 2026-07-03
+
+### Fixed
+- **Blueprint que ainda falhava com "sem array válido, mesmo após pedir a conversão"** (caso real:
+  app FinOps com template engine). Três elos: a **conversão recebia só o começo** da resposta anterior
+  (o array do fim era descartado pelo cap — agora o cap é bipartido e preserva as duas pontas); a
+  **2ª tentativa repetia a mesma falha deterministicamente** (temperature 0 — agora amostra com o
+  default do servidor, e o "Tentar de novo" passa a variar de verdade); e o **plano completo escrito
+  no raciocínio era descartado** quando o gateway roteava tudo para `reasoning_content` sem marcador
+  (resgate estrito por candidato mais tardio, com piso de 2 arquivos contra ecos de schema).
+- A mensagem de erro do blueprint agora inclui o **início da resposta recebida** — diagnóstico
+  instantâneo sem abrir o Output → FORGE.
+
 ## [2.1.0] — 2026-07-03
 
 ### Added — Paleta de comandos "/"
