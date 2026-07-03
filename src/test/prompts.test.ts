@@ -53,6 +53,22 @@ test("buildBlueprintRetryRequest: com resposta anterior pede a CONVERSÃO e incl
   assert.ok(big.length < 6000);
 });
 
+// REGRESSÃO (blueprint FinOps em campo): o cap mantinha o COMEÇO e descartava o array no FIM da
+// resposta anterior — a conversão recebia só prosa e falhava. Cap BIPARTIDO preserva as duas pontas.
+test("buildBlueprintRetryRequest: o cap bipartido preserva a CAUDA (array no fim) E o COMEÇO", () => {
+  const array = '[{"path":"src/main.py","purpose":"entry"},{"path":"README.md","purpose":"docs"}]';
+  const tail = "raciocínio longo… ".repeat(400) + array; // array só nos últimos chars
+  const reqTail = buildBlueprintRetryRequest("crie um app", tail);
+  assert.ok(reqTail.includes(array), "o array do fim tem que sobreviver ao cap");
+  // plano MAIOR que o cap com degeneração DEPOIS: o início (com o '[' e primeiros objetos) sobrevive
+  const head = array + " eco eco ".repeat(600);
+  const reqHead = buildBlueprintRetryRequest("crie um app", head);
+  assert.ok(reqHead.includes('[{"path":"src/main.py"'), "o começo tem que sobreviver ao cap");
+  assert.ok(reqHead.includes("trecho intermediário omitido"));
+  // curto passa intacto, sem marcador de omissão
+  assert.ok(!buildBlueprintRetryRequest("b", "resposta curta").includes("omitido"));
+});
+
 test("buildBlueprintRetryRequest: sem resposta anterior reforça o formato no pedido original", () => {
   const p = buildBlueprintRetryRequest("crie uma app de senhas", "   ");
   assert.match(p, /2ª tentativa/);

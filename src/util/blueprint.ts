@@ -16,11 +16,22 @@ const BP_MAX_INPUT = 1_000_000; // saída de blueprint plausível cabe folgada; 
 const BP_WORK_BUDGET = 3_000_000; // teto de char-visitas na varredura balanceada (poucos ms)
 const pathCount = (arr: unknown[]): number =>
   arr.filter((e) => e && typeof e === "object" && typeof (e as Record<string, unknown>).path === "string").length;
-function extractBlueprintArray(raw: string): unknown[] | null {
+interface ExtractOptions {
+  // Seleção pelo candidato mais TARDIO que qualifica (em vez do de maior score). Usado no resgate
+  // do CoT bruto: o plano FINAL é o último array que o modelo escreveu — um rascunho anterior maior
+  // não pode vencer a revisão-para-baixo (confirmado em revisão adversarial).
+  preferLatest?: boolean;
+  // Score mínimo (nº de objetos-com-path) para um candidato QUALIFICAR. Com preferLatest, impede
+  // que um eco de schema (1 objeto) DEPOIS do plano real roube a seleção.
+  minFiles?: number;
+}
+
+function extractBlueprintArray(raw: string, opts: ExtractOptions = {}): unknown[] | null {
   const text = raw.length > BP_MAX_INPUT ? raw.slice(0, BP_MAX_INPUT) : raw;
   let budget = BP_WORK_BUDGET;
   let best: unknown[] | null = null;
   let bestScore = 0;
+  const minScore = Math.max(1, opts.minFiles ?? 1);
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "[") continue;
     let depth = 0;
@@ -44,8 +55,10 @@ function extractBlueprintArray(raw: string): unknown[] | null {
             const arr = JSON.parse(text.slice(i, j + 1));
             if (Array.isArray(arr)) {
               const score = pathCount(arr);
-              if (score > 0 && score >= bestScore) {
-                best = arr; // >= prefere o candidato mais tardio no empate (a resposta final vem por último)
+              // Default: maior score vence; >= prefere o mais tardio no empate (a resposta final vem
+              // por último). preferLatest: QUALQUER candidato qualificado mais tardio substitui.
+              if (score >= minScore && (opts.preferLatest || score >= bestScore)) {
+                best = arr;
                 bestScore = score;
               }
             }
@@ -119,13 +132,17 @@ export interface ParseBlueprintOptions {
   // finish_reason=length — sem essa confirmação, o reparo poderia fabricar um plano a partir de um
   // eco de schema/rascunho não fechado no raciocínio vazado (resposta final sem array nenhum).
   salvageTruncated?: boolean;
+  // Seleção por posição (mais tardio qualificado vence) + piso de qualificação — ver ExtractOptions.
+  preferLatest?: boolean;
+  minFiles?: number;
 }
 
 export function parseBlueprint(text: string, opts?: ParseBlueprintOptions): BlueprintFile[] {
   // Remove o canal de análise/tokens harmony (vazamento do gpt-oss) e extrai o array top-level válido.
   // Último recurso — e só com truncamento confirmado: repara o array cortado pelo limite de tokens.
+  const extract: ExtractOptions = { preferLatest: opts?.preferLatest, minFiles: opts?.minFiles };
   const stripped = stripHarmony(text);
-  let arr = extractBlueprintArray(stripped) ?? extractBlueprintArray(text);
+  let arr = extractBlueprintArray(stripped, extract) ?? extractBlueprintArray(text, extract);
   if (!arr && opts?.salvageTruncated) arr = salvageTruncatedArray(stripped) ?? salvageTruncatedArray(text);
   if (!arr) return [];
   const seen = new Set<string>();
@@ -156,7 +173,11 @@ export const MIN_BLUEPRINT_FILES = 2;
 // 2) canal de raciocínio — SÓ o conteúdo após o marcador do canal final (extractFinalChannel).
 //    O raciocínio BRUTO ecoa o schema/rascunhos do system prompt: parseá-lo fabricaria um plano
 //    falso e PULARIA a 2ª tentativa de conversão (confirmado em revisão adversarial). Sem marcador,
-//    o raciocínio vai para a 2ª tentativa como matéria-prima da conversão — não para o parser.
+//    o raciocínio vai para a 2ª tentativa como matéria-prima da conversão — não para o parser;
+// 3) ÚLTIMO recurso, só com content totalmente VAZIO: extração ESTRITA do raciocínio bruto (sem
+//    reparo de truncamento — rascunho não fechado nunca vira plano). O piso de MIN_BLUEPRINT_FILES
+//    bloqueia o eco de schema (1 objeto); um array completo de vários arquivos no CoT é o plano que
+//    o modelo redigiu e o gateway não roteou — vai para a aprovação humana em vez de falhar seco.
 // Plano com menos de MIN_BLUEPRINT_FILES é inválido ([]) — deixa o chamador escalar/errar com clareza.
 export function pickBlueprintFromChannels(a: { text: string; reasoning: string; truncated: boolean }): {
   files: BlueprintFile[];
@@ -169,6 +190,16 @@ export function pickBlueprintFromChannels(a: { text: string; reasoning: string; 
     if (final) {
       const rescued = parseBlueprint(final, { salvageTruncated: a.truncated });
       if (rescued.length > files.length) {
+        files = rescued;
+        fromReasoning = true;
+      }
+    } else if (!a.text.trim()) {
+      // content VAZIO e sem marcador de canal final: gateway roteou tudo para reasoning_content.
+      // Extração estrita (arrays completos apenas), pelo candidato mais TARDIO qualificado: o plano
+      // FINAL é o último que o modelo escreveu — um rascunho anterior maior não vence a revisão-para-
+      // baixo, e o piso >=2 impede que um eco de schema (1 objeto) após o plano roube a seleção.
+      const rescued = parseBlueprint(a.reasoning, { preferLatest: true, minFiles: MIN_BLUEPRINT_FILES });
+      if (rescued.length >= MIN_BLUEPRINT_FILES) {
         files = rescued;
         fromReasoning = true;
       }
