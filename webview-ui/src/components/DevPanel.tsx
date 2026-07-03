@@ -11,7 +11,7 @@ import {
   ProjectArchitecture,
   ProjectLanguage,
 } from "../../../src/shared/protocol";
-import type { BlueprintFileView, ProjectFileStatus, RagChunkView, SkillInspectView } from "../../../src/shared/protocol";
+import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
 import { exactSlashCommand, matchSlashCommands, renderHelp, renderTokensReport, type SlashCommand } from "../commands";
@@ -34,6 +34,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [showProfile, setShowProfile] = useState(false);
   const [showCharter, setShowCharter] = useState(false);
   const [showInspect, setShowInspect] = useState(false);
+  const [inspectSkill, setInspectSkill] = useState<string | null>(null); // deep-link do cartão de papel
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -322,6 +323,17 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           </>
         )}
         <ProfileSuggestion messages={state.messages} />
+        {state.roleCard && (
+          <RoleCardView
+            card={state.roleCard}
+            onDismiss={() => dispatch({ kind: "roleCard/dismiss" })}
+            onOpenSkill={(name) => {
+              setInspectSkill(name); // deep-link: o Índice abre já no SKILL.md clicado
+              setShowInspect(true);
+              post({ type: "inspect/open" });
+            }}
+          />
+        )}
         <div className="composer-box">
           {slashOpen && (
             // Paleta "/": popover ancorado acima do composer (↑↓ navega, Enter/Tab executa, Esc fecha).
@@ -554,7 +566,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         />
       )}
       {showCharter && <CharterWizard state={state} dispatch={dispatch} onClose={() => setShowCharter(false)} />}
-      {showInspect && <InspectPanel state={state} onClose={() => setShowInspect(false)} />}
+      {showInspect && (
+        <InspectPanel
+          state={state}
+          initialSkill={inspectSkill}
+          onClose={() => {
+            setShowInspect(false);
+            setInspectSkill(null); // o deep-link vale só para a abertura que o pediu
+          }}
+        />
+      )}
       {state.project && <ProjectPlanPanel state={state} dispatch={dispatch} />}
     </div>
   );
@@ -706,12 +727,20 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
 
 // Visualizador read-only: aba de Skills (lista + corpo do SKILL.md) e aba de RAG (status + arquivos
 // indexados + chunks de um arquivo). Só LEITURA — os dados vêm do que já está em memória no host.
-function InspectPanel({ state, onClose }: { state: UIState; onClose: () => void }): JSX.Element {
+function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClose: () => void; initialSkill?: string | null }): JSX.Element {
   const [tab, setTab] = useState<"skills" | "rag">("skills");
-  const [selSkill, setSelSkill] = useState<string | null>(null);
+  // Deep-link do cartão de papel: abre já NA skill clicada (senão o title do chip prometeria
+  // "ver o SKILL.md" e entregaria só a lista geral).
+  const [selSkill, setSelSkill] = useState<string | null>(initialSkill ?? null);
   const [selFile, setSelFile] = useState<string | null>(null);
   const insp = state.inspect;
   const rag = insp?.rag;
+  useEffect(() => {
+    // Pede o corpo da skill do deep-link uma vez, na montagem (o cache pode ter sido zerado pelo
+    // skills/inspect que chega logo antes — a ordem host é inspect/open → skills/body).
+    if (initialSkill) post({ type: "skills/body", name: initialSkill });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Usa "chave presente?" (não truthiness) — um SKILL.md só-frontmatter tem corpo "" e não deve
   // reler o disco a cada clique.
@@ -779,7 +808,8 @@ function InspectPanel({ state, onClose }: { state: UIState; onClose: () => void 
               ) : (
                 insp.skills.map((s) => (
                   <div key={s.name} className="inspect-item roomy" onClick={() => openSkill(s)}>
-                    <span className="dot" style={{ background: s.enabled ? "#86c98e" : "#555" }} />
+                    {/* âmbar = desabilitada (mesma cor do cartão de papel — vocabulário unificado) */}
+                    <span className="dot" style={{ background: s.enabled ? "#86c98e" : "#c9a26d" }} />
                     <span className="nm">{s.name}</span>
                     <span className="desc">{s.description}</span>
                     <span className="src" style={{ color: srcColor[s.source] ?? "#9a9a9a" }}>
@@ -1488,6 +1518,39 @@ function RunCard({
 // Formatação compacta de tokens para a barra de status (1.2k / 340).
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+// Cartão pós-seleção do PAPEL: mostra a linha de estilo que passa a entrar em todo prompt e as
+// skills relacionadas (chips clicáveis → Índice). Substitui o toast de 5s que sumia antes de ler.
+function RoleCardView({ card, onDismiss, onOpenSkill }: { card: RoleCard; onDismiss: () => void; onOpenSkill: (name: string) => void }): JSX.Element {
+  return (
+    <div className="role-card">
+      <div className="role-card-head">
+        <Icon name="users" size={14} color="#c9a26d" /> Papel definido: <b>{card.label}</b>
+        <div className="spacer" />
+        <span className="icon-btn" title="Dispensar" onClick={onDismiss}>
+          <Icon name="x" size={13} />
+        </span>
+      </div>
+      <div className="role-card-guidance">{card.guidance}</div>
+      {card.skills.length > 0 && (
+        <div className="role-card-skills">
+          <span className="role-card-cap">skills relacionadas:</span>
+          {card.skills.map((s) => (
+            <span
+              key={s.name}
+              className={`role-chip${s.installed ? "" : " off"}`}
+              title={s.installed ? `${s.name} · ${s.enabled ? "habilitada" : "desabilitada"} — clique para ver o SKILL.md no Índice` : `${s.name} · não instalada neste ambiente`}
+              onClick={s.installed ? () => onOpenSkill(s.name) : undefined}
+            >
+              <span className="dot" style={{ background: s.installed ? (s.enabled ? "#86c98e" : "#c9a26d") : "#555" }} />
+              {s.name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Heurística conservadora: mensagens em tom de diretiva (proibição/preferência) são candidatas a

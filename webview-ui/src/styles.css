@@ -841,6 +841,64 @@ h6.md-h {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Cartão pós-seleção do papel (acima do composer, dispensável). */
+.role-card {
+  background: var(--surface);
+  border: 1px solid var(--border-3);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.role-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #cfcfcf;
+}
+.role-card-guidance {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin: 6px 0 2px;
+}
+.role-card-skills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+.role-card-cap {
+  color: var(--muted-2);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 2px 7px;
+  border: 1px solid var(--border-3);
+  border-radius: 999px;
+  cursor: pointer;
+  color: #cfcfcf;
+}
+.role-chip:not(.off):hover {
+  background: #232323; /* hover só no clicável — chip .off não sinaliza clique inexistente */
+}
+.role-chip.off {
+  color: var(--muted-2);
+  cursor: default;
+}
+.role-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
 .composer textarea {
   width: 100%;
   background: transparent;

@@ -72,9 +72,29 @@ export function roleLabel(role: Role): string {
   return LABELS[role];
 }
 
+// Skills MANAGED relacionadas a cada papel (nomes dos diretórios em skills/). Não é um filtro —
+// todas as skills continuam disponíveis pela seleção léxica; a lista alimenta o CARTÃO pós-seleção
+// ("o que este papel carrega") para o dev saber o que o FORGE prioriza no seu contexto.
+const ROLE_SKILLS: Record<Role, string[]> = {
+  "cientista-de-dados": ["eda-notebooks", "pandas-defensive-pipelines", "polars-pipelines", "sql-dialect-aware"],
+  "engenheiro-de-dados": ["airflow-dags", "dbt-modeling", "spark-pipelines", "sql-dialect-aware", "data-quality-checks"],
+  "engenheiro-de-ml": ["mlops-pipelines", "pytorch-training", "pandas-defensive-pipelines", "data-quality-checks"],
+  "engenheiro-de-ia": ["mlops-pipelines", "pytorch-training", "eda-notebooks"],
+  "engenheiro-de-software": ["data-quality-checks", "sql-dialect-aware"],
+};
+
+export function roleSkills(role: Role): string[] {
+  return ROLE_SKILLS[role];
+}
+
 export function roleGuidance(role: Role | undefined): string {
   if (!role) return "";
   return `## Papel e padrões (oriente o estilo e os defaults por este papel)\n- ${GUIDANCE[role]}`;
+}
+
+// A linha de orientação CRUA (sem o header de bloco) — alimenta o cartão pós-seleção do papel.
+export function roleGuidanceLine(role: Role): string {
+  return GUIDANCE[role];
 }
 
 // Remove o frontmatter YAML inicial do corpo do perfil (os campos estruturados viram orientação;

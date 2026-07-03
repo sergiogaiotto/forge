@@ -310,7 +310,17 @@ export type ExtToWebview =
   // chat pela defesa em profundidade do host). Diferente de blueprintError, que mostra toast de erro.
   | { type: "project/closed" }
   // Resposta do /contexto: orçamento da janela calculado pelo HOST (mesmo deriveBudget da geração).
-  | { type: "context/report"; report: ContextReport };
+  | { type: "context/report"; report: ContextReport }
+  // Cartão pós-seleção do PAPEL: o que o papel carrega (linha de estilo + skills relacionadas) —
+  // substitui o toast de 5s que sumia antes de o dev ler.
+  | { type: "profile/roleCard"; card: RoleCard };
+
+export interface RoleCard {
+  role: string; // slug canônico
+  label: string; // rótulo legível
+  guidance: string; // a linha de estilo que passa a entrar em todo prompt
+  skills: { name: string; enabled: boolean; installed: boolean }[]; // relacionadas ao papel
+}
 
 // Relatório do /contexto — números em TOKENS (estimativas heurísticas onde indicado).
 export interface ContextReport {
