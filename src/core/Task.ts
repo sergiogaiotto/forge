@@ -115,7 +115,9 @@ export class Task {
     });
     const usage = { inputTokens, outputTokens };
     if (gen.error !== undefined) {
-      d.post({ type: "stream/error", taskId: d.taskId, message: gen.error });
+      // usage parcial acompanha o erro: os tokens até aqui FORAM consumidos — /tokens e o /contexto
+      // (host) precisam concordar mesmo quando a geração morre no meio.
+      d.post({ type: "stream/error", taskId: d.taskId, message: gen.error, usage });
       d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: gen.full, usage, proposals: 0, error: gen.error });
       return;
     }
@@ -159,7 +161,8 @@ export class Task {
     }
 
     d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: this.proposals.size });
-    d.post({ type: "stream/end", taskId: d.taskId });
+    // usage REAL da geração (somado entre continuações) — alimenta /tokens e a barra de status.
+    d.post({ type: "stream/end", taskId: d.taskId, usage });
   }
 
   // Uma passagem de streaming do provider: acumula e transmite o texto ao vivo, retornando o texto

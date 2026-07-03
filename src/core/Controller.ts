@@ -27,6 +27,8 @@ import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
+import { ObsEvent } from "../obs/types";
+import { estimateTokens, estimateTokensOf } from "../util/tokenEstimate";
 import { deriveBudget } from "./ContextBudget";
 import { PreviewService } from "./PreviewService";
 import { SkillMeta, SkillValidatorSpec } from "../skills/types";
@@ -112,6 +114,8 @@ export class Controller {
   private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
   private attachmentSeq = 0;
   private currentTask: Task | undefined;
+  // Usage REAL acumulado da sessão (todas as gerações, incl. continuações) — /contexto e /tokens.
+  private sessionUsage = { input: 0, output: 0 };
   private readonly runService: RunService;
   private readonly previewService: PreviewService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -517,6 +521,7 @@ export class Controller {
     let text = "";
     let delivered = ""; // o texto EFETIVAMENTE entregue ao wizard (pode vir do resgate do raciocínio)
     let error: string | undefined;
+    const usage = { inputTokens: 0, outputTokens: 0 }; // usage REAL da geração (chunks do provider)
     try {
       const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
       const provider = createProvider(sr, this.egress);
@@ -529,7 +534,10 @@ export class Controller {
       })) {
         if (chunk.kind === "text") text += chunk.text;
         else if (chunk.kind === "reasoning") reasoning += chunk.text; // p/ resgate se o content vier vazio
-        else if (chunk.kind === "warning") truncated = true; // finish_reason=length: seção cortada
+        else if (chunk.kind === "usage") {
+          usage.inputTokens += chunk.inputTokens;
+          usage.outputTokens += chunk.outputTokens;
+        } else if (chunk.kind === "warning") truncated = true; // finish_reason=length: seção cortada
         else if (chunk.kind === "error") {
           error = chunk.message;
           break;
@@ -582,7 +590,9 @@ export class Controller {
       error = (e as Error)?.message ?? String(e);
       this.post({ type: "charter/error", section, message: error });
     } finally {
-      this.obs.record({ type: "generation.end", taskId, durationMs: Date.now() - started, model: runtime.modelId, input: userMsg, output: delivered || text, proposals: 0, error });
+      const end: ObsEvent = { type: "generation.end", taskId, durationMs: Date.now() - started, model: runtime.modelId, input: userMsg, output: delivered || text, usage, proposals: 0, error };
+      this.trackUsage(end); // charter também consome tokens — /contexto precisa contabilizar
+      this.obs.record(end);
     }
   }
 
@@ -669,10 +679,16 @@ export class Controller {
     });
     let obsOutput = "";
     let obsError: string | undefined;
+    const obsUsage = { inputTokens: 0, outputTokens: 0 }; // somado entre as tentativas
+    const addUsage = (u: { inputTokens: number; outputTokens: number }) => {
+      obsUsage.inputTokens += u.inputTokens;
+      obsUsage.outputTokens += u.outputTokens;
+    };
     try {
       // Tentativa 1: pedido normal.
       const a1 = await this.streamBlueprintAttempt(sr, system, brief, "Raciocinando sobre a arquitetura…");
       obsOutput = a1.text || a1.reasoning;
+      addUsage(a1.usage);
       if (a1.error) {
         obsError = a1.error;
         this.post({ type: "project/blueprintError", message: a1.error });
@@ -694,6 +710,7 @@ export class Controller {
         this.post({ type: "project/planStep", label: "A resposta veio sem o plano — pedindo a conversão…" });
         const a2 = await this.streamBlueprintAttempt(sr, system, buildBlueprintRetryRequest(brief, a1.text || a1.reasoning), "Convertendo o plano…");
         obsOutput = a2.text || a2.reasoning || obsOutput;
+        addUsage(a2.usage);
         if (a2.error) {
           obsError = a2.error;
           this.post({ type: "project/blueprintError", message: a2.error });
@@ -742,7 +759,9 @@ export class Controller {
       obsError = (e as Error)?.message ?? String(e);
       this.post({ type: "project/blueprintError", message: obsError });
     } finally {
-      this.obs.record({ type: "generation.end", taskId, durationMs: Date.now() - started, model: sr.modelId, input: brief, output: obsOutput, proposals: 0, error: obsError });
+      const end: ObsEvent = { type: "generation.end", taskId, durationMs: Date.now() - started, model: sr.modelId, input: brief, output: obsOutput, usage: obsUsage, proposals: 0, error: obsError };
+      this.trackUsage(end); // o planejamento também consome tokens — /contexto contabiliza
+      this.obs.record(end);
     }
   }
 
@@ -754,13 +773,14 @@ export class Controller {
     system: string,
     userMsg: string,
     beatLabel: string
-  ): Promise<{ text: string; reasoning: string; truncated: boolean; error?: string }> {
+  ): Promise<{ text: string; reasoning: string; truncated: boolean; usage: { inputTokens: number; outputTokens: number }; error?: string }> {
     const provider = createProvider(sr, this.egress);
     const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "project");
     let text = "";
     let reasoning = "";
     let truncated = false;
     let gotText = false;
+    const usage = { inputTokens: 0, outputTokens: 0 };
     const started = Date.now();
     let lastBeat = 0;
     try {
@@ -782,16 +802,19 @@ export class Controller {
             lastBeat = now;
             this.post({ type: "project/planStep", label: `${beatLabel} (${Math.round((now - started) / 1000)}s)` });
           }
+        } else if (chunk.kind === "usage") {
+          usage.inputTokens += chunk.inputTokens;
+          usage.outputTokens += chunk.outputTokens;
         } else if (chunk.kind === "warning") {
           truncated = true; // finish_reason=length: o raciocínio/output estourou o max_tokens
         } else if (chunk.kind === "error") {
-          return { text, reasoning, truncated, error: chunk.message };
+          return { text, reasoning, truncated, usage, error: chunk.message };
         }
       }
     } catch (e) {
-      return { text, reasoning, truncated, error: (e as Error)?.message ?? String(e) };
+      return { text, reasoning, truncated, usage, error: (e as Error)?.message ?? String(e) };
     }
-    return { text, reasoning, truncated };
+    return { text, reasoning, truncated, usage };
   }
 
   // Extrai o plano de uma tentativa (lógica pura em pickBlueprintFromChannels): content tolerante;
@@ -1125,6 +1148,19 @@ export class Controller {
         break;
       case "chat/send":
         await this.startTask(msg.text, msg.tdd ? "tdd" : "normal");
+        break;
+      case "chat/clear":
+        // /limpar: o "Nova conversa" da webview zera só a UI; aqui zera o que o HOST reenviaria.
+        // Aborta a task em VOO primeiro — sem isso ela seguiria queimando tokens e despejando
+        // stream/text na conversa "nova" (task fantasma confirmada em revisão adversarial).
+        this.currentTask?.abort();
+        this.history = [];
+        this.pendingAttachments = [];
+        this.postAttachments();
+        this.post({ type: "notice", level: "info", message: "Contexto limpo: histórico e anexos zerados." });
+        break;
+      case "context/inspect":
+        await this.reportContext();
         break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture });
@@ -1551,7 +1587,10 @@ export class Controller {
       // RF-063: propaga identidade do dev (login), sessão, modelo e skills ao
       // gateway para a observabilidade — nunca segredos.
       extraHeaders: this.buildTraceHeaders(assembled.activatedSkillNames, runtime.modelId, runtime.type, runtime.reasoningEffort, mode),
-      emit: (e) => this.obs.record(e),
+      emit: (e) => {
+        this.trackUsage(e);
+        this.obs.record(e);
+      },
       obsMeta: {
         mode,
         model: runtime.modelId,
@@ -1609,6 +1648,49 @@ export class Controller {
 
   private workspaceName(): string {
     return vscode.workspace.workspaceFolders?.[0]?.name ?? "workspace";
+  }
+
+  // /contexto: relatório do orçamento da janela com os MESMOS cálculos da geração (deriveBudget +
+  // os mesmos blocos pinned) — números que o dev pode confiar, não uma segunda estimativa divergente.
+  private async reportContext(): Promise<void> {
+    const runtime = await this.runtimeProviderConfig();
+    if (!runtime) {
+      this.post({ type: "notice", level: "warn", message: "Configure um provedor para ver o orçamento de contexto." });
+      return;
+    }
+    const [stack, sources] = await Promise.all([this.detectWorkspaceStack(), this.loadProfileSources()]);
+    const body = sources.map(stripFrontmatter).filter((s) => s.trim()).join("\n\n");
+    const projectProfile = renderProfileBlock(
+      [renderStackBlock(stack), roleGuidance(resolveRole(sources)), body].filter((s) => s.trim()).join("\n\n")
+    );
+    const basePrompt = buildBasePrompt(this.workspaceName());
+    const budget = deriveBudget(getModelMeta(runtime.type, runtime.modelId), runtime.maxTokens ?? 0, this.config.provider().maxContextWindow);
+    const rag = this.rag.status();
+    this.post({
+      type: "context/report",
+      report: {
+        modelId: runtime.modelId,
+        contextWindow: budget.contextWindow,
+        outputReserve: budget.outputReserve,
+        inputBudget: budget.inputBudget,
+        pinnedTokens: estimateTokens(basePrompt) + estimateTokens(projectProfile),
+        historyTokens: estimateTokensOf(this.history.map((h) => h.content)),
+        historyTurns: this.history.length,
+        attachments: this.pendingAttachments.length,
+        attachmentTokens: estimateTokensOf(this.pendingAttachments.map((a) => a.content)),
+        ragChunks: rag.chunks,
+        sessionInputTokens: this.sessionUsage.input,
+        sessionOutputTokens: this.sessionUsage.output,
+      },
+    });
+  }
+
+  // Acumula o usage REAL (prompt/completion tokens) das gerações da sessão — alimenta o /contexto.
+  private trackUsage(e: ObsEvent): void {
+    if (e.type === "generation.end" && "usage" in e && e.usage) {
+      this.sessionUsage.input += e.usage.inputTokens ?? 0;
+      this.sessionUsage.output += e.usage.outputTokens ?? 0;
+    }
   }
 
   // Headers x-forge-* propagados ao gateway (RF-063/064). Apenas metadados — o
@@ -2326,7 +2408,10 @@ export class Controller {
       workspaceRoot: this.workspaceRoot(),
       timeoutMs: runtime.timeoutSeconds * 1000,
       extraHeaders: this.buildTraceHeaders(["review"], runtime.modelId, runtime.type, runtime.reasoningEffort),
-      emit: (e) => this.obs.record(e),
+      emit: (e) => {
+        this.trackUsage(e);
+        this.obs.record(e);
+      },
       obsMeta: {
         mode: "review",
         model: runtime.modelId,

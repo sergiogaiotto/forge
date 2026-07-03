@@ -14,6 +14,7 @@ import {
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
+import { exactSlashCommand, matchSlashCommands, renderHelp, renderTokensReport, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -49,9 +50,62 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const enabledSkills = forge.skills.filter((s) => s.enabled).length;
   const enabledMcp = forge.mcp.filter((m) => m.enabled);
 
+  // Paleta "/": executa um comando do registry. A execução mora aqui (acesso a post/dispatch/estado
+  // local); o registry (commands.ts) é declarativo/puro.
+  const runSlash = (cmd: SlashCommand) => {
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
+    switch (cmd.id) {
+      case "ajuda":
+        dispatch({ kind: "pushLocal", text: renderHelp() });
+        break;
+      case "contexto":
+        post({ type: "context/inspect" }); // o host responde context/report → cartão na thread
+        break;
+      case "tokens":
+        dispatch({ kind: "pushLocal", text: renderTokensReport(state.usage) });
+        break;
+      case "limpar":
+        dispatch({ kind: "newConversation" });
+        post({ type: "chat/clear" }); // limpa o HOST também (histórico + anexos)
+        break;
+      case "ambiente":
+        post({ type: "env/prepare" });
+        break;
+      case "testes":
+        post({ type: "tests/run" });
+        break;
+      case "perfil":
+        dispatch({ kind: "clearProfile" });
+        setShowProfile(true);
+        post({ type: "profile/refresh" });
+        break;
+      case "indice":
+        setShowInspect(true);
+        post({ type: "inspect/open" });
+        break;
+      case "projeto":
+        // Espelha o pill: Projeto e TDD são mutuamente exclusivos.
+        setProjectMode((v) => !v);
+        setTdd(false);
+        break;
+    }
+  };
+
   const send = () => {
     const text = input.trim();
     if (!text || state.busy) return;
+    // Paleta "/": SÓ o comando exato e nu executa. Typo de um token orienta SEM apagar o rascunho;
+    // "/algo com cauda" é mensagem legítima do dev e segue para o modelo (nunca sequestrar).
+    if (text.startsWith("/") && !/\s/.test(text)) {
+      const cmd = exactSlashCommand(text);
+      if (cmd) {
+        runSlash(cmd);
+      } else {
+        dispatch({ kind: "pushLocal", text: `Comando desconhecido: \`${text}\` — digite \`/\` para ver a paleta ou \`/ajuda\`.` });
+      }
+      return;
+    }
     // No Modo Projeto, só um PEDIDO de gerar abre o Blueprint. Pergunta/diagnóstico (ex.: logs colados
     // + "o que aconteceu?") é respondido no chat normal — sem sequestrar a mensagem para o Blueprint.
     if (projectMode && classifyProjectIntent(text) === "generate") {
@@ -68,10 +122,53 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     if (taRef.current) taRef.current.style.height = "auto";
   };
 
+  // Autocomplete da paleta: aberto enquanto o texto começa com "/" (um token só), há matches e o
+  // dev não o dispensou (Esc/blur). Texto com cauda é mensagem normal — popover não atrapalha.
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashMatches = input.startsWith("/") && !/\s/.test(input.trim()) ? matchSlashCommands(input.trim()) : [];
+  const slashOpen = slashMatches.length > 0 && !state.busy && !slashDismissed;
+  const [slashSel, setSlashSel] = useState(0);
+  useEffect(() => {
+    setSlashSel(0);
+    setSlashDismissed(false); // digitou → o popover volta (o dismiss vale só para o estado atual)
+  }, [input]);
+
+  // Submissão unificada: Enter e o botão Enviar fazem O MESMO — com popover aberto, executa o item
+  // selecionado; senão, send(). Divergir os dois confundia (Enter rodava /limpar, botão dava "typo").
+  const submit = () => {
+    if (slashOpen) {
+      runSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]);
+      return;
+    }
+    send();
+  };
+
   const onKey = (e: React.KeyboardEvent) => {
+    if (slashOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashSel((i) => (i + 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashSel((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        runSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissed(true); // fecha SÓ o popover — o rascunho fica intacto
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      submit();
     }
   };
 
@@ -126,7 +223,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           >
             <Icon name="list-check" size={15} />
           </button>
-          <button className="icon-btn" title="Nova conversa" onClick={() => dispatch({ kind: "newConversation" })}>
+          <button
+            className="icon-btn"
+            title="Nova conversa (limpa também o histórico e os anexos enviados ao modelo)"
+            onClick={() => {
+              // Mesmo efeito do /limpar: sem o chat/clear o host seguia reenviando o histórico
+              // antigo — a conversa "nova" era silenciosamente contaminada (bugfix).
+              dispatch({ kind: "newConversation" });
+              post({ type: "chat/clear" });
+            }}
+          >
             <Icon name="history" size={15} />
           </button>
           <button className="icon-btn" title="Configurações" onClick={() => post({ type: "provider/openSettings" })}>
@@ -217,6 +323,26 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         )}
         <ProfileSuggestion messages={state.messages} />
         <div className="composer-box">
+          {slashOpen && (
+            // Paleta "/": popover ancorado acima do composer (↑↓ navega, Enter/Tab executa, Esc fecha).
+            <div className="slash-pop">
+              {slashMatches.map((c, i) => (
+                <div
+                  key={c.id}
+                  className={`slash-item${i === slashSel ? " sel" : ""}`}
+                  onMouseEnter={() => setSlashSel(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // não rouba o foco do textarea
+                    runSlash(c);
+                  }}
+                >
+                  <Icon name={c.icon} size={13} />
+                  <span className="slash-label">{c.label}</span>
+                  <span className="slash-hint">{c.hint}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {state.attachments.length > 0 && (
             <div className="attach-chips">
               {state.attachments.map((a) => (
@@ -247,6 +373,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             }}
             onKeyDown={onKey}
             onPaste={onPaste}
+            onBlur={() => setSlashDismissed(true)} // clique fora fecha o popover (itens usam
+            onFocus={() => setSlashDismissed(false)} // mouseDown+preventDefault e não disparam blur)
             rows={1}
           />
           <div className="composer-tools">
@@ -344,7 +472,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                 <Icon name="x" size={15} />
               </button>
             ) : (
-              <button className="send-btn" title="Enviar" onClick={send} disabled={!input.trim()}>
+              <button className="send-btn" title="Enviar" onClick={submit} disabled={!input.trim()}>
                 <Icon name="arrow-up" size={15} />
               </button>
             )}
@@ -403,6 +531,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
           timeout {forge.provider.timeoutSeconds ?? effectiveTimeoutSeconds(forge.provider.reasoningEffort)}s
         </div>
+        {state.usage && (
+          <div
+            className="sb-item"
+            style={{ color: "#9a9a9a" }}
+            title={`Tokens da sessão — entrada: ${state.usage.sessionIn} · saída: ${state.usage.sessionOut} (última geração: ${state.usage.lastIn}/${state.usage.lastOut}). Digite /tokens para o detalhe.`}
+          >
+            <Icon name="activity" size={12} /> {fmtTokens(state.usage.sessionIn)}→{fmtTokens(state.usage.sessionOut)}
+          </div>
+        )}
       </div>
 
       {showProfile && (
@@ -1324,6 +1461,11 @@ function RunCard({
       )}
     </div>
   );
+}
+
+// Formatação compacta de tokens para a barra de status (1.2k / 340).
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
 // Heurística conservadora: mensagens em tom de diretiva (proibição/preferência) são candidatas a

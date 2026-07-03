@@ -798,6 +798,48 @@ h6.md-h {
   border: 1px solid var(--border-3);
   border-radius: 8px;
   padding: 8px 10px;
+  position: relative; /* âncora do popover da paleta "/" */
+}
+/* Paleta "/" — popover acima do composer (mesma linguagem visual das pills/cards). */
+.slash-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--bg);
+  border: 1px solid var(--border-3);
+  border-radius: 8px;
+  padding: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  z-index: 40;
+  box-shadow: 0 6px 18px #0007;
+}
+.slash-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #cfcfcf;
+}
+.slash-item.sel {
+  background: #2a2a2a;
+}
+.slash-label {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: #e0863c;
+  flex: 0 0 auto;
+}
+.slash-hint {
+  color: var(--muted-2);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .composer textarea {
   width: 100%;

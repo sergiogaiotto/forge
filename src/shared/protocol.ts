@@ -252,8 +252,10 @@ export type ExtToWebview =
   | { type: "stream/reasoning"; taskId: string; delta: string }
   | { type: "stream/text"; taskId: string; delta: string }
   | { type: "stream/proposal"; taskId: string; proposal: DiffProposal }
-  | { type: "stream/end"; taskId: string }
-  | { type: "stream/error"; taskId: string; message: string }
+  // usage: tokens REAIS da geração (somados entre continuações) — alimenta /tokens e a barra de status.
+  | { type: "stream/end"; taskId: string; usage?: { inputTokens: number; outputTokens: number } }
+  // usage: tokens JÁ consumidos até o erro (parcial) — sem ele /tokens subcontaria gasto real.
+  | { type: "stream/error"; taskId: string; message: string; usage?: { inputTokens: number; outputTokens: number } }
   // Aviso NÃO-fatal ancorado à resposta (ex.: truncamento por limite de tokens). Fica visível no
   // balão do assistente — diferente do `notice`, que é um toast efêmero (some em segundos).
   | { type: "stream/notice"; taskId: string; level: "warn" | "info"; message: string }
@@ -306,7 +308,25 @@ export type ExtToWebview =
   | { type: "project/appliedAll" }
   // Fecha o modal do projeto SEM erro (ex.: o texto era pergunta/diagnóstico e foi redirecionado ao
   // chat pela defesa em profundidade do host). Diferente de blueprintError, que mostra toast de erro.
-  | { type: "project/closed" };
+  | { type: "project/closed" }
+  // Resposta do /contexto: orçamento da janela calculado pelo HOST (mesmo deriveBudget da geração).
+  | { type: "context/report"; report: ContextReport };
+
+// Relatório do /contexto — números em TOKENS (estimativas heurísticas onde indicado).
+export interface ContextReport {
+  modelId: string;
+  contextWindow: number; // janela reconciliada (catálogo × forge.provider.maxContextWindow)
+  outputReserve: number;
+  inputBudget: number;
+  pinnedTokens: number; // prompt base (modo CHAT) + perfil (estimado; TDD/Projeto são um pouco maiores)
+  historyTokens: number; // estimado
+  historyTurns: number;
+  attachments: number; // anexos pendentes (consumidos no próximo envio)
+  attachmentTokens: number; // estimado — anexos entram INTEIROS no próximo envio (até 8 × 16k chars)
+  ragChunks: number; // chunks indexados disponíveis para recuperação
+  sessionInputTokens: number; // usage REAL acumulado da sessão
+  sessionOutputTokens: number;
+}
 
 // ---- Webview → Host da extensão ------------------------------------------------
 
@@ -320,6 +340,10 @@ export type WebviewToExt =
   | { type: "provider/openSettings" }
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }
+  // /limpar: zera o histórico e os anexos DO HOST (o "Nova conversa" da webview limpa só a UI).
+  | { type: "chat/clear" }
+  // /contexto: pede o relatório do orçamento da janela (o host responde com context/report).
+  | { type: "context/inspect" }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
   | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture }
   | { type: "project/generate" }

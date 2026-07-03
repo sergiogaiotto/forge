@@ -117,6 +117,49 @@ function apply(state: UIState, ...msgs: ExtToWebview[]): UIState {
   return msgs.reduce((s, msg) => reducer(s, { kind: "ext", msg }), state);
 }
 
+// Paleta "/": usage do stream/end acumula na sessão; context/report vira mensagem local do assistente.
+test("stream/end com usage acumula na sessão; sem usage preserva o estado", () => {
+  let s = apply(initialState, { type: "stream/start", taskId: "t1" });
+  s = apply(s, { type: "stream/end", taskId: "t1", usage: { inputTokens: 1000, outputTokens: 200 } });
+  assert.deepEqual(s.usage, { lastIn: 1000, lastOut: 200, sessionIn: 1000, sessionOut: 200 });
+  s = apply(s, { type: "stream/start", taskId: "t2" }, { type: "stream/end", taskId: "t2", usage: { inputTokens: 500, outputTokens: 100 } });
+  assert.deepEqual(s.usage, { lastIn: 500, lastOut: 100, sessionIn: 1500, sessionOut: 300 });
+  const before = s.usage;
+  s = apply(s, { type: "stream/start", taskId: "t3" }, { type: "stream/end", taskId: "t3" }); // sem usage
+  assert.deepEqual(s.usage, before);
+});
+
+test("context/report adiciona um cartão local do assistente com o relatório", () => {
+  const s = apply(initialState, {
+    type: "context/report",
+    report: {
+      modelId: "m",
+      contextWindow: 131072,
+      outputReserve: 32768,
+      inputBudget: 85196,
+      pinnedTokens: 100,
+      historyTokens: 50,
+      historyTurns: 1,
+      attachments: 0,
+      attachmentTokens: 0,
+      ragChunks: 0,
+      sessionInputTokens: 0,
+      sessionOutputTokens: 0,
+    },
+  });
+  const last = s.messages[s.messages.length - 1];
+  assert.equal(last.role, "assistant");
+  assert.equal(last.streaming, false);
+  assert.match(last.text, /Janela de contexto/);
+});
+
+test("pushLocal adiciona mensagem local do assistente (cartões /ajuda e /tokens)", () => {
+  const s = reducer(initialState, { kind: "pushLocal", text: "### Paleta" });
+  assert.equal(s.messages.length, 1);
+  assert.equal(s.messages[0].role, "assistant");
+  assert.match(s.messages[0].text, /Paleta/);
+});
+
 const PROPOSAL: DiffProposal = {
   id: "p1",
   filePath: "churn.py",
