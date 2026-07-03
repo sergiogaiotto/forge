@@ -340,6 +340,17 @@ export function buildCharterSystemPrompt(section: CharterKey): string {
   ].join("\n");
 }
 
+// /resumir: compacta o histórico da conversa num sumário técnico que substitui os turnos no host.
+// One-shot estruturado (structuredRuntime: esforço low + temperature 0) — formato importa.
+export function buildSummarizeSystemPrompt(): string {
+  return [
+    "Você é o FORGE. Resuma a conversa a seguir num SUMÁRIO TÉCNICO compacto (máx. ~300 palavras), em pt-BR,",
+    "preservando o que importa para CONTINUAR o trabalho: decisões tomadas, arquivos criados/alterados (caminhos),",
+    "erros encontrados e como foram resolvidos, pendências abertas e o objetivo em curso.",
+    "Responda APENAS com o sumário em markdown (bullets curtos) — sem saudação, sem comentários sobre a tarefa.",
+  ].join("\n");
+}
+
 // Instrução (mensagem de USUÁRIO) para o modelo CONTINUAR uma resposta que foi cortada no meio de um
 // arquivo (cerca de fechamento não emitida por limite de tokens). Usada pela engine de geração
 // resiliente: costura-se a continuação ao texto acumulado até o arquivo fechar de verdade.

@@ -59,7 +59,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt } from "./systemPrompt";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stripHarmony } from "../util/harmony";
 import { classifyProjectIntent } from "../util/projectIntent";
@@ -1167,6 +1167,9 @@ export class Controller {
         this.postAttachments();
         this.post({ type: "notice", level: "info", message: "Contexto limpo: histórico e anexos zerados." });
         break;
+      case "chat/summarize":
+        await this.summarizeHistory();
+        break;
       case "context/inspect":
         await this.reportContext();
         break;
@@ -1656,6 +1659,89 @@ export class Controller {
 
   private workspaceName(): string {
     return vscode.workspace.workspaceFolders?.[0]?.name ?? "workspace";
+  }
+
+  // /resumir: compacta o histórico do host num turno sintético — libera janela sem perder o fio.
+  // One-shot estruturado (mesmo endurecimento do charter/blueprint: esforço low + temperature 0,
+  // stripHarmony, resgate do canal de raciocínio) — nunca substitui o histórico por lixo.
+  private async summarizeHistory(): Promise<void> {
+    if (this.history.length === 0) {
+      this.post({ type: "notice", level: "info", message: "Nada para resumir — o histórico está vazio." });
+      return;
+    }
+    if (!(await this.ensureSession())) {
+      this.post({ type: "notice", level: "error", message: "Licença requerida para resumir." });
+      return;
+    }
+    const runtime = await this.runtimeProviderConfig();
+    if (!runtime) {
+      this.post({ type: "notice", level: "warn", message: "Configure um provedor antes de resumir." });
+      return;
+    }
+    try {
+      this.egress.assertAllowed(runtime.baseUrl ?? (runtime.type === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com"));
+    } catch (e) {
+      this.post({ type: "notice", level: "error", message: (e as Error)?.message ?? String(e) });
+      return;
+    }
+    const turns = this.history.length;
+    const snapshot = this.history; // referência p/ detectar mutação concorrente (push/clear/slice)
+    const full = this.history.map((h) => `${h.role === "user" ? "DEV" : "FORGE"}: ${h.content}`).join("\n\n");
+    // Teto defensivo mantendo a CAUDA: o corte pelo começo descartaria exatamente os turnos mais
+    // recentes — as decisões que o /resumir existe para preservar (prioridade invertida confirmada
+    // em revisão; mesmo espírito do historyWithinBudget do assembler).
+    const convo = full.length > 24_000 ? full.slice(-24_000) : full;
+    const taskId = `summarize_${this.sessionId}_${Date.now()}`;
+    const started = Date.now();
+    const sr = this.structuredRuntime(runtime);
+    const usage = { inputTokens: 0, outputTokens: 0 };
+    let text = "";
+    let reasoning = "";
+    let error: string | undefined;
+    try {
+      const provider = createProvider(sr, this.egress);
+      const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "normal");
+      for await (const chunk of provider.createMessage(buildSummarizeSystemPrompt(), [{ role: "user", content: convo }], {
+        timeoutMs: sr.timeoutSeconds * 1000,
+        extraHeaders: headers,
+      })) {
+        if (chunk.kind === "text") text += chunk.text;
+        else if (chunk.kind === "reasoning") reasoning += chunk.text;
+        else if (chunk.kind === "usage") {
+          usage.inputTokens += chunk.inputTokens;
+          usage.outputTokens += chunk.outputTokens;
+        } else if (chunk.kind === "error") {
+          error = chunk.message;
+          break;
+        }
+      }
+      if (error) {
+        this.post({ type: "notice", level: "error", message: `Não consegui resumir: ${error}` });
+        return;
+      }
+      let clean = stripHarmony(text);
+      if (!clean.trim() && reasoning.trim()) clean = extractFinalChannel(reasoning) ?? "";
+      if (!clean.trim()) {
+        this.post({ type: "notice", level: "error", message: "O modelo não retornou o resumo — o histórico foi mantido intacto. Tente de novo." });
+        return;
+      }
+      // Substitui os turnos pelo resumo SÓ com um resumo válido em mãos E se o histórico não mudou
+      // durante o stream (o dev pode ter enviado mensagem, aplicado proposta ou dado /limpar nesse
+      // meio-tempo — sobrescrever perderia turnos ou ressuscitaria conversa apagada).
+      if (this.history !== snapshot || this.history.length !== turns) {
+        this.post({ type: "notice", level: "warn", message: "O histórico mudou durante o resumo — descartei o resumo para não perder nada. Rode /resumir de novo." });
+        return;
+      }
+      this.history = [{ role: "user", content: `Contexto (resumo da conversa anterior):\n${clean}` }];
+      this.post({ type: "chat/summarized", summary: clean, turns });
+    } catch (e) {
+      error = (e as Error)?.message ?? String(e);
+      this.post({ type: "notice", level: "error", message: `Não consegui resumir: ${error}` });
+    } finally {
+      const end: ObsEvent = { type: "generation.end", taskId, durationMs: Date.now() - started, model: sr.modelId, input: convo.slice(0, 2000), output: text, usage, proposals: 0, error };
+      this.trackUsage(end);
+      this.obs.record(end);
+    }
   }
 
   // /contexto: relatório do orçamento da janela com os MESMOS cálculos da geração (deriveBudget +

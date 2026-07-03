@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ContextReport } from "../shared/protocol";
 import {
+  buildDiagramRequest,
   exactSlashCommand,
   matchSlashCommands,
   normalizeSlash,
   renderContextReport,
   renderHelp,
+  renderSummarized,
   renderTokensReport,
   SLASH_COMMANDS,
+  slashWithArgs,
 } from "../../webview-ui/src/commands";
 
 test("normalizeSlash: remove acentos e baixa a caixa (/Sumário ≡ /sumario)", () => {
@@ -83,4 +86,34 @@ test("renderTokensReport: vazio orienta; com dados mostra última geração e ac
 test("renderHelp: lista todos os comandos do registry", () => {
   const md = renderHelp();
   for (const c of SLASH_COMMANDS) assert.ok(md.includes(c.label), `faltou ${c.label}`);
+});
+
+// ---- Fase 2 da paleta ----
+
+test("slashWithArgs: só comandos acceptsArgs aceitam cauda; os demais seguem a regra anti-sequestro", () => {
+  const d = slashWithArgs("/diagrama fluxo de autenticação");
+  assert.equal(d?.cmd.id, "diagrama");
+  assert.equal(d?.args, "fluxo de autenticação");
+  assert.equal(slashWithArgs("/mermaid pipeline de dados")?.cmd.id, "diagrama"); // alias
+  // /testes tem cauda mas NÃO aceita args → undefined (a mensagem vai ao modelo)
+  assert.equal(slashWithArgs("/testes estão falhando"), undefined);
+  assert.equal(slashWithArgs("/diagrama"), undefined); // sem cauda → caminho do comando nu
+  assert.equal(slashWithArgs("diagrama x"), undefined); // sem "/"
+});
+
+test("buildDiagramRequest: pede UM arquivo docs/diagramas/<slug>.md com bloco mermaid; slug saneado", () => {
+  const req = buildDiagramRequest("Fluxo de Autenticação!");
+  assert.match(req, /docs\/diagramas\/fluxo-de-autenticacao\.md/);
+  assert.match(req, /```mermaid/);
+  assert.match(req, /NÃO gere nenhum outro arquivo/);
+  // tema vazio → default de arquitetura
+  assert.match(buildDiagramRequest(""), /docs\/diagramas\/arquitetura/);
+});
+
+test("renderSummarized: cartão explica a compactação e traz o resumo (concordância no singular)", () => {
+  const md = renderSummarized(7, "- decisão A\n- pendência B");
+  assert.match(md, /7 turnos viraram/);
+  assert.ok(md.includes("- decisão A"));
+  assert.ok(md.includes("/limpar"));
+  assert.match(renderSummarized(1, "x"), /1 turno virou/);
 });

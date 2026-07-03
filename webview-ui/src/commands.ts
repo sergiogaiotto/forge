@@ -9,6 +9,9 @@ export interface SlashCommand {
   hint: string; // uma linha: o que faz
   icon: string; // nome do Icon da webview
   aliases?: string[]; // formas alternativas (sem "/"), já sem acento
+  // Comando que ACEITA argumentos após o nome (ex.: "/diagrama fluxo de dados"). A regra
+  // anti-sequestro (cauda = mensagem do dev) NÃO vale para estes: a cauda é o argumento esperado.
+  acceptsArgs?: boolean;
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -21,6 +24,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { id: "perfil", label: "/perfil", hint: "Abre o Perfil do projeto (stack, papel, regras)", icon: "users" },
   { id: "indice", label: "/indice", hint: "Abre o Índice (skills + RAG que o FORGE injeta)", icon: "database", aliases: ["index"] },
   { id: "projeto", label: "/projeto", hint: "Liga/desliga o Modo Projeto (blueprint aprovável)", icon: "list-check" },
+  { id: "revisar", label: "/revisar", hint: "Revisão multi-lente das alterações do workspace (git diff)", icon: "git-compare", aliases: ["review"] },
+  { id: "resumir", label: "/resumir", hint: "Compacta o histórico da conversa num resumo (libera a janela)", icon: "copy", aliases: ["compactar"] },
+  { id: "diagrama", label: "/diagrama", hint: "Gera diagrama Mermaid da codebase (proposta em docs/diagramas/)", icon: "network", aliases: ["diagram", "mermaid"], acceptsArgs: true },
 ];
 
 // Normalização para matching: minúsculas + remoção de diacríticos (á→a, ç→c) — o dev digita
@@ -50,6 +56,44 @@ export function exactSlashCommand(input: string, registry: SlashCommand[] = SLAS
   const head = normalizeSlash(trimmed.slice(1));
   if (!head) return undefined;
   return registry.find((c) => c.id === head || (c.aliases ?? []).some((a) => normalizeSlash(a) === head));
+}
+
+// Comando COM argumentos: o 1º token casa um comando acceptsArgs e a cauda vira o argumento
+// ("/diagrama fluxo de autenticação" → { cmd: diagrama, args: "fluxo de autenticação" }).
+export function slashWithArgs(
+  input: string,
+  registry: SlashCommand[] = SLASH_COMMANDS
+): { cmd: SlashCommand; args: string } | undefined {
+  if (!input.startsWith("/")) return undefined;
+  const trimmed = input.trim();
+  const m = /^\/(\S+)\s+([\s\S]+)$/.exec(trimmed);
+  if (!m) return undefined;
+  const head = normalizeSlash(m[1]);
+  const cmd = registry.find((c) => c.acceptsArgs && (c.id === head || (c.aliases ?? []).some((a) => normalizeSlash(a) === head)));
+  return cmd ? { cmd, args: m[2].trim() } : undefined;
+}
+
+// Prompt do /diagrama: gera o diagrama como PROPOSTA de arquivo versionável (docs/diagramas/) —
+// reusa todo o pipeline de propostas/aplicação; o dev revisa o Mermaid no diff e aplica.
+export function buildDiagramRequest(theme: string): string {
+  const t = theme.trim() || "arquitetura do projeto";
+  const slug = normalizeSlash(t).replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60) || "arquitetura";
+  return [
+    `Gere um DIAGRAMA Mermaid do codebase atual com o tema: ${t}.`,
+    "Analise a estrutura real do projeto (o contexto fornecido traz os arquivos indexados) e produza",
+    `UM único arquivo \`docs/diagramas/${slug}.md\` como bloco forge-file completo, contendo:`,
+    "1. Um título e 1–2 frases do que o diagrama mostra;",
+    "2. UM bloco ```mermaid válido (graph TD/LR, flowchart, sequence ou class — o que melhor couber ao tema),",
+    "   com nós nomeados pelos MÓDULOS/ARQUIVOS reais do projeto (não invente componentes);",
+    "3. Uma legenda curta explicando os agrupamentos.",
+    "NÃO gere nenhum outro arquivo. NÃO modifique código.",
+  ].join("\n");
+}
+
+// Cartão do /resumir: confirma a compactação do histórico do HOST (a thread visível não muda).
+export function renderSummarized(turns: number, summary: string): string {
+  const s = turns === 1 ? "" : "s";
+  return `### Histórico compactado\n\n${turns} turno${s} ${turns === 1 ? "virou" : "viraram"} o resumo abaixo — é ISTO que o modelo passa a receber como contexto da conversa (a thread acima é só exibição; \`/limpar\` zera tudo).\n\n---\n\n${summary}`;
 }
 
 const fmtK = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));

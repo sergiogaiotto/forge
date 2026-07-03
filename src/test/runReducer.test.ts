@@ -161,6 +161,14 @@ test("profile/roleCard seta o cartão do papel; roleCard/dismiss dá baixa", () 
   assert.equal(s.roleCard, null);
 });
 
+test("chat/summarized vira cartão local com o resumo que o host passou a usar", () => {
+  const s = apply(initialState, { type: "chat/summarized", summary: "- decisão X\n- pendência Y", turns: 5 });
+  const last = s.messages[s.messages.length - 1];
+  assert.equal(last.role, "assistant");
+  assert.match(last.text, /5 turnos/);
+  assert.ok(last.text.includes("- decisão X"));
+});
+
 test("pushLocal adiciona mensagem local do assistente (cartões /ajuda e /tokens)", () => {
   const s = reducer(initialState, { kind: "pushLocal", text: "### Paleta" });
   assert.equal(s.messages.length, 1);
