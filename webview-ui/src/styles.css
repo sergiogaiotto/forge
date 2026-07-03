@@ -953,6 +953,51 @@ h6.md-h {
   border-radius: 6px;
   padding: 8px 10px;
 }
+/* Navegação EMPILHADA do Índice: lista/detalhe em largura total (as colunas lado a lado ficavam
+   espremidas). O .full assume o espaço do antigo .inspect-cols. */
+.inspect-list.full,
+.inspect-detail.full {
+  flex: none;
+  width: 100%;
+  min-height: 260px;
+  max-height: 56vh;
+}
+.inspect-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.inspect-stack .inspect-detail.full {
+  /* mesma altura mínima da lista (menos a linha do voltar): sem isto o modal COLAPSA no
+     "carregando…" e re-expande quando o corpo chega — pulo visual confirmado em revisão. */
+  min-height: calc(260px - 36px);
+  max-height: calc(56vh - 36px); /* desconta a linha do "← voltar" */
+}
+.inspect-back {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.inspect-back .inspect-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+}
+.inspect-item.roomy {
+  padding: 8px 9px;
+  gap: 9px;
+}
+.inspect-item .desc {
+  color: var(--muted-2);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
 .inspect-item {
   display: flex;
   align-items: center;
@@ -1379,10 +1424,27 @@ h6.md-h {
   width: 100%;
   max-width: 320px;
 }
+/* Perfil: mais HORIZONTAL, menos vertical (laptop com pouca altura). Header/footer fixos; só o
+   miolo (.profile-body) rola. O grid colapsa para 1 coluna quando o painel é estreito. */
 .profile-modal {
-  max-width: 380px;
-  max-height: 80vh;
-  overflow: auto;
+  max-width: 640px;
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.profile-body {
+  overflow-y: auto;
+  min-height: 0; /* sem isto o flex não deixa o filho encolher e o scroll não aparece */
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.profile-grid {
+  display: grid;
+  /* min(240px, 100%): o piso de 240px NÃO pode valer numa sidebar mais estreita que isso —
+     sem o min() o grid estoura o miolo e cria barra horizontal (regressão confirmada). */
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  column-gap: 22px;
 }
 .profile-sec {
   font-size: 10.5px;

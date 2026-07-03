@@ -748,18 +748,40 @@ function InspectPanel({ state, onClose }: { state: UIState; onClose: () => void 
           </button>
         </div>
 
+        {/* Navegação EMPILHADA (revisão de UX: as duas colunas lado a lado ficavam espremidas e
+            ilegíveis): a LISTA ocupa a largura toda; clicar abre o DETALHE em tela cheia do modal,
+            com "← voltar". Caches lazy e invalidação anti-stale preservados. */}
         {tab === "skills" ? (
-          <div className="inspect-cols">
-            <div className="inspect-list">
+          selSkill ? (
+            <div className="inspect-stack">
+              <div className="inspect-back">
+                <button className="btn" onClick={() => setSelSkill(null)}>
+                  ← voltar
+                </button>
+                <span className="inspect-path">{insp?.skills.find((s) => s.name === selSkill)?.relFile}</span>
+              </div>
+              <div className="inspect-detail full">
+                {body === undefined ? (
+                  <div className="profile-empty">carregando…</div>
+                ) : (
+                  <div className="inspect-md">
+                    <Markdown text={body} />
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="inspect-list full">
               {!insp ? (
                 <div className="profile-empty">carregando…</div>
               ) : insp.skills.length === 0 ? (
                 <div className="profile-empty">nenhuma skill</div>
               ) : (
                 insp.skills.map((s) => (
-                  <div key={s.name} className={`inspect-item ${selSkill === s.name ? "on" : ""}`} onClick={() => openSkill(s)}>
+                  <div key={s.name} className="inspect-item roomy" onClick={() => openSkill(s)}>
                     <span className="dot" style={{ background: s.enabled ? "#86c98e" : "#555" }} />
                     <span className="nm">{s.name}</span>
+                    <span className="desc">{s.description}</span>
                     <span className="src" style={{ color: srcColor[s.source] ?? "#9a9a9a" }}>
                       {s.source}
                     </span>
@@ -767,74 +789,63 @@ function InspectPanel({ state, onClose }: { state: UIState; onClose: () => void 
                 ))
               )}
             </div>
-            <div className="inspect-detail">
-              {!selSkill ? (
-                <div className="profile-empty">selecione uma skill para ver o SKILL.md</div>
-              ) : body === undefined ? (
+          )
+        ) : selFile ? (
+          <div className="inspect-stack">
+            <div className="inspect-back">
+              <button className="btn" onClick={() => setSelFile(null)}>
+                ← voltar
+              </button>
+              <span className="inspect-path">{selFile}</span>
+            </div>
+            <div className="inspect-detail full">
+              {chunks === undefined ? (
                 <div className="profile-empty">carregando…</div>
               ) : (
-                <>
-                  <div className="inspect-path">{insp?.skills.find((s) => s.name === selSkill)?.relFile}</div>
-                  <div className="inspect-md">
-                    <Markdown text={body} />
+                chunks.map((c) => (
+                  <div key={c.id} className="rag-chunk">
+                    <div className="rag-chunk-head">
+                      L{c.startLine}–{c.endLine}
+                      {c.symbol ? ` · ${c.symbol}` : ""}
+                      <span className="spacer" />
+                      {c.hasVector ? "vetor ✓" : "sem vetor"}
+                    </div>
+                    <pre className="rag-chunk-body">{c.preview}</pre>
                   </div>
-                </>
+                ))
               )}
             </div>
           </div>
         ) : (
-          <div className="inspect-cols">
-            <div className="inspect-list">
-              {!rag ? (
-                <div className="profile-empty">carregando…</div>
-              ) : (
-                <>
-                  <div className="rag-status">
-                    <div>
-                      modo <b>{rag.mode}</b> · {rag.ready ? "pronto" : "indexando…"}
-                    </div>
-                    <div>
-                      {rag.files} arquivos · {rag.chunks} chunks{rag.capped ? ` (teto ${rag.maxChunks})` : ""}
-                    </div>
-                    <div className="muted">
-                      {rag.mode === "embeddings" ? `${rag.embeddingModel}${rag.dimensions ? ` · ${rag.dimensions}d` : ""}` : "BM25 lexical (sem embeddings)"}
-                    </div>
+          <div className="inspect-list full">
+            {!rag ? (
+              <div className="profile-empty">carregando…</div>
+            ) : (
+              <>
+                <div className="rag-status">
+                  <div>
+                    modo <b>{rag.mode}</b> · {rag.ready ? "pronto" : "indexando…"}
                   </div>
-                  {rag.fileList.length === 0 ? (
-                    <div className="profile-empty">nada indexado</div>
-                  ) : (
-                    rag.fileList.map((f) => (
-                      <div key={f.relPath} className={`inspect-item ${selFile === f.relPath ? "on" : ""}`} onClick={() => openFile(f.relPath)}>
-                        <span className="nm mono">{f.relPath}</span>
-                        <span className="src">{f.chunks}</span>
-                      </div>
-                    ))
-                  )}
-                </>
-              )}
-            </div>
-            <div className="inspect-detail">
-              {!selFile ? (
-                <div className="profile-empty">selecione um arquivo para ver os chunks indexados</div>
-              ) : chunks === undefined ? (
-                <div className="profile-empty">carregando…</div>
-              ) : (
-                <>
-                  <div className="inspect-path">{selFile}</div>
-                  {chunks.map((c) => (
-                    <div key={c.id} className="rag-chunk">
-                      <div className="rag-chunk-head">
-                        L{c.startLine}–{c.endLine}
-                        {c.symbol ? ` · ${c.symbol}` : ""}
-                        <span className="spacer" />
-                        {c.hasVector ? "vetor ✓" : "sem vetor"}
-                      </div>
-                      <pre className="rag-chunk-body">{c.preview}</pre>
+                  <div>
+                    {rag.files} arquivos · {rag.chunks} chunks{rag.capped ? ` (teto ${rag.maxChunks})` : ""}
+                  </div>
+                  <div className="muted">
+                    {rag.mode === "embeddings" ? `${rag.embeddingModel}${rag.dimensions ? ` · ${rag.dimensions}d` : ""}` : "BM25 lexical (sem embeddings)"}
+                  </div>
+                </div>
+                {rag.fileList.length === 0 ? (
+                  <div className="profile-empty">nada indexado</div>
+                ) : (
+                  rag.fileList.map((f) => (
+                    <div key={f.relPath} className="inspect-item roomy" onClick={() => openFile(f.relPath)}>
+                      <span className="nm mono">{f.relPath}</span>
+                      <span className="spacer" />
+                      <span className="src">{f.chunks} chunk{f.chunks === 1 ? "" : "s"}</span>
                     </div>
-                  ))}
-                </>
-              )}
-            </div>
+                  ))
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -966,6 +977,7 @@ function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | n
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
+        {/* Header FIXO: fechar sem rolar (em laptop de pouca altura a caixa TODA rolava). */}
         <div className="card-title">
           <Icon name="list-check" size={15} color="#4ec9b0" /> Perfil do projeto
           <div className="spacer" />
@@ -974,42 +986,52 @@ function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | n
           </span>
         </div>
 
-        <div className="profile-sec">Stack detectada · automática</div>
-        {!profile ? (
-          <div className="profile-empty">carregando…</div>
-        ) : detected.length === 0 ? (
-          <div className="profile-empty">nada detectado neste workspace</div>
-        ) : (
-          <div className="profile-stack">
-            {detected.map(([k, v]) => (
-              <div key={k} className="profile-kv">
-                <span className="k">{k}</span>
-                <span className="v">{v}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="profile-sec">Papel</div>
-        <div className="profile-row">
-          <span style={{ color: profile?.role ? "#cfcfcf" : "#7a7a7a" }}>{profile?.role ?? "não definido"}</span>
-          <div className="spacer" />
-          <button className="btn" onClick={() => post({ type: "profile/pickRole" })}>
-            <Icon name="users" size={12} /> {profile?.role ? "Alterar" : "Definir"}
-          </button>
-        </div>
-
-        <div className="profile-sec">Regras · {profile?.rules.length ?? 0}</div>
-        <div className="profile-rules">
-          {profile && profile.rules.length === 0 && <div className="profile-empty">nenhuma regra ainda</div>}
-          {(profile?.rules ?? []).map((r, i) => (
-            <div key={i} className="profile-rule">
-              <Icon name="point" size={13} /> {r}
+        {/* Miolo ROLÁVEL em grid de 2 colunas (colapsa p/ 1 em painel estreito): mais horizontal,
+            menos vertical — o conteúdo respira e o scroll fica só onde precisa. */}
+        <div className="profile-body">
+          <div className="profile-grid">
+            <div>
+              <div className="profile-sec">Stack detectada · automática</div>
+              {!profile ? (
+                <div className="profile-empty">carregando…</div>
+              ) : detected.length === 0 ? (
+                <div className="profile-empty">nada detectado neste workspace</div>
+              ) : (
+                <div className="profile-stack">
+                  {detected.map(([k, v]) => (
+                    <div key={k} className="profile-kv">
+                      <span className="k">{k}</span>
+                      <span className="v">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+            <div>
+              <div className="profile-sec">Papel</div>
+              <div className="profile-row">
+                <span style={{ color: profile?.role ? "#cfcfcf" : "#7a7a7a" }}>{profile?.role ?? "não definido"}</span>
+                <div className="spacer" />
+                <button className="btn" onClick={() => post({ type: "profile/pickRole" })}>
+                  <Icon name="users" size={12} /> {profile?.role ? "Alterar" : "Definir"}
+                </button>
+              </div>
+
+              <div className="profile-sec">Regras · {profile?.rules.length ?? 0}</div>
+              <div className="profile-rules">
+                {profile && profile.rules.length === 0 && <div className="profile-empty">nenhuma regra ainda</div>}
+                {(profile?.rules ?? []).map((r, i) => (
+                  <div key={i} className="profile-rule">
+                    <Icon name="point" size={13} /> {r}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div className="actions" style={{ marginTop: 12, marginBottom: 0, justifyContent: "flex-end", gap: 8 }}>
+        {/* Footer FIXO: ações sempre visíveis. */}
+        <div className="actions" style={{ marginTop: 10, marginBottom: 0, justifyContent: "flex-end", gap: 8 }}>
           <button className="btn" title="Abrir o .forge/project.md cru no editor" onClick={() => post({ type: "profile/open" })}>
             <Icon name="code" size={13} /> abrir .md
           </button>
