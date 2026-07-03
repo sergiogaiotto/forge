@@ -7,6 +7,7 @@ import type {
   ProfileView,
   ProjectArchitecture,
   ProjectBlueprintView,
+  ProjectFramework,
   ProjectLanguage,
   ProjectUI,
   RagChunkView,
@@ -18,7 +19,7 @@ import type {
 
 // Pedido de projeto em curso (o brief), retido para o "Tentar de novo" após uma falha do blueprint.
 // `ui` viaja junto para o retry reenviar a mesma escolha de camada de UI.
-export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI };
+export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 import { renderContextReport, renderSummarized } from "./commands";
 export type { ProfileView } from "../../src/shared/protocol";

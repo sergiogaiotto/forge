@@ -12,6 +12,7 @@ import {
   buildReviewPrompt,
   buildTailContinuation,
   buildTddPrompt,
+  frameworkInstruction,
   uiLayerInstruction,
 } from "../core/systemPrompt";
 
@@ -29,6 +30,29 @@ test("uiLayerInstruction: auto/undefined vazio; none/template/spa/streamlit por 
   assert.match(uiLayerInstruction("python", "streamlit"), /Streamlit/);
   // Streamlit é Python-only: outra linguagem cai no vazio (defensivo — a webview já filtra).
   assert.equal(uiLayerInstruction("typescript", "streamlit"), "");
+});
+
+// Framework web do projeto Python (FastAPI/Flask/Litestar): "auto" não injeta nada; Python-only.
+test("frameworkInstruction: auto vazio; FastAPI/Flask/Litestar explícitos; Python-only", () => {
+  assert.equal(frameworkInstruction("python", undefined), "");
+  assert.equal(frameworkInstruction("python", "auto"), "");
+  assert.match(frameworkInstruction("python", "fastapi"), /FastAPI/);
+  assert.match(frameworkInstruction("python", "flask"), /Flask/);
+  assert.match(frameworkInstruction("python", "litestar"), /Litestar/);
+  // defensivo: framework Python não vaza para outra linguagem
+  assert.equal(frameworkInstruction("typescript", "fastapi"), "");
+});
+
+test("prompts do projeto propagam o framework (e convivem com a camada de UI)", () => {
+  assert.match(buildBlueprintSystemPrompt("python", "hexagonal", "auto", "fastapi"), /FastAPI/);
+  assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("FRAMEWORK WEB")); // auto = como antes
+  // framework + template engine juntos: as duas instruções presentes e compatíveis (Jinja2 em cima do framework)
+  const both = buildBlueprintSystemPrompt("python", "hexagonal", "template-engine", "litestar");
+  assert.match(both, /Litestar/);
+  assert.match(both, /Jinja2/);
+  const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "a.py", purpose: "p", deps: [] }], "auto", "flask");
+  assert.match(guided, /Flask/);
+  assert.match(buildProjectPrompt("proj", "python", "hexagonal", "auto", "fastapi"), /FastAPI/);
 });
 
 test("prompts do projeto propagam a camada de UI escolhida (blueprint, guiado e direto)", () => {

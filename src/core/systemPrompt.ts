@@ -1,6 +1,6 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
-import { BlueprintFile, CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectLanguage, ProjectUI } from "../shared/protocol";
+import { BlueprintFile, CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectFramework, ProjectLanguage, ProjectUI } from "../shared/protocol";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -202,12 +202,30 @@ export function uiLayerInstruction(language: ProjectLanguage, ui: ProjectUI | un
   }
 }
 
+// Framework WEB do projeto Python (seletor no composer). "auto"/undefined = o modelo decide; as
+// demais opções viram instrução explícita no plano E na geração, sempre como adapter de entrada
+// (a arquitetura escolhida continua mandando). Python-only por ora (defensivo p/ outras linguagens).
+export function frameworkInstruction(language: ProjectLanguage, framework: ProjectFramework | undefined): string {
+  if (language !== "python") return "";
+  switch (framework) {
+    case "fastapi":
+      return "FRAMEWORK WEB: use FastAPI (APIRouter, modelos Pydantic, injeção de dependências) como adapter de entrada HTTP.";
+    case "flask":
+      return "FRAMEWORK WEB: use Flask (app factory + blueprints) como adapter de entrada HTTP.";
+    case "litestar":
+      return "FRAMEWORK WEB: use Litestar (controllers/handlers tipados, DI nativa) como adapter de entrada HTTP.";
+    default:
+      return ""; // auto — o modelo decide pela descrição do dev
+  }
+}
+
 // Fase F — BLUEPRINT: pede ao modelo o PLANO de arquivos (aprovável) ANTES do código. Saída = SÓ um
 // array JSON [{path, purpose, deps}] em ordem de dependência (parseado por parseBlueprint). Sem código.
-export function buildBlueprintSystemPrompt(language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI): string {
+export function buildBlueprintSystemPrompt(language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI, framework?: ProjectFramework): string {
   return [
     `Você é o FORGE. Planeje um PROJETO completo em ${LANG_LABEL[language]}, na arquitetura ${ARCH_LABEL[architecture]}.`,
     archetypeLayers(architecture),
+    ...(frameworkInstruction(language, framework) ? [frameworkInstruction(language, framework)] : []),
     ...(uiLayerInstruction(language, ui) ? [uiLayerInstruction(language, ui)] : []),
     "NÃO gere código agora — só o PLANO de arquivos.",
     "Responda APENAS com JSON válido: um ARRAY dos arquivos, em ORDEM DE DEPENDÊNCIA (interfaces/portas",
@@ -252,10 +270,12 @@ export function buildProjectFromBlueprintPrompt(
   language: ProjectLanguage,
   architecture: ProjectArchitecture,
   files: BlueprintFile[],
-  ui?: ProjectUI
+  ui?: ProjectUI,
+  framework?: ProjectFramework
 ): string {
   const list = files.map((f) => `- ${f.path} — ${f.purpose}${f.deps.length ? ` (usa: ${f.deps.join(", ")})` : ""}`).join("\n");
-  const uiLine = uiLayerInstruction(language, ui);
+  const fwLine = frameworkInstruction(language, framework);
+  const uiLine = [fwLine, uiLayerInstruction(language, ui)].filter(Boolean).join("\n");
   return (
     buildBasePrompt(workspaceName) +
     `
@@ -277,8 +297,8 @@ ${SETUP_HINT[language]}. ${NO_ELLIPSIS_RULE}`
 
 // Modo Projeto: gera um PROJETO COMPLETO na linguagem + arquitetura escolhidas, reusando o protocolo
 // forge-file (cada arquivo vira uma proposta aplicável). Herda o prompt base (idioma, protocolo, anti-elipse).
-export function buildProjectPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI): string {
-  const uiLine = uiLayerInstruction(language, ui);
+export function buildProjectPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI, framework?: ProjectFramework): string {
+  const uiLine = [frameworkInstruction(language, framework), uiLayerInstruction(language, ui)].filter(Boolean).join(" ");
   return (
     buildBasePrompt(workspaceName) +
     `
