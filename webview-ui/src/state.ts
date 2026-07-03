@@ -17,6 +17,7 @@ import type {
 // Pedido de projeto em curso (o brief), retido para o "Tentar de novo" após uma falha do blueprint.
 export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
+import { renderContextReport } from "./commands";
 export type { ProfileView } from "../../src/shared/protocol";
 
 // Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
@@ -97,6 +98,8 @@ export interface UIState {
   // Seq monotônico incrementado a cada "project/appliedAll" (aplicou todos os arquivos). O DevPanel
   // observa a mudança para desmarcar o Modo Projeto automaticamente (0 = nunca ocorreu).
   appliedAllAt: number;
+  // Usage REAL de tokens (stream/end): última geração + acumulado da sessão — /tokens e barra de status.
+  usage: { lastIn: number; lastOut: number; sessionIn: number; sessionOut: number } | null;
   inspect: {
     skills: SkillInspectView[];
     rag: RagInspectView | null;
@@ -129,12 +132,14 @@ export const initialState: UIState = {
   charter: null,
   project: null,
   appliedAllAt: 0,
+  usage: null,
   inspect: null,
 };
 
 export type Action =
   | { kind: "ext"; msg: ExtToWebview }
   | { kind: "pushUser"; text: string }
+  | { kind: "pushLocal"; text: string }
   | { kind: "providerTestPending" }
   | { kind: "embeddingsTestPending" }
   | { kind: "newConversation" }
@@ -233,6 +238,9 @@ export function reducer(state: UIState, action: Action): UIState {
           { id: `u_${Date.now()}`, role: "user", text: action.text, reasoning: "", skills: [], proposals: [], streaming: false },
         ],
       };
+    case "pushLocal":
+      // Mensagem LOCAL do assistente (cartões da paleta: /ajuda, /tokens) — nunca vai ao host.
+      return pushLocalMessage(state, action.text);
     case "ext":
       return applyExt(state, action.msg);
     default:
@@ -437,14 +445,38 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       // evita colidir a key do React entre um cartão de teste (sem runId) e um de arquivo (com runId).
       return { ...state, runs: capRuns(upsertRun(state.runs, { ...data, id: msg.runId ?? `local_run_${++runSeq}` })), ...last };
     }
-    case "stream/end":
-      return { ...state, busy: false, messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false } : m)) };
-    case "stream/error":
+    case "stream/end": {
+      // usage REAL da geração (somado entre continuações) → /tokens e o medidor da barra de status.
+      const usage = msg.usage
+        ? {
+            lastIn: msg.usage.inputTokens,
+            lastOut: msg.usage.outputTokens,
+            sessionIn: (state.usage?.sessionIn ?? 0) + msg.usage.inputTokens,
+            sessionOut: (state.usage?.sessionOut ?? 0) + msg.usage.outputTokens,
+          }
+        : state.usage;
+      return { ...state, busy: false, usage, messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false } : m)) };
+    }
+    case "context/report":
+      // /contexto: o relatório vira uma mensagem local do assistente (markdown), na própria thread.
+      return pushLocalMessage(state, renderContextReport(msg.report));
+    case "stream/error": {
+      // usage parcial da geração que morreu — os tokens foram consumidos; acumula como no stream/end.
+      const usage = msg.usage
+        ? {
+            lastIn: msg.usage.inputTokens,
+            lastOut: msg.usage.outputTokens,
+            sessionIn: (state.usage?.sessionIn ?? 0) + msg.usage.inputTokens,
+            sessionOut: (state.usage?.sessionOut ?? 0) + msg.usage.outputTokens,
+          }
+        : state.usage;
       return {
         ...state,
         busy: false,
+        usage,
         messages: state.messages.map((m) => (m.id === msg.taskId ? { ...m, streaming: false, error: msg.message } : m)),
       };
+    }
     case "stream/notice":
       // Aviso não-fatal: anexa ao balão da resposta sem encerrar o streaming. Acumula se houver mais de um.
       return {
@@ -456,6 +488,15 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     default:
       return state;
   }
+}
+
+let localSeq = 0;
+// Anexa uma mensagem local do assistente (cartões da paleta "/": /ajuda, /tokens, /contexto).
+function pushLocalMessage(state: UIState, text: string): UIState {
+  return {
+    ...state,
+    messages: [...state.messages, { id: `local_${++localSeq}`, role: "assistant", text, reasoning: "", skills: [], proposals: [], streaming: false }],
+  };
 }
 
 function updateLastAssistant(state: UIState, fn: (m: MessageVM) => MessageVM): UIState {
