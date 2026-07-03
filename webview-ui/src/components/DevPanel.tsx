@@ -8,8 +8,10 @@ import {
   isRenderablePath,
   PROJECT_ARCHITECTURES,
   PROJECT_LANGUAGES,
+  PROJECT_FRAMEWORKS,
   PROJECT_UIS,
   ProjectArchitecture,
+  ProjectFramework,
   ProjectLanguage,
   ProjectUI,
 } from "../../../src/shared/protocol";
@@ -31,6 +33,12 @@ const PROJ_UI_LABEL: Record<ProjectUI, string> = {
   "spa-react": "SPA React",
   streamlit: "Streamlit",
 };
+const PROJ_FW_LABEL: Record<ProjectFramework, string> = {
+  auto: "Framework: auto",
+  fastapi: "FastAPI",
+  flask: "Flask",
+  litestar: "Litestar",
+};
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const forge = state.forge!;
@@ -41,6 +49,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [architecture, setArchitecture] = useState<ProjectArchitecture>("hexagonal");
   // Camada de UI OPCIONAL do projeto (adendo do plano): "auto" = o modelo decide (default histórico).
   const [projUi, setProjUi] = useState<ProjectUI>("auto");
+  // Framework web do projeto PYTHON (FastAPI/Flask/Litestar): "auto" = o modelo decide.
+  const [projFw, setProjFw] = useState<ProjectFramework>("auto");
   const [attachMenu, setAttachMenu] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showCharter, setShowCharter] = useState(false);
@@ -171,10 +181,12 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       // de novo" caso o planejamento falhe). Streamlit é Python-only — o select filtra, e aqui o
       // guard defensivo garante ("auto") caso a linguagem mude depois da escolha.
       const ui = projUi === "streamlit" && language !== "python" ? "auto" : projUi;
+      const framework = language === "python" ? projFw : "auto"; // framework é Python-only (defensivo)
       const uiTag = ui !== "auto" ? `/${PROJ_UI_LABEL[ui]}` : "";
-      dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}${uiTag}] ${text}` });
-      dispatch({ kind: "project/planning", brief: { text, language, architecture, ui } });
-      post({ type: "project/blueprint", text, language, architecture, ui });
+      const fwTag = framework !== "auto" ? `/${PROJ_FW_LABEL[framework]}` : "";
+      dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}${fwTag}${uiTag}] ${text}` });
+      dispatch({ kind: "project/planning", brief: { text, language, architecture, ui, framework } });
+      post({ type: "project/blueprint", text, language, architecture, ui, framework });
     } else {
       dispatch({ kind: "pushUser", text: tdd ? `[TDD] ${text}` : text });
       post({ type: "chat/send", text, tdd });
@@ -484,9 +496,10 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                   onChange={(e) => {
                     const l = e.target.value as ProjectLanguage;
                     setLanguage(l);
-                    // Streamlit é Python-only: sem o reset o select controlado fica com value
-                    // ÓRFÃO (dropdown em branco) e o dev não vê o que será enviado.
+                    // Streamlit e o framework Python são Python-only: sem o reset o select
+                    // controlado fica com value ÓRFÃO (dropdown em branco).
                     if (l !== "python" && projUi === "streamlit") setProjUi("auto");
+                    if (l !== "python") setProjFw("auto");
                   }}
                 >
                   {PROJECT_LANGUAGES.map((l) => (
@@ -514,6 +527,20 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                     </option>
                   ))}
                 </select>
+                {language === "python" && (
+                  <select
+                    className="proj-select"
+                    title="Framework web do projeto Python (opcional): auto deixa o modelo decidir; FastAPI, Flask ou Litestar viram instrução explícita"
+                    value={projFw}
+                    onChange={(e) => setProjFw(e.target.value as ProjectFramework)}
+                  >
+                    {PROJECT_FRAMEWORKS.map((f) => (
+                      <option key={f} value={f}>
+                        {PROJ_FW_LABEL[f]}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </>
             )}
             <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>

@@ -47,6 +47,7 @@ import {
   LicenseView,
   ProjectArchitecture,
   ProjectLanguage,
+  ProjectFramework,
   ProjectUI,
   ProviderSetup,
   ProviderView,
@@ -109,7 +110,7 @@ export class Controller {
   private skills: SkillMeta[] = [];
   private sessionToken: SessionToken | undefined;
   // Fase F: sessão do Modo Projeto — o blueprint aprovado e o status por arquivo (orquestração).
-  private projectSession: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; brief: string; files: BlueprintFileView[] } | null = null;
+  private projectSession: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework; brief: string; files: BlueprintFileView[] } | null = null;
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
   private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
@@ -638,7 +639,7 @@ export class Controller {
   // ---- Modo Projeto · Fase F (blueprint aprovável → orquestração → aplicar tudo) --------
 
   // Passo 1: gera o BLUEPRINT (plano de arquivos) sem código, para o dev aprovar. One-shot.
-  async generateBlueprint(text: string, language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI): Promise<void> {
+  async generateBlueprint(text: string, language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI, framework?: ProjectFramework): Promise<void> {
     if (!text.trim()) return;
     // Defesa em profundidade: se o texto é pergunta/diagnóstico (frontend antigo/divergente que ainda
     // mandou project/blueprint), não gaste inferência com o plano — feche o modal e responda no chat.
@@ -670,7 +671,7 @@ export class Controller {
     // Narração do planejamento (o modal mostra a etapa atual em vez de um spinner estático).
     this.post({ type: "project/planStep", label: "Analisando os requisitos e desenhando a arquitetura…" });
     const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
-    const system = buildBlueprintSystemPrompt(language, architecture, ui);
+    const system = buildBlueprintSystemPrompt(language, architecture, ui, framework);
     const brief = text.slice(0, 6000);
     const taskId = `project_plan_${this.sessionId}_${Date.now()}`;
     const started = Date.now();
@@ -761,7 +762,7 @@ export class Controller {
         // O plano recuperado é o array COMPLETO que o modelo emitiu — registra para diagnóstico.
         log.info("blueprint: plano recuperado do canal de raciocínio (content vazio/sem array)");
       }
-      this.projectSession = { language, architecture, ui, brief: text, files: picked.files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
+      this.projectSession = { language, architecture, ui, framework, brief: text, files: picked.files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
       this.post({
         type: "project/blueprint",
         blueprint: { language, architecture, brief: text, files: this.projectSession.files },
@@ -876,6 +877,7 @@ export class Controller {
       language: s.language,
       architecture: s.architecture,
       ui: s.ui,
+      framework: s.framework,
       files: s.files.map((f) => ({ path: f.path, purpose: f.purpose, deps: f.deps })),
     });
   }
@@ -1186,10 +1188,10 @@ export class Controller {
         await this.reportContext();
         break;
       case "project/start":
-        await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui });
+        await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui, framework: msg.framework });
         break;
       case "project/blueprint":
-        await this.generateBlueprint(msg.text, msg.language, msg.architecture, msg.ui);
+        await this.generateBlueprint(msg.text, msg.language, msg.architecture, msg.ui, msg.framework);
         break;
       case "project/generate":
         await this.generateFromBlueprint();
@@ -1516,7 +1518,7 @@ export class Controller {
   async startTask(
     text: string,
     mode: "normal" | "tdd" | "project" = "normal",
-    project?: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; files?: BlueprintFile[] }
+    project?: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework; files?: BlueprintFile[] }
   ): Promise<void> {
     if (!text.trim()) return;
     // RF-010/015: condiciona a inferência a uma sessão válida.
@@ -1557,8 +1559,8 @@ export class Controller {
     const basePrompt =
       mode === "project" && project
         ? project.files && project.files.length > 0
-          ? buildProjectFromBlueprintPrompt(this.workspaceName(), project.language, project.architecture, project.files, project.ui) // Fase F: plano aprovado
-          : buildProjectPrompt(this.workspaceName(), project.language, project.architecture, project.ui)
+          ? buildProjectFromBlueprintPrompt(this.workspaceName(), project.language, project.architecture, project.files, project.ui, project.framework) // Fase F: plano aprovado
+          : buildProjectPrompt(this.workspaceName(), project.language, project.architecture, project.ui, project.framework)
         : mode === "tdd"
         ? buildTddPrompt(this.workspaceName())
         : buildBasePrompt(this.workspaceName());

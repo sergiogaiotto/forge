@@ -43,6 +43,10 @@ export const PROJECT_ARCHITECTURES: ProjectArchitecture[] = ["hexagonal", "clean
 // filtra; o host trata como "auto" defensivamente para outras linguagens).
 export type ProjectUI = "auto" | "none" | "template-engine" | "spa-react" | "streamlit";
 export const PROJECT_UIS: ProjectUI[] = ["auto", "none", "template-engine", "spa-react", "streamlit"];
+// Framework web do projeto PYTHON (opcional): "auto" = o modelo decide. Python-only por ora — a
+// webview só mostra o seletor com Python; o host trata como "auto" defensivamente nas demais.
+export type ProjectFramework = "auto" | "fastapi" | "flask" | "litestar";
+export const PROJECT_FRAMEWORKS: ProjectFramework[] = ["auto", "fastapi", "flask", "litestar"];
 
 // Esforço de raciocínio do modelo (gpt-oss e afins). Mais esforço = raciocínio mais longo e melhor,
 // porém mais lento — por isso o timeout é elevado automaticamente junto (ver TIMEOUT_BY_EFFORT).
@@ -363,8 +367,8 @@ export type WebviewToExt =
   | { type: "chat/summarize" }
   // /contexto: pede o relatório do orçamento da janela (o host responde com context/report).
   | { type: "context/inspect" }
-  | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI }
-  | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI }
+  | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
+  | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/generate" }
   | { type: "project/cancel" }
   | { type: "proposal/applyAll" }
