@@ -704,18 +704,27 @@ export class Controller {
       }
       this.post({ type: "project/planStep", label: "Ordenando os arquivos por dependência…" });
       let picked = this.pickBlueprint(a1);
-      // Tentativa 2 (escalada): a 1ª não trouxe array parseável em NENHUM canal. Se o modelo chegou a
-      // responder, pedimos a CONVERSÃO da própria resposta (mecânica, quase sempre converge); se veio
-      // vazio, repetimos com a exigência de formato reforçada. temperature 0 já reduz a variância.
+      // Plano PARCIAL reparado (corte sem sinal): NÃO curto-circuita — a conversão recebe o texto
+      // original (cap bipartido preserva as pontas) e frequentemente recupera o plano COMPLETO,
+      // inclusive o arquivo cortado cujo path está visível. O parcial vira FALLBACK garantido.
+      let fallback: typeof picked | null = null;
+      if (picked.files.length > 0 && picked.salvaged) {
+        fallback = picked;
+        picked = { ...picked, files: [] }; // força a escalada para a conversão
+      }
+      // Tentativa 2 (escalada): a 1ª não trouxe array parseável/completo em NENHUM canal. Se o modelo
+      // chegou a responder, pedimos a CONVERSÃO da própria resposta (mecânica, quase sempre converge);
+      // se veio vazio, repetimos com a exigência de formato reforçada.
       if (!picked.files.length) {
-        log.warn("blueprint: 1ª tentativa sem array parseável — escalando para a conversão", {
+        log.warn("blueprint: 1ª tentativa sem plano completo — escalando para a conversão", {
           contentChars: a1.text.length,
           reasoningChars: a1.reasoning.length,
           truncated: a1.truncated,
+          parcialReparado: fallback ? fallback.files.length : 0,
           contentHead: a1.text.slice(0, 300),
           reasoningHead: a1.reasoning.slice(0, 300),
         });
-        this.post({ type: "project/planStep", label: "A resposta veio sem o plano — pedindo a conversão…" });
+        this.post({ type: "project/planStep", label: "A resposta veio sem o plano completo — pedindo a conversão…" });
         // A 2ª tentativa AMOSTRA (temperatura default do servidor) em vez de repetir a greedy: com
         // temperature 0 as duas tentativas eram deterministicamente idênticas — se a 1ª degenerou
         // (greedy no gpt-oss pode repetir/derivar), a 2ª degenerava igual, e o "Tentar de novo" também.
@@ -725,14 +734,30 @@ export class Controller {
         obsOutput = a2.text || a2.reasoning || obsOutput;
         addUsage(a2.usage);
         if (a2.error) {
-          obsError = a2.error;
-          this.post({ type: "project/blueprintError", message: a2.error });
-          return;
+          if (fallback) {
+            // A conversão morreu, mas o parcial reparado existe — entregue-o com o aviso, em vez
+            // do erro seco (o plano vai à aprovação humana de qualquer forma).
+            log.warn("blueprint: conversão falhou — usando o plano parcial reparado da 1ª tentativa", { erro: a2.error });
+            picked = fallback;
+          } else {
+            obsError = a2.error;
+            this.post({ type: "project/blueprintError", message: a2.error });
+            return;
+          }
+        } else {
+          picked = this.pickBlueprint(a2);
+          if ((a1.text || a1.reasoning).trim()) {
+            // Herda os marcadores da 1ª SÓ quando a 2ª CONVERTEU material prévio: truncamento como
+            // antes; e se a matéria-prima veio CORTADA (fallback existia), o plano convertido pode
+            // estar sem os arquivos da cauda — o aviso de revisão continua aparecendo.
+            picked.truncated = picked.truncated || a1.truncated;
+            picked.salvaged = picked.salvaged || fallback !== null;
+          }
+          if (!picked.files.length && fallback) {
+            log.warn("blueprint: conversão sem plano válido — usando o parcial reparado da 1ª tentativa");
+            picked = fallback;
+          }
         }
-        picked = this.pickBlueprint(a2);
-        // Herda o truncamento da 1ª SÓ quando a 2ª CONVERTEU a resposta truncada (havia texto prévio);
-        // num pedido FRESCO completo, avisar "plano parcial" seria factualmente falso.
-        if ((a1.text || a1.reasoning).trim()) picked.truncated = picked.truncated || a1.truncated;
       }
       if (!picked.files.length) {
         // Diagnóstico de campo: o motivo REAL fica no Output → FORGE (o modal mostra o resumo).
@@ -762,15 +787,21 @@ export class Controller {
         // O plano recuperado é o array COMPLETO que o modelo emitiu — registra para diagnóstico.
         log.info("blueprint: plano recuperado do canal de raciocínio (content vazio/sem array)");
       }
+      if (picked.salvaged) {
+        // warn (não info): condição anômala do gateway — o irmão do diagnóstico de falha usa warn.
+        log.warn("blueprint: resposta cortada SEM sinal de truncamento — plano reparado/convertido", { files: picked.files.length });
+      }
       this.projectSession = { language, architecture, ui, framework, brief: text, files: picked.files.map((f) => ({ ...f, status: "pending" as ProjectFileStatus })) };
       this.post({
         type: "project/blueprint",
         blueprint: { language, architecture, brief: text, files: this.projectSession.files },
-        // Truncou mas o reparo recuperou os objetos completos: plano PARCIAL utilizável. O aviso vai
-        // DENTRO do modal (um toast ficaria atrás do backdrop e sumiria em 5s sem ser visto).
+        // Resposta cortada (com OU sem sinal de truncamento) mas o reparo recuperou os objetos
+        // completos: plano PARCIAL utilizável. O aviso vai DENTRO do modal (toast ficaria atrás).
         warning: picked.truncated
           ? "A resposta truncou no limite de tokens e recuperei um plano parcial — arquivos do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
-          : undefined,
+          : picked.salvaged
+            ? "A resposta veio cortada no meio do plano (sem sinal de truncamento) e recuperei os arquivos completos — os do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
+            : undefined,
       });
     } catch (e) {
       obsError = (e as Error)?.message ?? String(e);
@@ -844,9 +875,10 @@ export class Controller {
     files: BlueprintFile[];
     truncated: boolean;
     fromReasoning: boolean;
+    salvaged: boolean;
   } {
     const picked = pickBlueprintFromChannels(a);
-    return { files: topoSort(picked.files), truncated: a.truncated, fromReasoning: picked.fromReasoning };
+    return { files: topoSort(picked.files), truncated: a.truncated, fromReasoning: picked.fromReasoning, salvaged: picked.salvaged };
   }
 
   // Passo 2: gera o projeto GUIADO pelo blueprint aprovado (Task reusa continuação/proposta/validação).

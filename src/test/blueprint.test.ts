@@ -29,6 +29,44 @@ test("pickBlueprintFromChannels: content VAZIO + plano completo no CoT bruto →
   assert.deepEqual(cut.files, []);
 });
 
+// REGRESSÃO (print real do FinOps, 2.1.2): prosa de raciocínio vazada + objeto {"files":[... com o
+// array CORTADO NO MEIO e finish_reason=stop (SEM sinal de truncamento). O reparo ficava desligado
+// sem o sinal `length` e o plano com N objetos completos era jogado fora. Com o piso >=2 + latest-
+// wins do reparo, é seguro reparar mesmo sem o sinal — o plano vai à aprovação com aviso (salvaged).
+test("pickBlueprintFromChannels: array cortado SEM sinal de truncamento → repara (piso >=2) e sinaliza", () => {
+  const cut =
+    'need to list all needed files. We\'ll craft final list order.{ "files": [ ' +
+    '{ "path": "src/finops/application/ports/repositories.py", "purpose": "porta de repositório", "deps": [] }, ' +
+    '{ "path": "src/finops/domain/models.py", "purpose": "entidades", "deps": [] }, ' +
+    '{ "path": "src/finops/adapters/api.py", "purpose": "FastAPI adapter", "de';
+  const r = pickBlueprintFromChannels({ text: cut, reasoning: "", truncated: false });
+  assert.deepEqual(r.files.map((f) => f.path), ["src/finops/application/ports/repositories.py", "src/finops/domain/models.py"]);
+  assert.equal(r.salvaged, true); // dispara o aviso de "plano parcial" no modal
+  // eco de schema não fechado (1 objeto) continua BARRADO mesmo com o reparo sem sinal (piso >=2)
+  const echo = 'We need JSON like [{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase"} and so on';
+  const r2 = pickBlueprintFromChannels({ text: echo, reasoning: "", truncated: false });
+  assert.deepEqual(r2.files, []);
+  assert.equal(r2.salvaged, false);
+  // array completo e válido: o reparo nem é acionado (salvaged=false, sem aviso falso)
+  const ok = pickBlueprintFromChannels({ text: PLAN3, reasoning: "", truncated: false });
+  assert.equal(ok.files.length, 3);
+  assert.equal(ok.salvaged, false);
+});
+
+// REGRESSÃO (revisão do fix): um eco de schema FECHADO (1 objeto) ANTES do plano cortado satisfazia
+// a extração normal e BLOQUEAVA o reparo (que só roda quando a extração falha) — o relaxamento virava
+// no-op na variante mais provável do caso de campo. O piso no resgate ignora fechados sub-piso.
+test("pickBlueprintFromChannels: eco FECHADO (1 obj) antes do plano cortado não bloqueia o reparo", () => {
+  const text =
+    'Formato: [{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase"}]. Plano: { "files": [ ' +
+    '{ "path": "src/app.py", "purpose": "app", "deps": [] }, ' +
+    '{ "path": "src/ports.py", "purpose": "portas", "deps": [] }, ' +
+    '{ "path": "README.md", "purpose": "docs", "de';
+  const r = pickBlueprintFromChannels({ text, reasoning: "", truncated: false });
+  assert.deepEqual(r.files.map((f) => f.path), ["src/app.py", "src/ports.py"]);
+  assert.equal(r.salvaged, true);
+});
+
 // REGRESSÃO (revisão adversarial do fix): no CoT o modelo REVISA — rascunho de 3 arquivos seguido do
 // plano final de 2 ("simplifico"). Por score o rascunho REJEITADO venceria; por posição (latest-wins
 // com piso >= MIN) vence o plano FINAL — o último array qualificado que o modelo escreveu.
