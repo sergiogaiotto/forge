@@ -64,6 +64,45 @@ export function resolvePythonRunCommand(command: string, venvPython: string | un
   return `${q}${m[1]}`;
 }
 
+// O comando de teste é da família pytest? (pytest nu ou python -m pytest — os casos que o pré-flight
+// de instalação sabe curar; wrappers poetry/uv gerenciam o próprio ambiente e ficam de fora.)
+export function isPytestCommand(command: string): boolean {
+  return /^pytest\b/i.test(command.trim()) || /^python3?\s+-m\s+pytest\b/i.test(command.trim());
+}
+
+// Escolha do comando de teste ciente da STACK: um override explícito do admin SEMPRE vence; com o
+// default intocado ("pytest -q") num projeto Node (vitest/jest detectados) E um script `test` REAL
+// no package.json, usa `npm test` — sem o script, `npm test` falharia com "Missing script" e o
+// cartão viraria um falso "testes falharam" (confirmado em revisão adversarial).
+export function chooseTestCommand(
+  configured: string,
+  defaultCommand: string,
+  stackTests: string | undefined,
+  hasNpmTestScript: boolean
+): string {
+  if (configured.trim() !== defaultCommand.trim()) return configured;
+  if ((stackTests === "vitest" || stackTests === "jest") && hasNpmTestScript) return "npm test";
+  return configured;
+}
+
+// Pré-flight: comando que testa se o pytest EXISTE no ambiente onde os testes VÃO RODAR. Com venv,
+// proba o interpretador do venv (`<venv> -m pytest`); SEM venv, proba `pytest --version` — o mesmo
+// binário do PATH que resolveTestCommand executará (probar `python -m pytest` divergiria: pytest
+// via pipx/scoop funciona no shell sem ser módulo do python do PATH — falso "ausente" confirmado).
+export function buildPytestProbe(venvPython: string | undefined): string {
+  if (!venvPython) return "pytest --version";
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -m pytest --version`;
+}
+
+// Instalação do pytest num venv EXISTENTE (nunca global). O caso sem venv não passa por aqui:
+// o Controller cria o ambiente completo (venv + dependências do projeto) via prepareEnv antes —
+// um .venv contendo SÓ pytest rodaria a suíte num interpretador pelado (ModuleNotFoundError geral).
+export function buildPytestInstall(venvPython: string): string {
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -m pip install pytest`;
+}
+
 // Monta o comando de teste usando o interpretador do venv quando o comando é pytest. Cobre:
 //   "pytest -q"           → `"<venv>" -m pytest -q`
 //   "python -m pytest -q" → `"<venv>" -m pytest -q`  (python/python3 SEM caminho — nome nu)

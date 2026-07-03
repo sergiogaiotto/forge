@@ -1207,16 +1207,27 @@ function RunCard({
     : outcome
     ? outcome === "passed"
       ? "ok"
-      : outcome === "no-tests"
-      ? "skip"
+      : outcome === "no-tests" || outcome === "env-missing"
+      ? "skip" // ambiente incompleto = neutro-ACIONÁVEL (botão de instalação), não vermelho-morto
       : "fail"
     : run.ok
     ? "ok"
     : "fail";
   const canFix = outcome ? outcome === "failed" : status === "fail";
+  // A semântica pytest só vale para comandos da família pytest — com o fallback `npm test` (Node),
+  // "env-missing" significa runner do Node ausente (npm install), não pytest.
+  const npmTests = isTests && /^npm\b/i.test(run.command || "");
+  // pytest ausente no ambiente: reoferece o fluxo de Testes — o pré-flight do host detecta e
+  // instala no venv (com confirmação ou autoInstall), depois roda.
+  const testsEnvMissing = outcome === "env-missing" && !npmTests;
   // Falha por dependência ausente (ModuleNotFoundError) é problema de AMBIENTE, não de código:
   // oferece "Preparar ambiente" (venv + install) em vez de mandar o modelo "corrigir" o import.
-  const envIssue = !running && status === "fail" && /ModuleNotFoundError|No module named/.test(run.output);
+  // Vale para runs de ARQUIVO (status fail) e para TESTES com erro de coleta (pytest instalado,
+  // dependência da aplicação ausente — outcome "error", não "failed").
+  const envIssue =
+    !running &&
+    /ModuleNotFoundError|No module named/.test(run.output) &&
+    ((!isTests && status === "fail") || (isTests && outcome === "error"));
   const title = run.label ? run.label : run.command || "execução";
   const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
   const fixText =
@@ -1237,7 +1248,14 @@ function RunCard({
           <span>indisponível</span>
         ) : (
           <span>
-            {outcome ? testOutcomeLabel(outcome, run.exitCode) : run.ok ? "ok" : `exit ${run.exitCode}`} · {Math.round(run.durationMs)} ms
+            {outcome
+              ? npmTests && outcome === "env-missing"
+                ? "runner ausente — rode npm install"
+                : testOutcomeLabel(outcome, run.exitCode)
+              : run.ok
+              ? "ok"
+              : `exit ${run.exitCode}`}{" "}
+            · {Math.round(run.durationMs)} ms
           </span>
         )}
         {!running && (
@@ -1264,8 +1282,17 @@ function RunCard({
           )}
         </div>
       ) : (
-        (canFix || envIssue || onDismiss) && (
+        (canFix || envIssue || testsEnvMissing || onDismiss) && (
           <div className="actions" style={{ marginTop: 7 }}>
+            {testsEnvMissing && (
+              <button
+                className="btn p"
+                title="Instalar o pytest no venv do projeto (cria o .venv se preciso) e rodar os testes"
+                onClick={() => post({ type: "tests/run" })}
+              >
+                <Icon name="plug" size={12} /> Instalar pytest e rodar
+              </button>
+            )}
             {envIssue && (
               <button
                 className="btn p"
@@ -1344,7 +1371,8 @@ function runStatus(r: RunResultData | null): DodStatus {
   if (!r || r.skippedReason) return "pending";
   if (r.label === "testes") {
     const o = pytestOutcome(r.exitCode, r.output);
-    return o === "passed" ? "ok" : o === "no-tests" ? "pending" : "fail"; // sem testes = pendente, não falha
+    // sem testes coletados / ambiente incompleto = pendente (acionável), não falha da DoD
+    return o === "passed" ? "ok" : o === "no-tests" || o === "env-missing" ? "pending" : "fail";
   }
   return r.ok ? "ok" : "fail";
 }

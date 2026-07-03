@@ -132,12 +132,26 @@ export class RunService implements vscode.Disposable {
   // cartão lateral. Usa SEMPRE o spawn (cmd.exe/sh via shell:true), não o terminal integrado — assim o
   // encadeamento `&&` funciona mesmo quando o terminal do usuário é PowerShell 5.1 (que não aceita `&&`).
   // É cancelável (killTree) e serializado pela mesma flag `busy` das execuções de arquivo.
-  async runCommand(label: string, command: string, timeoutMsOverride?: number): Promise<void> {
+  // Devolve { started:true, ok } do comando concluído, ou { started:false } quando a execução NEM
+  // COMEÇOU (guardas: run desabilitado / sem workspace / busy) — o chamador que encadeia passos
+  // (ex.: instalar pytest e rodar os testes) precisa distinguir "recusou iniciar" de "rodou e
+  // falhou": confundi-los gera mensagem falsa apontando para um cartão que não existe.
+  async runCommand(label: string, command: string, timeoutMsOverride?: number): Promise<{ started: false } | { started: true; ok: boolean }> {
+    const notStarted = { started: false as const };
     const cfg = this.deps.runConfig();
-    if (!cfg.enabled) return this.notice("warn", "Execução desabilitada (forge.run.enabled = false).");
+    if (!cfg.enabled) {
+      this.notice("warn", "Execução desabilitada (forge.run.enabled = false).");
+      return notStarted;
+    }
     const ws = this.deps.workspaceRoot();
-    if (!ws) return this.notice("error", "Abra uma pasta no VSCode.");
-    if (this.busy) return this.notice("info", "Já há uma execução em andamento. Aguarde ou cancele.");
+    if (!ws) {
+      this.notice("error", "Abra uma pasta no VSCode.");
+      return notStarted;
+    }
+    if (this.busy) {
+      this.notice("info", "Já há uma execução em andamento. Aguarde ou cancele.");
+      return notStarted;
+    }
     this.busy = true;
     const runId = `run_${++this.seq}`;
     this.activeRunId = runId;
@@ -153,6 +167,7 @@ export class RunService implements vscode.Disposable {
         data = { ok: false, exitCode: null, output: `[erro ao iniciar] ${(e as Error)?.message ?? String(e)}`, durationMs: 0, cancelled: false, timedOut: false };
       }
       this.finishResult(runId, undefined, "", command, data, label);
+      return { started: true, ok: data.ok };
     } finally {
       this.busy = false;
       this.activeRunId = undefined;

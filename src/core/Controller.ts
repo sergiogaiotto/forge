@@ -25,7 +25,7 @@ import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector"
 import { SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
-import { buildVenvSetupCommand, findVenvPython, resolveTestCommand } from "../util/pythonEnv";
+import { buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { deriveBudget } from "./ContextBudget";
 import { PreviewService } from "./PreviewService";
@@ -2086,10 +2086,69 @@ export class Controller {
       return;
     }
     const runner = new Runner(ws);
+    const isWin = process.platform === "win32";
+    // Comando ciente da STACK: default intocado num projeto Node (vitest/jest) COM script `test`
+    // real vira `npm test` — antes rodava pytest do nada e falhava. Override do admin sempre vence.
+    const stack = await this.detectWorkspaceStack();
+    const chosen = chooseTestCommand(testCfg.command, "pytest -q", stack.tests, await this.hasNpmTestScript(ws));
+    // PRÉ-FLIGHT (família pytest): proba o pytest no ambiente onde os testes VÃO RODAR — com venv,
+    // o interpretador do venv; sem venv, o binário `pytest` do PATH (o mesmo que será executado).
+    let venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+    if (isPytestCommand(chosen)) {
+      const probe = await runner.runRaw(buildPytestProbe(venvPython), 20_000);
+      if (!probe.ok) {
+        // A cura instala coisas via RunService — se a execução está desabilitada por governança,
+        // seja honesto de cara em vez de falhar depois com mensagem enganosa.
+        if (!this.config.run().enabled) {
+          this.post({ type: "notice", level: "warn", message: "pytest ausente e a execução de comandos está desabilitada (forge.run.enabled) — instale manualmente no venv." });
+          return;
+        }
+        let proceed = testCfg.autoInstall;
+        if (!proceed) {
+          const install = "Instalar e rodar";
+          const pick = await vscode.window.showInformationMessage(
+            venvPython
+              ? "O pytest não está instalado no ambiente (.venv). Instalar agora e rodar os testes?"
+              : "Não há venv neste projeto. Criar o .venv com as dependências do código, instalar o pytest e rodar os testes?",
+            install,
+            "Cancelar"
+          );
+          proceed = pick === install;
+        }
+        if (!proceed) {
+          this.post({ type: "notice", level: "info", message: "Testes cancelados: pytest ausente no ambiente." });
+          return;
+        }
+        // O diálogo fica aberto indefinidamente — outra execução pode ter começado nesse meio-tempo.
+        if (this.runService.isBusy()) {
+          this.post({ type: "notice", level: "info", message: "Há uma execução em andamento — rode os testes de novo quando ela terminar." });
+          return;
+        }
+        if (!venvPython) {
+          // SEM venv: cria o ambiente COMPLETO (venv + dependências do código) — um .venv só com
+          // pytest rodaria a suíte num interpretador pelado (ModuleNotFoundError geral).
+          await this.prepareEnv();
+          venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+          if (!venvPython) {
+            this.post({ type: "notice", level: "error", message: "Não consegui criar o venv — veja o cartão 'ambiente'." });
+            return;
+          }
+        }
+        const installed = await this.runService.runCommand("pytest · instalação", buildPytestInstall(venvPython), this.config.env().timeoutSeconds * 1000);
+        if (!installed.started) {
+          // NÃO rodou (guarda do RunService) — mensagem fiel, sem apontar para cartão inexistente.
+          this.post({ type: "notice", level: "info", message: "A instalação do pytest não iniciou (há uma execução em andamento ou a execução está desabilitada). Tente de novo." });
+          return;
+        }
+        if (!installed.ok) {
+          this.post({ type: "notice", level: "error", message: "A instalação do pytest falhou — veja o cartão de execução." });
+          return;
+        }
+      }
+    }
     // Roda pytest pelo interpretador do venv do projeto (python -m pytest), não pelo PATH global —
     // elimina o "ModuleNotFoundError: No module named pytest" quando o venv não está ativado no shell.
-    const venvPython = findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV);
-    const command = resolveTestCommand(testCfg.command, venvPython);
+    const command = resolveTestCommand(chosen, venvPython);
     const result = await runner.runRaw(command, this.config.run().timeoutSeconds * 1000);
     this.post({
       type: "run/result",
@@ -2189,6 +2248,17 @@ export class Controller {
     // Timeout próprio (forge.env.timeoutSeconds, default 900s): pip install pesado em cache frio
     // passa fácil dos 120s do run normal — matar no meio deixa o venv meio-populado.
     await this.runService.runCommand("ambiente", command, this.config.env().timeoutSeconds * 1000);
+  }
+
+  // O package.json da raiz tem um script `test` REAL? (gate do fallback `npm test` — sem o script,
+  // `npm test` falha com "Missing script" e viraria um falso "testes falharam" no cartão.)
+  private async hasNpmTestScript(ws: string): Promise<boolean> {
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(ws, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+      return typeof pkg.scripts?.test === "string" && pkg.scripts.test.trim().length > 0;
+    } catch {
+      return false;
+    }
   }
 
   // Varre os .py do workspace (com tetos) e devolve os pacotes PyPI de terceiros usados no código.
