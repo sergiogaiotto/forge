@@ -167,6 +167,51 @@ test("envia temperature no corpo quando configurada (inclusive 0); omite quando 
   }
 });
 
+// JSON garantido pelo decoder: response_format só vai quando opts.jsonResponse; gateway antigo que
+// rejeita com 400 mencionando response_format ganha UMA reemissão automática sem o campo.
+test("envia response_format com jsonResponse e DEGRADA sozinho quando o gateway rejeita", async () => {
+  const bodies: any[] = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      const body = JSON.parse(raw);
+      bodies.push(body);
+      if (body.response_format) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "response_format is not supported" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "[]" } }] })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const egress = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, () => undefined);
+    const provider = new OpenAICompatibleProvider(
+      { type: "openai-compatible", modelId: "openai/gpt-oss-120b", baseUrl: `http://127.0.0.1:${port}`, apiKey: "not-needed", timeoutSeconds: 10 },
+      egress
+    );
+    const chunks = await collect(provider.createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, jsonResponse: true }));
+    assert.equal(bodies.length, 2, "deve reenviar UMA vez sem response_format");
+    assert.deepEqual(bodies[0].response_format, { type: "json_object" });
+    assert.ok(!("response_format" in bodies[1]));
+    const text = chunks.filter((c) => c.kind === "text").map((c) => (c as any).text).join("");
+    assert.equal(text, "[]"); // a degradação entrega a resposta normal
+    // sem jsonResponse, o campo NUNCA vai
+    bodies.length = 0;
+    await collect(provider.createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000 }));
+    assert.equal(bodies.length, 1);
+    assert.ok(!("response_format" in bodies[0]));
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("emite warning NÃO-fatal quando finish_reason é 'length' (truncamento)", async () => {
   const srv = await sseServer([
     JSON.stringify({ choices: [{ delta: { content: "início do arquivo…" } }] }),

@@ -210,11 +210,12 @@ export function buildBlueprintSystemPrompt(language: ProjectLanguage, architectu
     archetypeLayers(architecture),
     ...(uiLayerInstruction(language, ui) ? [uiLayerInstruction(language, ui)] : []),
     "NÃO gere código agora — só o PLANO de arquivos.",
-    "Responda APENAS com um ARRAY JSON dos arquivos, em ORDEM DE DEPENDÊNCIA (interfaces/portas primeiro,",
-    "depois domínio, adaptadores, wiring e por fim os testes), no formato exato:",
+    "Responda APENAS com JSON válido: um ARRAY dos arquivos, em ORDEM DE DEPENDÊNCIA (interfaces/portas",
+    "primeiro, depois domínio, adaptadores, wiring e por fim os testes), no formato exato:",
     '[{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase","deps":["outro/arquivo.ext"]}]',
+    'Se a sua saída precisar ser um OBJETO JSON, use exatamente {"files": [ ...o array acima... ]}.',
     `Inclua o manifesto de dependências (${MANIFEST[language]}), os testes do núcleo e um README.md.`,
-    "Nada de prosa, comentários ou cercas fora do array JSON.",
+    "Nada de prosa, comentários ou cercas fora do JSON.",
   ].join("\n");
 }
 
@@ -231,7 +232,7 @@ export function buildBlueprintRetryRequest(brief: string, previous: string): str
   const trimmed = previous.trim();
   const cappedPrev = trimmed.length <= 4000 ? trimmed : `${trimmed.slice(0, 1500)}\n[… trecho intermediário omitido …]\n${trimmed.slice(-2500)}`;
   if (cappedPrev) {
-    return `Sua resposta anterior NÃO continha o array JSON no formato exigido. CONVERTA o plano abaixo no ARRAY JSON exato do formato pedido — o PRIMEIRO caractere da sua resposta deve ser '[' e o ÚLTIMO deve ser ']'. NADA de prosa, raciocínio, comentários ou cercas.
+    return `Sua resposta anterior NÃO continha o array JSON no formato exigido. CONVERTA o plano abaixo no ARRAY JSON exato do formato pedido (ou no objeto {"files":[…]}) — NADA de prosa, raciocínio, comentários ou cercas: apenas o JSON.
 
 Pedido original:
 ${brief}
@@ -241,7 +242,7 @@ ${cappedPrev}`;
   }
   return `${brief}
 
-ATENÇÃO (2ª tentativa — a anterior veio vazia): responda APENAS com o array JSON do plano de arquivos. O PRIMEIRO caractere da sua resposta deve ser '[' e o ÚLTIMO deve ser ']'. NADA de prosa, raciocínio ou cercas.`;
+ATENÇÃO (2ª tentativa — a anterior veio vazia): responda APENAS com o JSON do plano de arquivos — o array [{"path":…}] ou o objeto {"files":[…]}. NADA de prosa, raciocínio ou cercas.`;
 }
 
 // Fase F — GERAÇÃO GUIADA: gera EXATAMENTE os arquivos do blueprint aprovado, na ordem, cada um como um

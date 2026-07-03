@@ -111,6 +111,15 @@ test("parseBlueprint: ] solto DEPOIS do array (prosa) não quebra o parse — ex
   assert.deepEqual(parseBlueprint(text).map((f) => f.path), ["x.py"]);
 });
 
+// response_format json_object (JSON garantido pelo decoder) impõe OBJETO na raiz — o modelo emite
+// {"files":[…]} e o extrator acha o array ANINHADO normalmente (varre qualquer '[' balanceado).
+test('parseBlueprint: objeto {"files":[…]} (modo json_object) → extrai o array aninhado', () => {
+  const obj = '{"files":[{"path":"src/a.py","purpose":"porta","deps":[]},{"path":"README.md","purpose":"docs","deps":[]}]}';
+  assert.deepEqual(parseBlueprint(obj).map((f) => f.path), ["src/a.py", "README.md"]);
+  // e com prosa em volta (degradação sem json mode) continua funcionando
+  assert.deepEqual(parseBlueprint(`plano: ${obj} fim`).map((f) => f.path), ["src/a.py", "README.md"]);
+});
+
 test("parseBlueprint: marcadores harmony delimitados (analysis/final) removidos antes do parse", () => {
   const text = '<|channel|>analysis<|message|>penso em [1,2]<|channel|>final<|message|>[{"path":"x.py","purpose":"p"}]';
   assert.deepEqual(parseBlueprint(text).map((f) => f.path), ["x.py"]);
