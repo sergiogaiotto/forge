@@ -34,6 +34,12 @@ export interface CreateMessageOptions {
   // OpenAI). Para tarefas de JSON estrito (blueprint). O provider degrada automaticamente (reenvia
   // sem o campo) se o gateway rejeitar com 400; provedores sem suporte (Anthropic) ignoram.
   jsonResponse?: boolean;
+  // Transporte da resposta. Default `true` (streaming SSE — UX arquivo-a-arquivo da geração de código).
+  // `false` = uma única resposta JSON (não-streaming): para tarefas one-shot estruturadas (charter,
+  // blueprint, /resumir), o gpt-oss/HubGPU ISOLA o raciocínio em `reasoning_content` (não vaza o canal
+  // harmony no `content` como no streaming) e o `finish_reason` vem confiável no corpo. Só o provider
+  // openai-compatible honra esta opção; Anthropic segue sempre streaming.
+  streaming?: boolean;
 }
 
 export interface LLMProvider {
