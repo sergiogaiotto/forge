@@ -63,6 +63,7 @@ import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt } from "./systemPrompt";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
+import { charterProbablyCut } from "../util/charterCut";
 import { classifyProjectIntent } from "../util/projectIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
@@ -579,14 +580,18 @@ export class Controller {
         }
         if (roundText) parts.push(roundText);
         text += roundText;
+        // Sinal de corte desta rodada. PRIMÁRIO: finish_reason=length (roundTruncated). REFORÇO: o
+        // HubGPU às vezes corta reportando "stop" em vez de "length" (corte sem sinal, reproduzido ao
+        // vivo) — aí a heurística estrutural CONSERVADORA (charterProbablyCut) sobre o texto acumulado
+        // pega o corte. Só consultada quando NÃO houve o sinal de length E houve conteúdo novo; listas
+        // de RF/RNF bem-formadas não disparam (só hífen pendurado ou palavra de ligação no fim).
+        const cutByShape = !roundTruncated && roundText.trim() !== "" && charterProbablyCut(stitchHarmonyParts(parts));
         // Rodada SEM conteúdo novo não dá baixa no truncamento anterior: o gateway pode rotear a
         // continuação inteira para reasoning_content e fechar com finish=stop — a seção segue
         // cortada e o aviso PRECISA sair (entregar corte silencioso é a falha proibida abaixo).
-        if (roundText.trim() || roundTruncated) truncated = roundTruncated;
+        if (roundText.trim() || roundTruncated) truncated = roundTruncated || cutByShape;
         // Continua SÓ com corte confirmado E conteúdo novo nesta rodada — sem conteúdo novo, repetir
         // daria o mesmo resultado (ex.: o raciocínio devorou o max_tokens inteiro e nada saiu).
-        // Corte SEM finish_reason=length (gateway fechando "stop" no meio, o caso do blueprint) não é
-        // detectável em texto livre — sem âncora estrutural como o JSON — e fica fora desta emenda.
         if (error || !truncated || !roundText.trim() || round >= MAX_CONTINUATION_ROUNDS) break;
         continuationRounds++;
         log.info("charter: seção cortada no limite de tokens — continuando de onde parou", { section, round: round + 1 });
