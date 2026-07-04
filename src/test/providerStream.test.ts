@@ -236,6 +236,175 @@ test("emite warning NÃO-fatal quando finish_reason é 'length' (truncamento)", 
   }
 });
 
+// ---- Modo NÃO-STREAMING (opts.streaming: false) ---------------------------------------------------
+// Servidor de resposta JSON única (não-SSE) com contador de chamadas e responder por-chamada — para
+// os testes de retry-once e content-vazio. Captura o corpo da 1ª requisição em `bodies[0]`.
+function jsonServer(responder: (call: number) => { status: number; json?: unknown; text?: string }): Promise<{ baseUrl: string; bodies: any[]; calls: () => number; close: () => Promise<void> }> {
+  const bodies: any[] = [];
+  let calls = 0;
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        calls++;
+        try {
+          bodies.push(JSON.parse(raw));
+        } catch {
+          bodies.push(null);
+        }
+        const r = responder(calls);
+        res.writeHead(r.status, { "content-type": r.json !== undefined ? "application/json" : "text/plain" });
+        res.end(r.json !== undefined ? JSON.stringify(r.json) : (r.text ?? ""));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as { port: number };
+      resolve({ baseUrl: `http://127.0.0.1:${addr.port}`, bodies, calls: () => calls, close: () => new Promise((res) => server.close(() => res())) });
+    });
+  });
+}
+
+function mkProvider(baseUrl: string, extra: Record<string, unknown> = {}) {
+  const egress = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, () => undefined);
+  return new OpenAICompatibleProvider(
+    { type: "openai-compatible", modelId: "openai/gpt-oss-120b", baseUrl, apiKey: "not-needed", timeoutSeconds: 30, ...extra } as any,
+    egress
+  );
+}
+
+test("não-streaming: emite a MESMA sequência de chunks (usage/reasoning/text) de uma resposta JSON única", async () => {
+  const srv = await jsonServer(() => ({
+    status: 200,
+    json: { choices: [{ message: { content: "Olá mundo", reasoning_content: "pensando…" }, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 3 } },
+  }));
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("sys", [{ role: "user", content: "oi" }], { timeoutMs: 5000, streaming: false }));
+    assert.equal(srv.bodies[0].stream, false, "streaming:false deve enviar stream:false no corpo");
+    assert.ok(!("stream_options" in srv.bodies[0]), "não-streaming não envia stream_options");
+    const text = chunks.filter((c) => c.kind === "text").map((c) => (c as any).text).join("");
+    const reasoning = chunks.filter((c) => c.kind === "reasoning").map((c) => (c as any).text).join("");
+    const usage = chunks.find((c) => c.kind === "usage") as any;
+    assert.equal(text, "Olá mundo");
+    assert.equal(reasoning, "pensando…");
+    assert.equal(usage.inputTokens, 7);
+    assert.equal(usage.outputTokens, 3);
+    assert.ok(!chunks.some((c) => c.kind === "error"));
+  } finally {
+    await srv.close();
+  }
+});
+
+test("não-streaming: warning NÃO-fatal quando finish_reason é 'length' (lido direto do corpo)", async () => {
+  const srv = await jsonServer(() => ({
+    status: 200,
+    json: { choices: [{ message: { content: "início do arquivo…" }, finish_reason: "length" }], usage: { prompt_tokens: 10, completion_tokens: 16384 } },
+  }));
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, streaming: false }));
+    const text = chunks.filter((c) => c.kind === "text").map((c) => (c as any).text).join("");
+    const warning = chunks.find((c) => c.kind === "warning") as any;
+    assert.equal(text, "início do arquivo…");
+    assert.ok(warning && /truncad/i.test(warning.message));
+    assert.ok(!chunks.some((c) => c.kind === "error"), "truncamento não vira erro fatal");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("não-streaming: DEGRADA response_format sozinho em 400 (mesma via compartilhada do streaming)", async () => {
+  const srv = await jsonServer((call) =>
+    call === 1
+      ? { status: 400, json: { error: { message: "response_format is not supported" } } }
+      : { status: 200, json: { choices: [{ message: { content: "[]" }, finish_reason: "stop" }] } }
+  );
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, streaming: false, jsonResponse: true }));
+    assert.equal(srv.calls(), 2, "deve reenviar UMA vez sem response_format");
+    assert.deepEqual(srv.bodies[0].response_format, { type: "json_object" });
+    assert.ok(!("response_format" in srv.bodies[1]));
+    assert.equal(chunks.filter((c) => c.kind === "text").map((c) => (c as any).text).join(""), "[]");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("não-streaming: retry-once quando a resposta vem SEM choices (transitória do gateway)", async () => {
+  const srv = await jsonServer((call) =>
+    call === 1
+      ? { status: 200, json: { object: "chat.completion" } } // sem choices → transitória
+      : { status: 200, json: { choices: [{ message: { content: "recuperado" }, finish_reason: "stop" }] } }
+  );
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, streaming: false }));
+    assert.equal(srv.calls(), 2, "deve refazer a chamada UMA vez");
+    assert.equal(chunks.filter((c) => c.kind === "text").map((c) => (c as any).text).join(""), "recuperado");
+    assert.ok(!chunks.some((c) => c.kind === "error"));
+  } finally {
+    await srv.close();
+  }
+});
+
+// REGRESSÃO: content VAZIO com choices é resultado LEGÍTIMO (o raciocínio consumiu todo o max_tokens).
+// NÃO pode disparar o retry-once (queimaria tokens repetindo) — o retry é só para resposta malformada.
+test("não-streaming: content vazio COM choices NÃO retria e não vira erro", async () => {
+  const srv = await jsonServer(() => ({
+    status: 200,
+    json: { choices: [{ message: { content: "", reasoning_content: "raciocínio que comeu o orçamento" }, finish_reason: "length" }], usage: { prompt_tokens: 5, completion_tokens: 110 } },
+  }));
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, streaming: false }));
+    assert.equal(srv.calls(), 1, "content vazio legítimo NÃO deve refazer a chamada");
+    assert.ok(!chunks.some((c) => c.kind === "text"), "sem content → nenhum chunk de texto");
+    assert.ok(chunks.some((c) => c.kind === "reasoning"), "o raciocínio é emitido (para o resgate a jusante)");
+    assert.ok(chunks.some((c) => c.kind === "warning"), "finish_reason=length → warning");
+    assert.ok(!chunks.some((c) => c.kind === "error"), "content vazio não é erro");
+  } finally {
+    await srv.close();
+  }
+});
+
+// REGRESSÃO (revisão adversarial): o retry-once do não-streaming deve passar pela MESMA degradação de
+// response_format. Sequência: 1ª resposta 200 SEM choices (transitória) → retry cai num 400 que rejeita
+// response_format → degrada (remove o campo) → sucede. Sem o fix, o retry reenviaria o campo e daria erro seco.
+test("não-streaming: retry após 'sem choices' passa pela degradação de response_format", async () => {
+  const srv = await jsonServer((call) =>
+    call === 1
+      ? { status: 200, json: { object: "chat.completion" } } // sem choices → transitória
+      : call === 2
+        ? { status: 400, json: { error: { message: "response_format is not supported" } } }
+        : { status: 200, json: { choices: [{ message: { content: "ok" }, finish_reason: "stop" }] } }
+  );
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, streaming: false, jsonResponse: true }));
+    assert.equal(srv.calls(), 3, "1ª sem choices → retry que degrada (400) → sucesso");
+    assert.deepEqual(srv.bodies[0].response_format, { type: "json_object" });
+    assert.ok(!("response_format" in srv.bodies[2]), "a chamada final NÃO envia response_format (degradou)");
+    assert.equal(chunks.filter((c) => c.kind === "text").map((c) => (c as any).text).join(""), "ok");
+    assert.ok(!chunks.some((c) => c.kind === "error"));
+  } finally {
+    await srv.close();
+  }
+});
+
+// REGRESSÃO (revisão adversarial): tool_calls sem id no não-streaming recebem ids DISTINTOS por índice
+// (como no streaming) — "call_0" fixo colidiria e um consumidor que dedup por id veria só uma.
+test("não-streaming: tool_calls sem id recebem ids distintos por índice", async () => {
+  const srv = await jsonServer(() => ({
+    status: 200,
+    json: { choices: [{ message: { tool_calls: [{ function: { name: "a", arguments: "{}" } }, { function: { name: "b", arguments: "{}" } }] }, finish_reason: "tool_calls" }] },
+  }));
+  try {
+    const chunks = await collect(mkProvider(srv.baseUrl).createMessage("s", [{ role: "user", content: "hi" }], { timeoutMs: 5000, streaming: false }));
+    const calls = chunks.filter((c) => c.kind === "tool_call") as any[];
+    assert.equal(calls.length, 2);
+    assert.notEqual(calls[0].id, calls[1].id, "ids devem ser distintos");
+    assert.deepEqual(calls.map((c) => c.name), ["a", "b"]);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("emite warning ao truncar mesmo após reasoning_content (caminho típico do gpt-oss)", async () => {
   const srv = await sseServer([
     JSON.stringify({ choices: [{ delta: { reasoning_content: "pensando muito…" } }] }),
