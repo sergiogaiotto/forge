@@ -562,6 +562,9 @@ export class Controller {
         for await (const chunk of provider.createMessage(buildCharterSystemPrompt(section), messages, {
           timeoutMs: runtime.timeoutSeconds * 1000,
           extraHeaders: headers,
+          // NÃO-streaming: o gpt-oss/HubGPU isola o raciocínio em reasoning_content (não vaza o canal
+          // harmony no content, como no streaming) e o finish_reason vem confiável — a base do truncated.
+          streaming: false,
         })) {
           if (chunk.kind === "text") roundText += chunk.text;
           else if (chunk.kind === "reasoning") reasoning += chunk.text; // p/ resgate se o content vier vazio
@@ -905,7 +908,12 @@ export class Controller {
     let gotText = false;
     const usage = { inputTokens: 0, outputTokens: 0 };
     const started = Date.now();
-    let lastBeat = 0;
+    // Heartbeat por TIMER: no não-streaming a resposta chega inteira de uma vez (sem chunks provando
+    // vida durante o raciocínio), então o modal ficaria congelado 30-120s. O timer reposta o planStep
+    // com o contador de segundos até o plano chegar; é limpo no finally.
+    const beat = setInterval(() => {
+      if (!gotText) this.post({ type: "project/planStep", label: `${beatLabel} (${Math.round((Date.now() - started) / 1000)}s)` });
+    }, 1500);
     try {
       for await (const chunk of provider.createMessage(system, [{ role: "user", content: userMsg }], {
         timeoutMs: sr.timeoutSeconds * 1000,
@@ -913,21 +921,19 @@ export class Controller {
         // JSON garantido pelo decoder (vLLM guided decoding) — o provider degrada sozinho se o
         // gateway rejeitar; o pipeline tolerante de parse continua como rede de segurança.
         jsonResponse: true,
+        // NÃO-streaming: finish_reason confiável no corpo (base do `truncated` do salvage) e sem
+        // vazamento harmony quebrando o JSON.parse. O salvage/retry seguem como rede de segurança.
+        streaming: false,
       })) {
         if (chunk.kind === "text") {
           if (!gotText) {
             gotText = true;
+            clearInterval(beat);
             this.post({ type: "project/planStep", label: "Recebendo o plano do modelo…" });
           }
           text += chunk.text;
         } else if (chunk.kind === "reasoning") {
           reasoning += chunk.text;
-          // Feedback VIVO durante o raciocínio (limitado a 1/1.5s) — sem isto o modal parece travado.
-          const now = Date.now();
-          if (!gotText && now - lastBeat >= 1500) {
-            lastBeat = now;
-            this.post({ type: "project/planStep", label: `${beatLabel} (${Math.round((now - started) / 1000)}s)` });
-          }
         } else if (chunk.kind === "usage") {
           usage.inputTokens += chunk.inputTokens;
           usage.outputTokens += chunk.outputTokens;
@@ -939,6 +945,8 @@ export class Controller {
       }
     } catch (e) {
       return { text, reasoning, truncated, usage, error: (e as Error)?.message ?? String(e) };
+    } finally {
+      clearInterval(beat);
     }
     return { text, reasoning, truncated, usage };
   }
@@ -1825,6 +1833,8 @@ export class Controller {
       for await (const chunk of provider.createMessage(buildSummarizeSystemPrompt(), [{ role: "user", content: convo }], {
         timeoutMs: sr.timeoutSeconds * 1000,
         extraHeaders: headers,
+        // NÃO-streaming: raciocínio isolado (sem vazamento harmony no resumo) e finish_reason confiável.
+        streaming: false,
       })) {
         if (chunk.kind === "text") text += chunk.text;
         else if (chunk.kind === "reasoning") reasoning += chunk.text;
