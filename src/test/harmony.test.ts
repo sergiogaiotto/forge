@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractFinalChannel, stripHarmony } from "../util/harmony";
+import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 
 test("stripHarmony: canal final delimitado — mantém só o conteúdo após <|channel|>final<|message|>", () => {
   const leak = "Now final output is markdown string. Proceed.<|channel|>final<|message|># Título\nconteúdo real";
@@ -61,6 +61,86 @@ test("stripHarmony: teto de 8 linhas protege contra stripping exagerado de preâ
 test("stripHarmony: preâmbulo com muitas linhas em branco intercaladas ainda é removido", () => {
   const leak = ".\n\n\n\n\nNow final output is markdown string.\n\n\nProceed.\n\n- RF-01: conteudo";
   assert.equal(stripHarmony(leak), "- RF-01: conteudo");
+});
+
+// Costura de geração CONTINUADA (corte por max_tokens + rodadas "siga de onde parou") — o saneamento
+// harmony roda POR PARTE: stripHarmony no concatenado pegaria só o que vem após o ÚLTIMO marcador e
+// DESCARTARIA as rodadas anteriores quando cada rodada vaza seu próprio "assistantfinal".
+test("stitchHarmonyParts: cada rodada com seu marcador final — todas as rodadas sobrevivem", () => {
+  const parts = [
+    "analysis penso…assistantfinalO sistema controla o uso de medicamentos, permitindo cadas",
+    "analysis retomo…assistantfinaltrar doses e horários por paciente.",
+  ];
+  assert.equal(stitchHarmonyParts(parts), "O sistema controla o uso de medicamentos, permitindo cadastrar doses e horários por paciente.");
+});
+
+test("stitchHarmonyParts: partes SEM marcador entram cruas — preserva o ponto exato do corte", () => {
+  // corte no meio da palavra: a junção não pode inserir nem remover nada entre as partes.
+  assert.equal(stitchHarmonyParts(["- RF-01: cadastrar medica", "mentos com dose e horário"]), "- RF-01: cadastrar medicamentos com dose e horário");
+  // corte após quebra de linha: o \n interior sobrevive (trim só nas bordas EXTERNAS).
+  assert.equal(stitchHarmonyParts(["- item um\n", "- item dois"]), "- item um\n- item dois");
+});
+
+test("stitchHarmonyParts: parte única equivale a stripHarmony (preâmbulo/tokens removidos)", () => {
+  assert.equal(stitchHarmonyParts(["Proceed.\n\n- RF-01: ok<|end|>"]), "- RF-01: ok");
+  assert.equal(stitchHarmonyParts([]), "");
+});
+
+// O modelo às vezes REPETE na continuação apesar da instrução — do rabo anterior até a seção inteira.
+// Sobreposição EXATA >= 20 chars é cortada; sem sobreposição exata, nada é tocado (conservador).
+test("stitchHarmonyParts: continuação que re-escreve o rabo da rodada anterior não duplica", () => {
+  const p1 = "O sistema registra doses e horários de cada medicamento";
+  const p2 = " e horários de cada medicamento, alertando o paciente nos horários corretos.";
+  assert.equal(stitchHarmonyParts([p1, p2]), "O sistema registra doses e horários de cada medicamento, alertando o paciente nos horários corretos.");
+});
+
+test("stitchHarmonyParts: continuação que RECOMEÇA a seção do zero mantém só a cauda nova", () => {
+  const p1 = "- RF-01: cadastrar medicamentos com dose\n- RF-02: listar medica";
+  const p2 = "- RF-01: cadastrar medicamentos com dose\n- RF-02: listar medicamentos ativos\n- RF-03: remover medicamentos";
+  assert.equal(stitchHarmonyParts([p1, p2]), "- RF-01: cadastrar medicamentos com dose\n- RF-02: listar medicamentos ativos\n- RF-03: remover medicamentos");
+});
+
+test("stitchHarmonyParts: sobreposição curta (< 20 chars) NÃO é cortada — pode ser coincidência", () => {
+  // "- p95" no fim e no começo é coincidência plausível de bullets parecidos, não repetição.
+  assert.equal(stitchHarmonyParts(["- RNF-01: p95\n", "- p95 do endpoint X < 200ms"]), "- RNF-01: p95\n- p95 do endpoint X < 200ms");
+});
+
+// REGRESSÃO (revisão adversarial): preâmbulo do canal analysis SEM marcador numa rodada >= 1 ficaria
+// no MEIO do texto juntado — onde o dropHarmonyPreamble do fim não alcança. Limpa por parte, gated
+// na presença REAL de preâmbulo (senão a parte entra crua, preservando o ponto exato do corte).
+test("stitchHarmonyParts: preâmbulo sem marcador no INÍCIO de uma continuação é removido", () => {
+  const parts = ["O sistema permite cadas", "Now final output is markdown string.\nProceed.\ntrar medicamentos e doses."];
+  assert.equal(stitchHarmonyParts(parts), "O sistema permite cadastrar medicamentos e doses.");
+});
+
+test("stitchHarmonyParts: continuação limpa começando com quebra de linha NÃO perde a quebra", () => {
+  // sem preâmbulo, a parte entra crua — o \n inicial da continuação é o separador do bullet.
+  assert.equal(stitchHarmonyParts(["- item um", "\n- item dois"]), "- item um\n- item dois");
+});
+
+// REGRESSÃO (revisão adversarial): com marcador na 1ª parte, TUDO após ele é canal final por
+// definição — o preâmbulo heurístico NÃO roda (mesma regra do stripHarmony de parte única).
+test("stitchHarmonyParts: conteúdo legítimo após o marcador final não é tratado como preâmbulo", () => {
+  assert.equal(
+    stitchHarmonyParts(["analysis rascunho…assistantfinalProceed.\nCom o cadastro em duas etapas."]),
+    "Proceed.\nCom o cadastro em duas etapas."
+  );
+});
+
+// REGRESSÃO (revisão adversarial): a extração do canal final na costura NÃO pode trimar — o trim
+// destruiria o whitespace do ponto exato do corte e colaria bullets/palavras na emenda.
+test("stitchHarmonyParts: rodada com marcador terminando em quebra de linha preserva a quebra na emenda", () => {
+  assert.equal(stitchHarmonyParts(["assistantfinal- item um\n", "- item dois"]), "- item um\n- item dois");
+});
+
+test("stitchHarmonyParts: costura de partes longas termina rápido (busca de sobreposição linear)", () => {
+  // ~120k chars por parte SEM sobreposição: a busca O(n²) antiga levaria minutos; a linear, ms.
+  const a = "A".repeat(120_000) + "corte aqui";
+  const b = "retomada " + "B".repeat(120_000);
+  const t0 = Date.now();
+  const out = stitchHarmonyParts([a, b]);
+  assert.ok(Date.now() - t0 < 2_000, "costura de partes de 120k chars deve ser sub-segundo");
+  assert.equal(out.length, a.length + b.length);
 });
 
 // Resgate conservador do canal de raciocínio (gateway roteia a resposta p/ reasoning_content):
