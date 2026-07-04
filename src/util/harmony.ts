@@ -57,6 +57,83 @@ export function stripHarmony(text: string): string {
   return (last ? body : dropHarmonyPreamble(body)).trim();
 }
 
+// ---- Costura de geração continuada ----------------------------------------------------------
+
+// Sobreposição mínima para o corte de repetição da costura: o modelo às vezes REPETE o que já
+// escreveu na continuação (apesar da instrução "não repita") — do rabo da rodada anterior até a
+// seção INTEIRA desde o início. Sobreposição exata >= 20 chars é assinatura de repetição, não
+// coincidência; abaixo disso não cortamos (bullets parecidos poderiam casar por acaso).
+const MIN_STITCH_OVERLAP = 20;
+
+// Maior sufixo de `acc` que é prefixo de `next`, em tempo LINEAR (prefix-function/KMP sobre
+// next[0..w) + separador + cauda de acc). As partes costuradas são rodadas TRUNCADAS no max_tokens
+// (dezenas de milhares de chars): a busca ingênua O(n²), com um slice alocado por iteração,
+// travaria o host da extensão. O separador \u0000 não ocorre em texto de modelo — impede um
+// casamento atravessar a fronteira entre as duas metades.
+function longestStitchOverlap(acc: string, next: string): number {
+  const w = Math.min(acc.length, next.length);
+  if (!w) return 0;
+  const s = next.slice(0, w) + "\u0000" + acc.slice(acc.length - w);
+  const pi = new Int32Array(s.length);
+  for (let i = 1; i < s.length; i++) {
+    let k = pi[i - 1];
+    while (k > 0 && s[i] !== s[k]) k = pi[k - 1];
+    if (s[i] === s[k]) k++;
+    pi[i] = k;
+  }
+  return pi[s.length - 1];
+}
+
+// Corpo do canal final SEM o trim de extractFinalChannel: na costura, o trim destruiria o
+// whitespace do ponto exato do corte (ex.: rodada terminando "…dose\n" + "- próximo" colaria
+// o bullet na linha anterior). null quando não há marcador.
+function finalChannelBody(text: string): string | null {
+  const re = new RegExp(FINAL_CHANNEL_RE.source, "gi");
+  let last: RegExpExecArray | null = null;
+  for (let m = re.exec(text); m; m = re.exec(text)) last = m;
+  if (!last) return null;
+  return text.slice(last.index + last[0].length).replace(HARMONY_TOKEN_RE, "");
+}
+
+// A 1ª linha NÃO VAZIA do texto é uma frase de controle harmony? Gate do dropHarmonyPreamble por
+// parte: aplicá-lo incondicionalmente comeria o whitespace legítimo do início de uma continuação
+// limpa (ex.: "\n- próximo bullet" perderia a quebra e colaria no rabo anterior).
+function hasLeadingPreamble(text: string): boolean {
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    return t === "." || HARMONY_PREAMBLE_LINE.test(t);
+  }
+  return false;
+}
+
+// Junta as partes de uma geração CONTINUADA (resposta cortada por max_tokens + rodadas de
+// continuação "siga de onde parou"). Saneamento POR PARTE antes de juntar:
+// - stripHarmony no texto CONCATENADO pegaria só o que vem após o ÚLTIMO marcador — se cada rodada
+//   vazar seu próprio "assistantfinal", as rodadas anteriores seriam descartadas;
+// - o preâmbulo sem marcador ("Proceed." etc.) numa rodada >= 1 ficaria no MEIO do texto juntado,
+//   onde o dropHarmonyPreamble do fim não alcança — por isso o gate hasLeadingPreamble por parte;
+// - fora esses dois casos a parte entra CRUA (sem trim), preservando o ponto exato do corte.
+// Para UMA parte o resultado é idêntico a stripHarmony (mesma regra do preâmbulo: com marcador na
+// cabeça, tudo é canal final por definição e a heurística NÃO roda).
+export function stitchHarmonyParts(parts: string[]): string {
+  let acc = "";
+  let headHasMarker = false;
+  parts.forEach((raw, i) => {
+    const final = finalChannelBody(raw);
+    if (i === 0 && final !== null) headHasMarker = true;
+    const p = final ?? (i > 0 && hasLeadingPreamble(raw) ? dropHarmonyPreamble(raw) : raw);
+    if (!acc) {
+      acc = p;
+      return;
+    }
+    const n = longestStitchOverlap(acc, p);
+    acc += n >= MIN_STITCH_OVERLAP ? p.slice(n) : p;
+  });
+  const body = acc.replace(HARMONY_TOKEN_RE, "");
+  return (headHasMarker ? body : dropHarmonyPreamble(body)).trim();
+}
+
 // Devolve o conteúdo do canal final SÓ se o marcador harmony existir no texto (senão null).
 // Fallback CONSERVADOR para quando o gateway roteia a resposta inteira para `reasoning_content`
 // (gpt-oss sem canal final isolado): o raciocínio bruto NÃO é resposta — mas, se ele contém o

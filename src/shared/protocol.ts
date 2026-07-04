@@ -384,7 +384,9 @@ export type WebviewToExt =
   | { type: "profile/pickRole" }
   | { type: "profile/refresh" }
   | { type: "charter/open" }
-  | { type: "charter/draft"; section: CharterKey; brief: string }
+  // sections: o conteúdo ATUAL das 4 seções no wizard (inclui texto digitado e AINDA NÃO salvo) —
+  // o host usa como contexto da redação em vez do .forge/project.md em disco, que pode estar atrás.
+  | { type: "charter/draft"; section: CharterKey; brief: string; sections?: CharterSections }
   | { type: "charter/save"; sections: CharterSections }
   | { type: "charter/genTests"; fr: string; nfr: string }
   | { type: "inspect/open" }

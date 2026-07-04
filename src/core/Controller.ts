@@ -60,9 +60,9 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt } from "./systemPrompt";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
-import { extractFinalChannel, stripHarmony } from "../util/harmony";
+import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { classifyProjectIntent } from "../util/projectIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
@@ -475,7 +475,9 @@ export class Controller {
 
   // Pede ao modelo para REDIGIR uma seção a partir do rascunho do dev + contexto (stack + outras seções).
   // Geração ONE-SHOT (texto puro, sem blocos de arquivo); registra trace como as demais gerações.
-  async draftCharterSection(section: CharterKey, brief: string): Promise<void> {
+  // `live`: as 4 seções COMO ESTÃO no wizard (inclui texto digitado e não salvo) — sem isso o contexto
+  // viria só do .forge/project.md em disco e um Propósito recém-digitado não ancoraria as demais seções.
+  async draftCharterSection(section: CharterKey, brief: string, live?: CharterSections): Promise<void> {
     if (!CHARTER_KEYS.includes(section)) return;
     if (!(await this.ensureSession())) {
       this.post({ type: "charter/error", section, message: "Licença requerida para redigir com o modelo." });
@@ -496,22 +498,32 @@ export class Controller {
     this.post({ type: "charter/drafting", section });
 
     const [stack, doc] = await Promise.all([this.detectWorkspaceStack(), this.readCharterDoc()]);
+    // Contexto = seções do WIZARD quando enviadas (valor por chave, mesmo vazio: o dev pode ter limpado
+    // um campo de propósito), com fallback no disco por chave (mensagem antiga/sem o campo).
+    const disk = this.charterSectionsFrom(doc);
+    const current = Object.fromEntries(CHARTER_KEYS.map((k) => [k, live?.[k] ?? disk[k] ?? ""])) as CharterSections;
     // Tetos defensivos como no resto do FORGE: o brief (textarea, pode ter texto colado) e cada bloco
     // de contexto são limitados para não estourar a janela/custo do modelo.
     const others = CHARTER_SECTIONS.filter((s) => s.key !== section)
       .map((s) => {
-        const body = getSection(doc, s.header);
-        return body ? renderProfileBlock(`${s.header}\n${body}`, 1500) : "";
+        const body = current[s.key];
+        return body.trim() ? renderProfileBlock(`${s.header}\n${body}`, 1500) : "";
       })
       .filter((s) => s.trim());
     const label = CHARTER_SECTIONS.find((s) => s.key === section)?.label ?? section;
     const cappedBrief = brief.trim().slice(0, 4000);
+    // Campo vazio com Propósito preenchido → a instrução aponta o Propósito como ESCOPO da redação
+    // (Regras/RF/RNF de "um sistema qualquer" não servem; o system prompt reforça a mesma âncora).
+    const hasPurposeAnchor = section !== "purpose" && current.purpose.trim();
     const userMsg = [
       "Contexto do projeto:",
       [renderProfileBlock(renderStackBlock(stack), 1500), ...others].filter((s) => s.trim()).join("\n\n") || "(sem contexto adicional detectado)",
       "",
       `Rascunho/instrução do dev para a seção "${label}":`,
-      cappedBrief || "(vazio — proponha do zero, coerente com o contexto acima)",
+      cappedBrief ||
+        (hasPurposeAnchor
+          ? `(vazio — derive a seção do PROPÓSITO do projeto acima: ele define o escopo; redija "${label}" cumprindo o objetivo desta seção dentro desse escopo)`
+          : "(vazio — proponha do zero, coerente com o contexto acima)"),
     ].join("\n");
 
     const taskId = `charter_${section}_${this.sessionId}`;
@@ -529,6 +541,8 @@ export class Controller {
     let text = "";
     let delivered = ""; // o texto EFETIVAMENTE entregue ao wizard (pode vir do resgate do raciocínio)
     let error: string | undefined;
+    let continuationRounds = 0; // emendas automáticas disparadas (p/ aviso honesto e trace)
+    const parts: string[] = []; // content de cada rodada — costurado por stitchHarmonyParts no fim
     const usage = { inputTokens: 0, outputTokens: 0 }; // usage REAL da geração (chunks do provider)
     try {
       const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
@@ -536,28 +550,57 @@ export class Controller {
       const headers = this.buildTraceHeaders([], sr.modelId, sr.type, sr.reasoningEffort, "charter");
       let truncated = false;
       let reasoning = "";
-      for await (const chunk of provider.createMessage(buildCharterSystemPrompt(section), [{ role: "user", content: userMsg }], {
-        timeoutMs: runtime.timeoutSeconds * 1000,
-        extraHeaders: headers,
-      })) {
-        if (chunk.kind === "text") text += chunk.text;
-        else if (chunk.kind === "reasoning") reasoning += chunk.text; // p/ resgate se o content vier vazio
-        else if (chunk.kind === "usage") {
-          usage.inputTokens += chunk.inputTokens;
-          usage.outputTokens += chunk.outputTokens;
-        } else if (chunk.kind === "warning") truncated = true; // finish_reason=length: seção cortada
-        else if (chunk.kind === "error") {
-          error = chunk.message;
-          break;
+      // Corte por limite de tokens (finish_reason=length) COM conteúdo parcial → o FORGE continua
+      // SOZINHO: reenvia a conversa com o parcial como turno do assistente + "siga do ponto exato",
+      // até 2 rodadas. Só se AINDA assim cortar é que o aviso ancorado na seção aparece (o dev não
+      // deveria ter que clicar "Redigir" de novo por um corte que o host sabe detectar e emendar).
+      const MAX_CONTINUATION_ROUNDS = 2;
+      const messages: ChatMessage[] = [{ role: "user", content: userMsg }];
+      for (let round = 0; ; round++) {
+        let roundText = "";
+        let roundTruncated = false;
+        for await (const chunk of provider.createMessage(buildCharterSystemPrompt(section), messages, {
+          timeoutMs: runtime.timeoutSeconds * 1000,
+          extraHeaders: headers,
+        })) {
+          if (chunk.kind === "text") roundText += chunk.text;
+          else if (chunk.kind === "reasoning") reasoning += chunk.text; // p/ resgate se o content vier vazio
+          else if (chunk.kind === "usage") {
+            usage.inputTokens += chunk.inputTokens;
+            usage.outputTokens += chunk.outputTokens;
+          } else if (chunk.kind === "warning") roundTruncated = true; // finish_reason=length: seção cortada
+          else if (chunk.kind === "error") {
+            error = chunk.message;
+            break;
+          }
         }
+        if (roundText) parts.push(roundText);
+        text += roundText;
+        // Rodada SEM conteúdo novo não dá baixa no truncamento anterior: o gateway pode rotear a
+        // continuação inteira para reasoning_content e fechar com finish=stop — a seção segue
+        // cortada e o aviso PRECISA sair (entregar corte silencioso é a falha proibida abaixo).
+        if (roundText.trim() || roundTruncated) truncated = roundTruncated;
+        // Continua SÓ com corte confirmado E conteúdo novo nesta rodada — sem conteúdo novo, repetir
+        // daria o mesmo resultado (ex.: o raciocínio devorou o max_tokens inteiro e nada saiu).
+        // Corte SEM finish_reason=length (gateway fechando "stop" no meio, o caso do blueprint) não é
+        // detectável em texto livre — sem âncora estrutural como o JSON — e fica fora desta emenda.
+        if (error || !truncated || !roundText.trim() || round >= MAX_CONTINUATION_ROUNDS) break;
+        continuationRounds++;
+        log.info("charter: seção cortada no limite de tokens — continuando de onde parou", { section, round: round + 1 });
+        messages.push({ role: "assistant", content: roundText }, { role: "user", content: buildCharterContinuationPrompt(label) });
       }
-      if (error) this.post({ type: "charter/error", section, message: error });
+      // Erro SEM continuação em curso → erro seco, como antes (charter/error preserva o rascunho do
+      // dev; um parcial curto de rodada única pode ser pior que o rascunho que ele apagaria). Erro
+      // NUMA RODADA DE CONTINUAÇÃO (timeout/429 na emenda) com parcial em mãos → entrega o parcial
+      // com aviso: antes do loop o mesmo truncamento entregava o parcial; a emenda não pode regredir
+      // isso para um erro que descarta o texto já gerado.
+      if (error && !(continuationRounds > 0 && parts.some((p) => p.trim()))) this.post({ type: "charter/error", section, message: error });
       else {
-        // stripHarmony: remove o raciocínio/canal de análise que o gpt-oss pode vazar no content
-        // (ex.: "Now final output is markdown string. Proceed.") antes de cair no campo do wizard.
+        // stitchHarmonyParts: costura as rodadas saneando o vazamento harmony POR RODADA (stripHarmony
+        // no concatenado descartaria rodadas anteriores se cada uma vazasse seu próprio marcador).
         // Content vazio → resgate CONSERVADOR do canal de raciocínio: só se o marcador do canal final
         // existir lá (o gateway roteou a resposta inteira p/ reasoning_content); raciocínio bruto NUNCA.
-        let clean = stripHarmony(text);
+        let clean = stitchHarmonyParts(parts);
         if (!clean.trim() && reasoning.trim()) {
           clean = extractFinalChannel(reasoning) ?? "";
           if (clean) log.info("charter: seção recuperada do canal de raciocínio (content vazio)");
@@ -575,30 +618,62 @@ export class Controller {
           this.post({
             type: "charter/error",
             section,
-            message: truncated
-              ? "O modelo atingiu o limite de tokens antes de redigir a seção. Tente de novo; se persistir, aumente forge.provider.maxOutput."
-              : "O modelo não retornou conteúdo para a seção. Tente de novo (detalhes no painel Output → FORGE).",
+            message:
+              error ??
+              (truncated
+                ? "O modelo atingiu o limite de tokens antes de redigir a seção. Tente de novo; se persistir, aumente forge.provider.maxOutput."
+                : "O modelo não retornou conteúdo para a seção. Tente de novo (detalhes no painel Output → FORGE)."),
           });
         } else {
           delivered = clean; // o trace obs reflete o que o dev recebeu (inclusive resgatado do raciocínio)
           // NUNCA salvar seção cortada silenciosamente (aconteceu num project.md real: frases terminando
           // no meio da palavra). O aviso vai ancorado NA SEÇÃO, dentro do modal — um toast ficaria
-          // atrás do backdrop do wizard e sumiria em 5s sem ser visto.
+          // atrás do backdrop do wizard e sumiria em 5s sem ser visto. A redação do aviso é HONESTA:
+          // só afirma que houve continuação automática quando ela de fato rodou.
           this.post({
             type: "charter/drafted",
             section,
             text: clean,
-            warning: truncated
-              ? "A seção foi truncada no limite de tokens — o final pode estar faltando. Revise antes de salvar (ou redija de novo)."
-              : undefined,
+            warning: error
+              ? `A redação foi interrompida por um erro antes de terminar (${error}) — o final pode estar faltando. Revise antes de salvar (ou redija de novo).`
+              : truncated
+                ? continuationRounds > 0
+                  ? "A seção seguiu cortada mesmo após o FORGE continuar a redação automaticamente — o final pode estar faltando. Revise antes de salvar (ou redija de novo)."
+                  : "A seção foi truncada no limite de tokens — o final pode estar faltando. Revise antes de salvar (ou redija de novo)."
+                : undefined,
           });
         }
       }
     } catch (e) {
       error = (e as Error)?.message ?? String(e);
-      this.post({ type: "charter/error", section, message: error });
+      // Exceção lançada (ex.: 429/5xx do provider) NUMA RODADA DE CONTINUAÇÃO com parcial em mãos:
+      // mesmo tratamento do erro em stream — entrega o parcial com aviso em vez de descartar.
+      const partial = continuationRounds > 0 ? stitchHarmonyParts(parts) : "";
+      if (partial.trim()) {
+        delivered = partial;
+        this.post({
+          type: "charter/drafted",
+          section,
+          text: partial,
+          warning: `A redação foi interrompida por um erro antes de terminar (${error}) — o final pode estar faltando. Revise antes de salvar (ou redija de novo).`,
+        });
+      } else {
+        this.post({ type: "charter/error", section, message: error });
+      }
     } finally {
-      const end: ObsEvent = { type: "generation.end", taskId, durationMs: Date.now() - started, model: runtime.modelId, input: userMsg, output: delivered || text, usage, proposals: 0, error };
+      const end: ObsEvent = {
+        type: "generation.end",
+        taskId,
+        durationMs: Date.now() - started,
+        model: runtime.modelId,
+        // O trace reflete as emendas: o usage soma TODAS as chamadas, então o input registra que
+        // houve continuação (sem duplicar o prompt inteiro por rodada).
+        input: continuationRounds > 0 ? `${userMsg}\n\n[FORGE: +${continuationRounds} continuação(ões) automática(s) após corte por limite de tokens]` : userMsg,
+        output: delivered || text,
+        usage,
+        proposals: 0,
+        error,
+      };
       this.trackUsage(end); // charter também consome tokens — /contexto precisa contabilizar
       this.obs.record(end);
     }
@@ -1339,7 +1414,7 @@ export class Controller {
         await this.openCharter();
         break;
       case "charter/draft":
-        await this.draftCharterSection(msg.section, msg.brief);
+        await this.draftCharterSection(msg.section, msg.brief, msg.sections);
         break;
       case "charter/save":
         await this.saveCharter(msg.sections);

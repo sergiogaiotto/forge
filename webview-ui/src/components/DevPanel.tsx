@@ -1043,7 +1043,9 @@ function CharterWizard({
                       className="btn"
                       disabled={drafting}
                       title="Redigir/estruturar esta seção com o modelo, a partir do que você escreveu"
-                      onClick={() => post({ type: "charter/draft", section: sec.key, brief: charter.sections[sec.key] })}
+                      // sections: o estado ATUAL do wizard (inclui o não salvo) — um Propósito recém-
+                      // digitado ancora a redação de Regras/RF/RNF vazios sem exigir "Salvar" antes.
+                      onClick={() => post({ type: "charter/draft", section: sec.key, brief: charter.sections[sec.key], sections: charter.sections })}
                     >
                       <Icon name={drafting ? "refresh" : "sparkles"} size={12} className={drafting ? "spin" : ""} />{" "}
                       {drafting ? "redigindo…" : "Redigir com IA"}

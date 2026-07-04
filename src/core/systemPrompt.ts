@@ -363,7 +363,27 @@ export function buildCharterSystemPrompt(section: CharterKey): string {
     "  confirmação ('claro', 'aqui está') nem comentários sobre a tarefa.",
     "- Seja conciso, específico e coerente com o contexto do projeto fornecido pelo dev.",
     "- Aproveite o rascunho do dev quando houver: melhore/estruture, não ignore.",
+    // Campos Regras/RF/RNF vazios: o escopo vem do Propósito (a seção já preenchida que define o que
+    // o sistema faz) — sem esta âncora o modelo redige requisitos genéricos de "um sistema qualquer".
+    ...(section === "purpose"
+      ? []
+      : [
+          "- Rascunho do dev VAZIO: derive a seção do PROPÓSITO do projeto quando ele estiver no contexto",
+          "  (o propósito define o escopo); sem propósito no contexto, proponha do zero coerente com o resto.",
+        ]),
   ].join("\n");
+}
+
+// Continuação de uma seção do CHARTER cortada por limite de tokens (finish_reason=length): pede o
+// RESTANTE do texto, retomando no caractere exato do corte. Mesma família de buildContinuationPrompt
+// (arquivos), mas para texto puro de seção — sem cercas/blocos.
+export function buildCharterContinuationPrompt(label: string): string {
+  return `Sua resposta anterior foi CORTADA por limite de tokens ANTES de terminar a seção "${label}".
+CONTINUE EXATAMENTE do ponto onde parou. Regras estritas:
+- NÃO repita nada do que já escreveu; recomece exatamente no próximo caractere que faltou.
+- Responda APENAS com a continuação do texto da seção. NADA de saudação, confirmação ("ok", "claro")
+  nem comentário sobre a tarefa. O PRIMEIRO caractere da sua resposta já é a continuação.
+- Termine a seção por completo.`;
 }
 
 // /resumir: compacta o histórico da conversa num sumário técnico que substitui os turnos no host.

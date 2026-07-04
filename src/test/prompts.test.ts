@@ -5,6 +5,7 @@ import {
   buildBasePrompt,
   buildBlueprintRetryRequest,
   buildBlueprintSystemPrompt,
+  buildCharterContinuationPrompt,
   buildCharterSystemPrompt,
   buildContinuationPrompt,
   buildProjectFromBlueprintPrompt,
@@ -202,6 +203,23 @@ test("buildCharterSystemPrompt: cada seção pede o conteúdo certo, em pt-BR e 
   const rules = buildCharterSystemPrompt("rules");
   assert.match(rules, /REGRAS/i);
   assert.match(rules, /sempre|nunca|prefira/i);
+});
+
+// Regras/RF/RNF com rascunho vazio: o escopo vem do PROPÓSITO já preenchido — sem a âncora, o modelo
+// redige requisitos genéricos de "um sistema qualquer". O Propósito em si não tem a âncora (é a fonte).
+test("buildCharterSystemPrompt: seções ancoram no Propósito quando o rascunho está vazio", () => {
+  for (const key of ["rules", "fr", "nfr"] as const) {
+    assert.match(buildCharterSystemPrompt(key), /VAZIO: derive a seção do PROPÓSITO/i);
+  }
+  assert.ok(!buildCharterSystemPrompt("purpose").includes("derive a seção do PROPÓSITO"));
+});
+
+test("buildCharterContinuationPrompt: retoma no ponto exato, sem repetir nem comentar", () => {
+  const p = buildCharterContinuationPrompt("Propósito");
+  assert.match(p, /CORTADA por limite de tokens/);
+  assert.match(p, /"Propósito"/);
+  assert.match(p, /NÃO repita/);
+  assert.match(p, /pr[óo]ximo caractere/i);
 });
 
 test("buildTailContinuation: manda emitir o restante dos arquivos, sem repetir nem reabrir bloco", () => {
