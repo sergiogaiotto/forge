@@ -3,6 +3,21 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.1.4] — 2026-07-04
+
+### Fixed
+- **Charter truncado no "Redigir com IA"** (caso do print: Propósito entregue cortado): o FORGE agora
+  **continua a redação automaticamente** quando o provedor corta por limite de tokens (até 2 emendas,
+  com costura que saneia o vazamento harmony por rodada, preserva o ponto exato do corte e remove
+  repetição do modelo). O aviso ancorado na seção vira último recurso — e ficou honesto: só menciona
+  a continuação automática quando ela de fato rodou. Um erro no meio da emenda entrega o parcial com
+  aviso em vez de descartar o texto já gerado.
+
+### Changed
+- **Campos vazios do Charter derivam do Propósito**: "Redigir com IA" em Regras/Requisitos com o campo
+  vazio usa o **Propósito como escopo** — e o wizard passa a enviar as seções como estão na tela
+  (inclusive texto ainda não salvo) como contexto da redação.
+
 ## [2.1.3] — 2026-07-03
 
 ### Fixed
