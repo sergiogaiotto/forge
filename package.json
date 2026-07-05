@@ -131,6 +131,12 @@
         "command": "forge.setupObservability",
         "title": "Configurar observabilidade (Langfuse)",
         "category": "FORGE"
+      },
+      {
+        "command": "forge.setMaxOutput",
+        "title": "Definir máximo de tokens de saída",
+        "category": "FORGE",
+        "icon": "$(symbol-numeric)"
       }
     ],
     "menus": {

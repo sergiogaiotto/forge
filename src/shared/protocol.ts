@@ -66,6 +66,15 @@ export function supportsReasoningEffort(type: ProviderType | undefined, modelId:
   return type === "openai-compatible" && /gpt-oss/i.test(modelId ?? "");
 }
 
+// Presets do teto de tokens de SAÍDA por sessão (seletor no rodapé + comando de paleta). 0 = "auto"
+// (usa o catálogo do modelo / config do admin). Os valores altos são generosos ("tokens não é
+// problema"); o host os REBAIXA automaticamente à janela realmente servida pelo gateway (sem risco de
+// 400) — ver Controller.resolveOutputTokens. A ordem define o ciclo do seletor.
+export const MAX_OUTPUT_PRESETS: number[] = [0, 16384, 32768, 65536, 131072];
+export function maxOutputLabel(v: number | undefined): string {
+  return !v || v <= 0 ? "auto" : `${Math.round(v / 1024)}k`;
+}
+
 // Os modelos de RACIOCÍNIO da OpenAI (o-series, gpt-5) REJEITAM temperature != 1 com 400
 // ("Unsupported value: 'temperature' does not support 0 with this model") — não enviar o campo a
 // eles. Gateways OpenAI-compatíveis (HubGPU/vLLM/Ollama) e a Anthropic aceitam temperature 0.
@@ -115,6 +124,7 @@ export interface ProviderView {
   label?: string;
   reasoningEffort?: ReasoningEffort;
   supportsReasoningEffort?: boolean; // true só para provedores OpenAI-compatíveis (gpt-oss)
+  maxOutput?: number; // teto de saída escolhido por sessão (0/ausente = auto/catálogo)
 }
 
 export interface LicenseView {
@@ -358,6 +368,7 @@ export type WebviewToExt =
   | { type: "provider/setup"; setup: ProviderSetup }
   | { type: "provider/test"; setup: ProviderSetup }
   | { type: "provider/setEffort"; effort: ReasoningEffort }
+  | { type: "provider/setMaxOutput"; maxTokens: number }
   | { type: "provider/openSettings" }
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }

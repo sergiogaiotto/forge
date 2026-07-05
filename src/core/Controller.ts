@@ -23,7 +23,7 @@ import { ContextAssembler } from "../skills/ContextAssembler";
 import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
-import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
@@ -39,6 +39,8 @@ import {
   CHARTER_KEYS,
   CharterSections,
   DEFAULT_REASONING_EFFORT,
+  MAX_OUTPUT_PRESETS,
+  maxOutputLabel,
   ProjectBlueprintView,
   ProjectFileStatus,
   effectiveTimeoutSeconds,
@@ -78,6 +80,9 @@ import { RunService } from "./RunService";
 import { Task } from "./Task";
 
 const GS_PROVIDER = "forge.provider";
+// Reserva de entrada ao clampar o teto de saída contra a janela servida — margem para o prompt caber
+// junto com a saída (best-effort; o fail-soft de 400 do provider cobre o residual).
+const OUTPUT_INPUT_RESERVE = 4096;
 const GS_LICENSE_META = "forge.license.meta";
 const GS_IDENTITY_EMAIL = "forge.identity.email";
 const WS_DISABLED_SKILLS = "forge.skills.disabled";
@@ -90,6 +95,7 @@ interface ProviderPersisted {
   timeoutSeconds: number;
   label?: string;
   reasoningEffort?: ReasoningEffort;
+  maxOutput?: number; // teto de saída escolhido por sessão (seletor/paleta); 0/ausente = auto/catálogo
 }
 
 export class Controller {
@@ -1253,6 +1259,7 @@ export class Controller {
       label: p.label ?? `${p.type} · ${p.modelId}`,
       reasoningEffort: effort,
       supportsReasoningEffort: supports,
+      maxOutput: p.maxOutput ?? 0,
     };
   }
 
@@ -1281,6 +1288,9 @@ export class Controller {
         break;
       case "provider/setEffort":
         await this.setReasoningEffort(msg.effort);
+        break;
+      case "provider/setMaxOutput":
+        await this.setMaxOutput(msg.maxTokens);
         break;
       case "provider/openSettings":
         void vscode.commands.executeCommand("workbench.action.openSettings", "forge");
@@ -1519,6 +1529,9 @@ export class Controller {
       label: `${setup.type === "openai-compatible" ? "HubGPU/compat" : setup.type} · ${setup.modelId}`,
       // preserva o esforço já escolhido pelo usuário num re-setup; senão usa o default.
       reasoningEffort: setup.reasoningEffort ?? existing?.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+      // idem para o teto de saída do seletor: um re-setup (trocar baseUrl/re-salvar) não pode APAGAR a
+      // escolha do usuário. Só é resetado quando o MODELO muda (outro modelo pode ter janela diferente).
+      maxOutput: setup.modelId === existing?.modelId ? existing?.maxOutput : undefined,
     };
     await this.context.globalState.update(GS_PROVIDER, persisted);
     this.post({ type: "notice", level: "info", message: "Provedor configurado." });
@@ -1534,6 +1547,48 @@ export class Controller {
     await this.postState();
   }
 
+  // Troca o teto de tokens de SAÍDA por sessão (seletor do rodapé). 0 = auto (catálogo/config). O valor
+  // é validado (>=0) e persistido; a próxima geração o resolve com precedência sessão > config > catálogo
+  // e clamp contra a janela servida (resolveOutputTokens) — sem risco de 400 por valor alto demais.
+  async setMaxOutput(maxTokens: number): Promise<void> {
+    const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
+    if (!p) return;
+    const v = Number.isFinite(maxTokens) && maxTokens > 0 ? Math.floor(maxTokens) : 0;
+    await this.context.globalState.update(GS_PROVIDER, { ...p, maxOutput: v });
+    await this.postState();
+  }
+
+  // Comando de paleta "FORGE: definir máximo de tokens de saída": QuickPick com os presets.
+  async pickMaxOutput(): Promise<void> {
+    const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
+    if (!p) {
+      this.post({ type: "notice", level: "warn", message: "Configure um provedor antes de definir o máximo de tokens de saída." });
+      return;
+    }
+    const current = p.maxOutput ?? 0;
+    const items = MAX_OUTPUT_PRESETS.map((v) => ({
+      label: v === 0 ? "auto (catálogo do modelo)" : `${maxOutputLabel(v)} tokens`,
+      description: v === current ? "atual" : v === 0 ? "usa o teto do catálogo / config do admin" : "rebaixado à janela servida se necessário",
+      value: v,
+    }));
+    const pick = await vscode.window.showQuickPick(items, { title: "Máximo de tokens de saída (por sessão)", placeHolder: "Escolha o teto de saída — valores altos são rebaixados ao que o gateway serve" });
+    if (pick) await this.setMaxOutput(pick.value);
+  }
+
+  // Teto de saída efetivo: precedência sessão > config admin > catálogo, com CLAMP contra a janela
+  // SERVIDA (forge.provider.maxContextWindow || catálogo) menos uma reserva de entrada — evita o footgun
+  // de um valor alto que o gateway recusaria com 400 (é rebaixado automaticamente). O 400 residual (raro)
+  // segue coberto pelo fail-soft de hintFor400 no provider.
+  // `sessionMaxOutput`: o teto por-sessão do PROVIDER EM QUESTÃO (0 = sem escolha). Recebido explícito,
+  // não lido do globalState — no "Testar conexão" o setup pode ser um provider/modelo DIFERENTE do
+  // persistido, e herdar a sessão do provider antigo testaria um teto que o modelo em teste nunca usaria.
+  private resolveOutputTokens(type: ProviderRuntimeConfig["type"], modelId: string, sessionMaxOutput: number): number {
+    const meta = getModelMeta(type, modelId);
+    const cfg = this.config.provider();
+    const requested = sessionMaxOutput > 0 ? sessionMaxOutput : cfg.maxOutput; // sessão vence a config do admin
+    return clampOutputToServed(resolveMaxOutput(requested, meta), meta, cfg.maxContextWindow, OUTPUT_INPUT_RESERVE);
+  }
+
   private async runtimeProviderConfig(): Promise<ProviderRuntimeConfig | undefined> {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     if (!p) return undefined;
@@ -1541,7 +1596,7 @@ export class Controller {
     // Teto de saída REAL do modelo (catálogo), sobrescrevível por config. Sem isto, toda geração caía
     // no DEFAULT_MAX_TOKENS fixo (16384), ignorando a janela de 128k do gpt-oss-120b.
     const meta = getModelMeta(p.type, p.modelId);
-    const maxTokens = resolveMaxOutput(this.config.provider().maxOutput, meta);
+    const maxTokens = this.resolveOutputTokens(p.type, p.modelId, p.maxOutput ?? 0);
     if (!meta.supportsReasoningEffort) {
       // Provedores sem esforço (Anthropic/OpenAI/Llama): preserva o timeout do onboarding e não
       // envia reasoning_effort.
@@ -1575,10 +1630,10 @@ export class Controller {
       authHeader: setup.authHeader,
       apiKey: setup.apiKey || "not-needed",
       timeoutSeconds: Math.min(setup.timeoutSeconds || 30, 30),
-      // Envia o teto REAL do catálogo (não um valor mínimo): assim, se o gateway recusar esse max_tokens
-      // por exceder o --max-model-len servido, o 400 aparece já no "Testar conexão", não na 1ª geração.
-      // O prompt "responda apenas ok" faz o modelo parar cedo, então não gera o teto inteiro.
-      maxTokens: resolveMaxOutput(this.config.provider().maxOutput, getModelMeta(setup.type, setup.modelId)),
+      // Envia o teto EFETIVO com clamp (config + janela servida). Passa sessão=0: o teto por-sessão é do
+      // provider já configurado, não do que está sendo TESTADO (que pode ser outro modelo/janela). Assim
+      // um 400 por max_tokens excedendo o --max-model-len aparece já no "Testar conexão", fielmente.
+      maxTokens: this.resolveOutputTokens(setup.type, setup.modelId, 0),
       // Exercita o MESMO corpo da geração real: se o gateway recusar reasoning_effort, o erro aparece
       // já no "Testar conexão", não silenciosamente na primeira geração.
       reasoningEffort: supportsReasoningEffort(setup.type, setup.modelId)

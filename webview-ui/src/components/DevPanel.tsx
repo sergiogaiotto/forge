@@ -21,7 +21,7 @@ import { classifyProjectIntent } from "../../../src/util/projectIntent";
 import { buildDiagramRequest, buildProjectSummaryRequest, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashWithArgs, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
-import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
+import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, MAX_OUTPUT_PRESETS, maxOutputLabel, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
 
 const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "baixo", medium: "médio", high: "alto" };
 const PROJ_LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript", java: "Java", go: "Go" };
@@ -648,6 +648,20 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             }}
           >
             <Icon name="cpu" size={13} /> esforço: {EFFORT_LABEL[forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT]}
+          </button>
+        )}
+        {forge.provider.configured && (
+          <button
+            className="sb-item sb-btn"
+            title="Máximo de tokens de saída — clique para alternar (auto → 16k → 32k → 64k → 128k). Valores altos são rebaixados automaticamente ao que o gateway serve (sem erro)."
+            onClick={() => {
+              const cur = forge.provider.maxOutput ?? 0;
+              const idx = MAX_OUTPUT_PRESETS.indexOf(cur);
+              const next = MAX_OUTPUT_PRESETS[(idx < 0 ? 0 : idx + 1) % MAX_OUTPUT_PRESETS.length];
+              post({ type: "provider/setMaxOutput", maxTokens: next });
+            }}
+          >
+            <Icon name="activity" size={13} /> saída: {maxOutputLabel(forge.provider.maxOutput)}
           </button>
         )}
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
