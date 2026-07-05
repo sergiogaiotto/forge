@@ -137,6 +137,30 @@
         "title": "Definir máximo de tokens de saída",
         "category": "FORGE",
         "icon": "$(symbol-numeric)"
+      },
+      {
+        "command": "forge.prepareEnv",
+        "title": "Preparar ambiente (venv + dependências)",
+        "category": "FORGE",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "forge.pickRole",
+        "title": "Definir papel no projeto",
+        "category": "FORGE",
+        "icon": "$(person)"
+      },
+      {
+        "command": "forge.inspectIndex",
+        "title": "Inspecionar índice (skills + RAG)",
+        "category": "FORGE",
+        "icon": "$(database)"
+      },
+      {
+        "command": "forge.openProfile",
+        "title": "Abrir perfil do projeto",
+        "category": "FORGE",
+        "icon": "$(list-tree)"
       }
     ],
     "menus": {

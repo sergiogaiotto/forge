@@ -231,6 +231,11 @@ export interface ForgeState {
   presets: ProviderPreset[];
   telemetryEnabled: boolean;
   version: string;
+  // Pedido ONE-SHOT de abrir um modal do webview (Índice/Perfil) via comando de paleta. Vai no ESTADO
+  // (não numa mensagem fire-and-forget) para sobreviver à corrida de montagem: o webview o recebe no
+  // handshake ready→postState mesmo no cold start / fim do onboarding. O `seq` monotônico + um ref no
+  // webview garantem abertura ÚNICA; o host limpa via `ui/panelConsumed` (sem reabrir em remount).
+  uiPanel?: { panel: "inspect" | "profile"; seq: number };
 }
 
 export type ValidatorStatus = "ok" | "failed" | "skipped";
@@ -401,6 +406,9 @@ export type WebviewToExt =
   | { type: "charter/save"; sections: CharterSections }
   | { type: "charter/genTests"; fr: string; nfr: string }
   | { type: "inspect/open" }
+  // O webview abriu o modal pedido por um comando de paleta (state.uiPanel) — o host limpa o pedido
+  // para não reabrir num remount futuro.
+  | { type: "ui/panelConsumed" }
   | { type: "skills/body"; name: string }
   | { type: "rag/file"; relPath: string }
   | { type: "run/file"; filePath: string; proposalId?: string }
