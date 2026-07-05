@@ -17,6 +17,23 @@ test("normGatePath: separadores pra frente, sem ./ inicial nem / final", () => {
   assert.equal(normGatePath(".\\adapters\\api.py"), "adapters/api.py");
   assert.equal(normGatePath("src/"), "src");
   assert.equal(normGatePath(""), "");
+  // REGRESSÃO (saída REAL do compileall no Windows): repr() DOBRA as barras invertidas — o colapso
+  // de `//` é o que faz o arquivo com erro casar a proposta e ser bloqueado.
+  assert.equal(normGatePath(".\\\\adapters\\\\syntax_bad.py"), "adapters/syntax_bad.py");
+});
+
+test("parseCompileallErrors: saída REAL do compileall -q no Windows (barras dobradas por repr) casa o arquivo", () => {
+  // Copiado verbatim da execução real: `python -m compileall -q .` (Python 3.11, Windows).
+  const real = [
+    "*** Error compiling '.\\\\adapters\\\\syntax_bad.py'...",
+    '  File ".\\adapters\\syntax_bad.py", line 1',
+    "    def broken(:",
+    "               ^",
+    "SyntaxError: invalid syntax",
+  ].join("\n");
+  const map = parseCompileallErrors(real, "");
+  assert.deepEqual([...map.keys()], ["adapters/syntax_bad.py"]);
+  assert.match(map.get("adapters/syntax_bad.py")!.join("\n"), /SyntaxError: invalid syntax/);
 });
 
 test("syntheticInitDirs: todo ancestral de um .py vira pacote; raiz e não-.py não", () => {
@@ -32,6 +49,19 @@ test("syntheticInitDirs: pula diretório que JÁ tem __init__.py entre as propos
 test("syntheticInitDirs: sobe TODA a cadeia de ancestrais e deduplica", () => {
   assert.deepEqual(syntheticInitDirs(["a/b/c/d.py"]), ["a", "a/b", "a/b/c"]);
   assert.deepEqual(syntheticInitDirs(["top.py"]), []); // sem diretório → nenhum pacote
+});
+
+// REGRESSÃO (revisão adversarial, reproduzida com mypy 2.1.0): um __init__.py sintético num diretório
+// de nome NÃO-identificador faz o mypy ABORTAR (exit 2) e mascarar o drift real. Nomes com hífen/ponto/
+// dígito inicial NÃO podem virar pacote — o gate não deve semeá-los.
+test("syntheticInitDirs: NÃO semeia diretório com nome inválido de pacote Python", () => {
+  assert.deepEqual(syntheticInitDirs(["my-app/core.py"]), []); // 'my-app' tem hífen → inválido
+  assert.deepEqual(syntheticInitDirs(["2fa/x.py"]), []); // começa com dígito → inválido
+  assert.deepEqual(syntheticInitDirs(["order.service/x.py"]), []); // ponto → inválido
+  // pacote válido ao lado de um inválido: só o válido é semeado (o drift dele fica verificável)
+  assert.deepEqual(syntheticInitDirs(["my-app/main.py", "core/models.py", "core/service.py"]), ["core"]);
+  // subpacote sob um ancestral inválido também é barrado (o caminho do módulo seria inválido)
+  assert.deepEqual(syntheticInitDirs(["my-app/core/models.py"]), []);
 });
 
 test("parseCompileallErrors: ancora no arquivo e agrega o traceback do SyntaxError", () => {
@@ -96,12 +126,13 @@ test("summarizeGate: compileall ok + mypy reprovou com erro por-arquivo → bloq
   assert.match(s.summary, /reprovou/i);
 });
 
-test("summarizeGate: reprovação de gate SEM arquivo atribuível → projectErrors (bloqueio amplo)", () => {
+test("summarizeGate: reprovação de gate SEM arquivo atribuível → projectErrors (aviso, NÃO bloqueia)", () => {
   const s = summarizeGate([check(res("compileall", "failed", "erro sem path reconhecível"))]);
   assert.equal(s.advisory, false);
-  assert.deepEqual(s.fileErrors, []);
+  assert.deepEqual(s.fileErrors, []); // nada atribuído → nada bloqueado
   assert.equal(s.projectErrors.length, 1);
   assert.match(s.projectErrors[0], /compileall/);
+  assert.match(s.summary, /não consegui localizar|nada foi bloqueado/i);
 });
 
 test("summarizeGate: compileall ok + mypy ok → verde (compila e importa)", () => {

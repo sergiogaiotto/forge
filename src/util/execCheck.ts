@@ -12,7 +12,7 @@
 import { exec, execFile } from "node:child_process";
 import { ValidatorResult } from "../shared/protocol";
 
-const OUTPUT_CAP = 4000;
+const DEFAULT_OUTPUT_CAP = 4000;
 
 export interface CheckSpec {
   id: string;
@@ -21,12 +21,15 @@ export interface CheckSpec {
 }
 
 // Mapeia o resultado bruto de um processo (err/stdout/stderr) para um ValidatorResult normalizado.
-// Sem I/O — testável diretamente com um `err` sintético.
+// Sem I/O — testável diretamente com um `err` sintético. `outputCap` limita a saída guardada: o padrão
+// (4000) serve à SkillValidator; o gate do projeto pede um teto maior para não truncar a atribuição
+// por-arquivo quando MUITOS arquivos falham (perder atribuição só SUB-bloquearia — nunca falso-bloqueia).
 export function classifyCheck(
   spec: CheckSpec,
   err: (Error & { code?: string | number | null; killed?: boolean; signal?: string | null }) | null,
   stdout: string,
-  stderr: string
+  stderr: string,
+  outputCap = DEFAULT_OUTPUT_CAP
 ): ValidatorResult {
   const output = `${stdout ?? ""}${stderr ?? ""}`.trim();
   if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -35,10 +38,10 @@ export function classifyCheck(
   // Timeout: o processo foi morto antes de terminar (execFile/exec com { timeout }). O veredito é
   // desconhecido — advisory, não reprova. `killed` é o sinal confiável; `signal` cobre o resto.
   if (err && (err.killed === true || (typeof err.signal === "string" && err.signal))) {
-    return { id: spec.id, label: spec.label, status: "skipped", gate: spec.gate, output: output.slice(0, OUTPUT_CAP), reason: "tempo esgotado (inconclusivo)" };
+    return { id: spec.id, label: spec.label, status: "skipped", gate: spec.gate, output: output.slice(0, outputCap), reason: "tempo esgotado (inconclusivo)" };
   }
   const failed = !!err;
-  return { id: spec.id, label: spec.label, status: failed ? "failed" : "ok", gate: spec.gate, output: output.slice(0, OUTPUT_CAP) };
+  return { id: spec.id, label: spec.label, status: failed ? "failed" : "ok", gate: spec.gate, output: output.slice(0, outputCap) };
 }
 
 // Runner via SHELL (cmd.exe / sh -c): a skill descreve o comando com `{file}` já substituído. Mantém o
@@ -57,11 +60,11 @@ export function runFileCheck(
   spec: CheckSpec,
   file: string,
   args: string[],
-  opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv }
+  opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv; outputCap?: number }
 ): Promise<ValidatorResult> {
   return new Promise((resolve) => {
     execFile(file, args, { cwd: opts.cwd, timeout: opts.timeoutMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: opts.env }, (err, stdout, stderr) =>
-      resolve(classifyCheck(spec, err, stdout, stderr))
+      resolve(classifyCheck(spec, err, stdout, stderr, opts.outputCap))
     );
   });
 }

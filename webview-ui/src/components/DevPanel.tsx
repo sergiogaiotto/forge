@@ -713,12 +713,13 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
   const bp = proj.blueprint;
   const files: BlueprintFileView[] = bp?.files ?? [];
   const anyComplete = files.some((f) => f.status === "complete");
-  // Gate workspace-wide: mapa path→erros para pintar os cartões reprovados (casa './x' com 'x').
+  // Gate workspace-wide: mapa path→erros para pintar os cartões reprovados (casa './x' com 'x'). Só os
+  // arquivos com erro ATRIBUÍDO são pintados como bloqueados; projectErrors (falha sem atribuição) é um
+  // aviso não-bloqueante mostrado no banner.
   const gate = proj.gate;
   const normPath = (p: string) => p.replace(/^[./\\]+/, "").replace(/\\/g, "/");
   const gateErrors = new Map<string, string[]>();
   for (const f of gate?.files ?? []) gateErrors.set(normPath(f.path), f.errors);
-  const gateBlockedAll = (gate?.projectErrors.length ?? 0) > 0;
   const close = () => dispatch({ kind: "project/close" });
   // Reenvia o mesmo pedido (brief retido) após uma falha do planejamento — sem redigitar.
   const retry = () => {
@@ -785,9 +786,9 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
               // Veredito do gate de compilação: verde (passou), consultivo (não pôde rodar) ou reprovado.
               <div
                 className="assistant-warning"
-                style={{ marginTop: 4, borderColor: gate.advisory ? undefined : gateErrors.size || gateBlockedAll ? "#d16969" : "#86c98e" }}
+                style={{ marginTop: 4, borderColor: gate.advisory ? undefined : gateErrors.size || gate.projectErrors.length ? "#d16969" : "#86c98e" }}
               >
-                <Icon name={gate.advisory ? "alert-triangle" : gateErrors.size || gateBlockedAll ? "alert-triangle" : "check"} size={14} /> {gate.summary}
+                <Icon name={gate.advisory || gateErrors.size || gate.projectErrors.length ? "alert-triangle" : "check"} size={14} /> {gate.summary}
                 {gate.projectErrors.map((e, i) => (
                   <div key={i} className="mono" style={{ marginTop: 4, fontSize: 11, color: "#d16969", whiteSpace: "pre-wrap" }}>
                     {e}
@@ -797,7 +798,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
             )}
             <div className="plan-list">
               {files.map((f) => {
-                const errs = gateErrors.get(normPath(f.path)) ?? (gateBlockedAll && f.path.toLowerCase().endsWith(".py") ? ["bloqueado pela falha ampla do gate"] : []);
+                const errs = gateErrors.get(normPath(f.path)) ?? [];
                 const blocked = errs.length > 0;
                 return (
                   <div

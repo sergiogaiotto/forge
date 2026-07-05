@@ -1932,10 +1932,11 @@ export class Controller {
 
       const py = await this.resolveGatePython();
       const timeoutMs = 120_000;
+      const outputCap = 32_000; // teto amplo: um projeto MUITO drifado emite muitos erros; não truncar a atribuição
       const checks: GateCheckResult[] = [];
 
       // compileall (stdlib, gate:true): pega erro de SINTAXE em qualquer arquivo do conjunto.
-      const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs });
+      const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs, outputCap });
       checks.push({ result: compile, errors: parseCompileallErrors(compile.output, root) });
 
       // mypy (gate:true quando instalado): pega o DRIFT de contrato (import/atributo fantasma) cross-file.
@@ -1945,19 +1946,24 @@ export class Controller {
         { id: "gate:mypy", label: "mypy", gate: true },
         py,
         ["-m", "mypy", "--ignore-missing-imports", "--no-error-summary", "--no-color-output", "--hide-error-context", "--no-pretty", "."],
-        { cwd: root, timeoutMs }
+        { cwd: root, timeoutMs, outputCap }
       );
       if (mypyUnavailable(mypy)) mypy = { ...mypy, status: "skipped", reason: "mypy não instalado (gate consultivo)" };
-      checks.push({ result: mypy, errors: mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map() });
+      const mypyErrors = mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map<string, string[]>();
+      // Defesa em profundidade: mypy que reprovou SEM nenhum erro `path:linha` atribuível não type-checou
+      // — ABORTOU (fatal/coleta, ex.: exit 2). Um type-check real sempre emite linhas atribuíveis. Tratar
+      // como consultivo (skipped) em vez de deixar passar mascarado: o resumo vira "parcial", não "verde".
+      if (mypy.status === "failed" && mypyErrors.size === 0) {
+        mypy = { ...mypy, status: "skipped", reason: "mypy não pôde analisar (abort/fatal) — gate consultivo" };
+      }
+      checks.push({ result: mypy, errors: mypyErrors });
 
       const gate = summarizeGate(checks);
-      // Propaga por-arquivo para gateOk: arquivo com erro atribuído fica bloqueado; falha AMPLA (sem
-      // arquivo) bloqueia todos os .py. Skipped/ok não bloqueiam (gateOk permanece true).
+      // Propaga por-arquivo para gateOk: só bloqueia arquivo com erro ATRIBUÍDO pela ferramenta.
+      // Skipped/ok e falha sem atribuição (projectErrors, anômala) NÃO bloqueiam — gateOk permanece true.
       const blocked = new Set(gate.fileErrors.map((f) => f.path));
-      const blockAllPy = gate.projectErrors.length > 0;
       for (const e of props) {
-        const np = normGatePath(e.proposal.filePath);
-        if (blocked.has(np) || (blockAllPy && np.toLowerCase().endsWith(".py"))) e.gateOk = false;
+        if (blocked.has(normGatePath(e.proposal.filePath))) e.gateOk = false;
       }
       this.post({ type: "project/gate", advisory: gate.advisory, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
       log.info(`Gate do projeto: ${gate.summary} (rodou: ${gate.ran.join(", ") || "nada"}; pulou: ${gate.skipped.join(", ") || "nada"})`);
