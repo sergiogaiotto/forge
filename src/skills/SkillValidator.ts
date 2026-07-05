@@ -1,8 +1,8 @@
-import { exec } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ValidatorResult } from "../shared/protocol";
+import { runShellCheck } from "../util/execCheck";
 import { log } from "../util/logger";
 import { SkillValidatorSpec } from "./types";
 
@@ -47,27 +47,13 @@ export class SkillValidator {
     return results;
   }
 
-  private runOne(v: SkillValidatorSpec, tmpFile: string, timeoutMs: number): Promise<ValidatorResult> {
+  private async runOne(v: SkillValidatorSpec, tmpFile: string, timeoutMs: number): Promise<ValidatorResult> {
+    // Reusa o runner compartilhado (mesmo mapeamento ENOENT→skipped / !=0→failed que o gate do Modo
+    // Projeto). O comando da skill traz `{file}` — substituído aqui pelo tmp que espelha a proposta.
     const command = v.command.replace(/\{file\}/g, quote(tmpFile));
-    return new Promise((resolve) => {
-      exec(command, { cwd: this.cwd, timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
-        const output = `${stdout ?? ""}${stderr ?? ""}`.trim();
-        if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-          resolve({ id: v.id, label: v.label, status: "skipped", gate: v.gate, output: "", reason: "ferramenta não disponível no PATH" });
-          return;
-        }
-        // Algumas ferramentas (ruff/mypy) saem com código diferente de zero ao encontrar problemas, sem ENOENT.
-        const failed = !!err;
-        if (failed) log.info(`Validador ${v.id} reprovou (${v.label}).`);
-        resolve({
-          id: v.id,
-          label: v.label,
-          status: failed ? "failed" : "ok",
-          gate: v.gate,
-          output: output.slice(0, 4000),
-        });
-      });
-    });
+    const result = await runShellCheck({ id: v.id, label: v.label, gate: v.gate }, command, { cwd: this.cwd, timeoutMs });
+    if (result.status === "failed") log.info(`Validador ${v.id} reprovou (${v.label}).`);
+    return result;
   }
 }
 

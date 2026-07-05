@@ -62,6 +62,15 @@ export class Task {
     string,
     { proposal: DiffProposal; results: ValidatorResult[]; gateOk: boolean; cellIndex?: number }
   >();
+  // Validações por-arquivo disparadas em run() (fire-and-forget, para não travar o streaming). O gate
+  // workspace-wide do Modo Projeto precisa AGUARDÁ-LAS antes de sobrescrever gateOk — senão uma validação
+  // advisory que resolve tarde reescreveria o veredito do gate de volta para true (corrida real).
+  private readonly pendingValidations: Promise<void>[] = [];
+
+  // Aguarda todas as validações por-arquivo em voo (usado pelo gate do projeto antes de decidir gateOk).
+  async settleValidations(): Promise<void> {
+    await Promise.allSettled(this.pendingValidations);
+  }
 
   constructor(private readonly deps: TaskDeps) {}
 
@@ -149,7 +158,7 @@ export class Task {
       this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
       d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
       d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: proposal.original ? "edição" : "novo", language: proposal.language });
-      void this.validateProposal(proposal);
+      this.pendingValidations.push(this.validateProposal(proposal));
     }
 
     // Edições de CÉLULA de notebook (.ipynb).

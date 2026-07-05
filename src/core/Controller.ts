@@ -24,7 +24,7 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
-import { mapImportsToPackages, mergeRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
+import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { ObsEvent } from "../obs/types";
@@ -62,14 +62,16 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
+import { GateCheckResult, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, summarizeGate, syntheticInitDirs } from "./projectGate";
+import { runFileCheck } from "../util/execCheck";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
 import { classifyProjectIntent } from "../util/projectIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
-import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, renderProfileBlock, setSection } from "../util/projectProfile";
+import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, PURPOSE_SECTION, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
 import { Role, resolveRole, roleGuidance, roleGuidanceLine, roleLabel, roleSkills, setRole, stripFrontmatter } from "../util/roleDefaults";
@@ -479,6 +481,18 @@ export class Controller {
     return Object.fromEntries(CHARTER_SECTIONS.map((s) => [s.key, getSection(doc, s.header)])) as CharterSections;
   }
 
+  // Contexto do WORKSPACE injetado nos prompts do Modo Projeto (blueprint + geração): o PROPÓSITO do
+  // charter (.forge/project.md) e as dependências fixadas do requirements.txt. Fecha os dois achados da
+  // auditoria — charter ignorado (saía o exemplo Pedido/Pagamento) e libs/versões alucinadas.
+  private async projectPromptContext(): Promise<ProjectPromptContext> {
+    const ws = this.workspaceRoot();
+    const [doc, reqs] = await Promise.all([
+      this.readCharterDoc(),
+      ws ? fs.readFile(path.join(ws, "requirements.txt"), "utf8").catch(() => "") : Promise.resolve(""),
+    ]);
+    return { purpose: getSection(doc, PURPOSE_SECTION), pinnedDeps: parsePinnedRequirements(reqs) };
+  }
+
   // Abre o wizard: manda ao webview o conteúdo atual de cada seção do charter.
   async openCharter(): Promise<void> {
     this.post({ type: "charter/state", sections: this.charterSectionsFrom(await this.readCharterDoc()) });
@@ -764,7 +778,9 @@ export class Controller {
     // Narração do planejamento (o modal mostra a etapa atual em vez de um spinner estático).
     this.post({ type: "project/planStep", label: "Analisando os requisitos e desenhando a arquitetura…" });
     const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
-    const system = buildBlueprintSystemPrompt(language, architecture, ui, framework);
+    // Injeta o charter (propósito) + deps fixadas já no PLANO: o blueprint precisa refletir o domínio
+    // real e as libs do workspace, não um exemplo canônico (achado da auditoria: charter ignorado).
+    const system = buildBlueprintSystemPrompt(language, architecture, ui, framework, await this.projectPromptContext());
     const brief = text.slice(0, 6000);
     const taskId = `project_plan_${this.sessionId}_${Date.now()}`;
     const started = Date.now();
@@ -1752,11 +1768,15 @@ export class Controller {
       this.pendingAttachments = [];
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
+    // Contexto do projeto (charter + deps fixadas) reforçado no prompt de GERAÇÃO, junto da lista de
+    // arquivos — mesmo já indo via projectProfile, hammerar propósito/deps aqui reduz o drift (a auditoria
+    // mostrou o modelo ignorando o charter). Só no Modo Projeto (evita I/O extra em chat/tdd).
+    const projectCtx = mode === "project" ? await this.projectPromptContext() : undefined;
     const basePrompt =
       mode === "project" && project
         ? project.files && project.files.length > 0
-          ? buildProjectFromBlueprintPrompt(this.workspaceName(), project.language, project.architecture, project.files, project.ui, project.framework) // Fase F: plano aprovado
-          : buildProjectPrompt(this.workspaceName(), project.language, project.architecture, project.ui, project.framework)
+          ? buildProjectFromBlueprintPrompt(this.workspaceName(), project.language, project.architecture, project.files, project.ui, project.framework, projectCtx) // Fase F: plano aprovado
+          : buildProjectPrompt(this.workspaceName(), project.language, project.architecture, project.ui, project.framework, projectCtx)
         : mode === "tdd"
         ? buildTddPrompt(this.workspaceName())
         : buildBasePrompt(this.workspaceName());
@@ -1857,6 +1877,10 @@ export class Controller {
         // modal com o erro + a lista (vermelha) + "Aprovar e gerar" habilitado — o dev vê e regenera.
         this.post({ type: "project/blueprintError", message: 'Não consegui gerar nenhum arquivo (falha do provedor ou limite de tokens). Ajuste e clique em "Aprovar e gerar" para tentar de novo.' });
       } else {
+        // Gate WORKSPACE-WIDE antes do "Pronto": compila/importa o CONJUNTO gerado e bloqueia o Aplicar
+        // dos arquivos que não passam (drift de contrato cross-file). Alimenta entry.gateOk. Roda ANTES
+        // do project/done para o modal já abrir com os cartões reprovados pintados.
+        await this.runProjectGate(project.language);
         this.post({ type: "project/done" });
         if (done < total) {
           this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
@@ -1865,6 +1889,100 @@ export class Controller {
     }
     // Mantém o histórico limitado.
     if (this.history.length > 20) this.history = this.history.slice(-20);
+  }
+
+  // Gate workspace-wide do Modo Projeto (Onda 1). Materializa TODAS as propostas juntas numa árvore temp
+  // (contida via safeWorkspacePath), semeia `__init__.py` sintéticos e roda compileall + mypy sobre o
+  // CONJUNTO — pegando o drift de contrato que a validação por-arquivo (isolada) não vê. O resultado por
+  // arquivo alimenta `entry.gateOk`; `applyProposal` já recusa `!gateOk` quando gateBlocksApply().
+  // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
+  private async runProjectGate(language: ProjectLanguage): Promise<void> {
+    const task = this.currentTask;
+    if (!task || language !== "python") return; // Onda 1: Python-only (compileall/mypy)
+    // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
+    // reescreveria o veredito do gate de volta para true — corrida real).
+    await task.settleValidations();
+
+    // Exclui células (.ipynb) e PARCIAIS (truncados): o parcial é conhecidamente incompleto e já tem
+    // tratamento honesto próprio (pulado no "Aplicar tudo" + aviso no cartão) — um SyntaxError por corte
+    // não deve virar bloqueio de gate, e materializá-lo poluiria a resolução do conjunto.
+    const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
+    const hasPy = props.some((e) => e.proposal.filePath.toLowerCase().endsWith(".py"));
+    if (!hasPy) return; // nada compilável — gate não se aplica
+
+    let root: string | undefined;
+    try {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-gate-"));
+      // Materializa a árvore (cada path CONTIDO na raiz temp — mesma guarda do applyProposal).
+      const relPaths: string[] = [];
+      for (const e of props) {
+        const abs = safeWorkspacePath(root, e.proposal.filePath);
+        if (!abs) continue;
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        await fs.writeFile(abs, e.proposal.modified, "utf8");
+        relPaths.push(normGatePath(e.proposal.filePath));
+      }
+      // __init__.py sintéticos para os pacotes resolverem no mypy (import cross-file).
+      for (const dir of syntheticInitDirs(relPaths)) {
+        const abs = safeWorkspacePath(root, `${dir}/__init__.py`);
+        if (!abs) continue;
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        await fs.writeFile(abs, "", "utf8");
+      }
+
+      const py = await this.resolveGatePython();
+      const timeoutMs = 120_000;
+      const checks: GateCheckResult[] = [];
+
+      // compileall (stdlib, gate:true): pega erro de SINTAXE em qualquer arquivo do conjunto.
+      const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs });
+      checks.push({ result: compile, errors: parseCompileallErrors(compile.output, root) });
+
+      // mypy (gate:true quando instalado): pega o DRIFT de contrato (import/atributo fantasma) cross-file.
+      // --ignore-missing-imports neutraliza o ruído de deps de terceiros (fastapi/jinja não instalados no
+      // temp) preservando os erros de módulos DESTE projeto. Não instalado → skipped (consultivo).
+      let mypy = await runFileCheck(
+        { id: "gate:mypy", label: "mypy", gate: true },
+        py,
+        ["-m", "mypy", "--ignore-missing-imports", "--no-error-summary", "--no-color-output", "--hide-error-context", "--no-pretty", "."],
+        { cwd: root, timeoutMs }
+      );
+      if (mypyUnavailable(mypy)) mypy = { ...mypy, status: "skipped", reason: "mypy não instalado (gate consultivo)" };
+      checks.push({ result: mypy, errors: mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map() });
+
+      const gate = summarizeGate(checks);
+      // Propaga por-arquivo para gateOk: arquivo com erro atribuído fica bloqueado; falha AMPLA (sem
+      // arquivo) bloqueia todos os .py. Skipped/ok não bloqueiam (gateOk permanece true).
+      const blocked = new Set(gate.fileErrors.map((f) => f.path));
+      const blockAllPy = gate.projectErrors.length > 0;
+      for (const e of props) {
+        const np = normGatePath(e.proposal.filePath);
+        if (blocked.has(np) || (blockAllPy && np.toLowerCase().endsWith(".py"))) e.gateOk = false;
+      }
+      this.post({ type: "project/gate", advisory: gate.advisory, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
+      log.info(`Gate do projeto: ${gate.summary} (rodou: ${gate.ran.join(", ") || "nada"}; pulou: ${gate.skipped.join(", ") || "nada"})`);
+    } catch (e) {
+      // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
+      log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
+      this.post({ type: "project/gate", advisory: true, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [] });
+    } finally {
+      if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  // Resolve um comando de Python utilizável para o gate: venv do workspace primeiro (maior chance de ter
+  // mypy + deps), senão sonda `python`/`python3`/`py`. null → nenhum encontrado (o gate ficará consultivo
+  // via ENOENT). Uma sondagem barata evita rodar compileall/mypy contra um comando inexistente.
+  private async resolveGatePython(): Promise<string> {
+    const ws = this.workspaceRoot();
+    const isWin = process.platform === "win32";
+    const venv = ws ? findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV) : undefined;
+    const candidates = [venv, "python", "python3", "py"].filter((c): c is string => !!c);
+    for (const cand of candidates) {
+      const probe = await runFileCheck({ id: "probe", label: "python", gate: false }, cand, ["--version"], { timeoutMs: 15_000 });
+      if (probe.status !== "skipped") return cand; // achou (rodou; ENOENT vira skipped)
+    }
+    return candidates[0] ?? "python"; // nada respondeu: usa o 1º e deixa o ENOENT tornar o gate consultivo
   }
 
   private workspaceName(): string {

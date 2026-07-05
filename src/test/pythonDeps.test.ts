@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mapImportsToPackages, mergeRequirements, parseRequirementNames, renderRequirements, scanPythonImports } from "../util/pythonDeps";
+import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, parseRequirementNames, renderRequirements, scanPythonImports } from "../util/pythonDeps";
+
+test("parsePinnedRequirements: preserva o pin, ignora comentários/opções/in-line e capa o total", () => {
+  const req = [
+    "# deps do projeto",
+    "fastapi==0.110.0",
+    "jinja2>=3.1.3  # engine de templates",
+    "",
+    "-r dev-requirements.txt",
+    "--index-url https://pypi.org/simple",
+    "pydantic",
+  ].join("\n");
+  assert.deepEqual(parsePinnedRequirements(req), ["fastapi==0.110.0", "jinja2>=3.1.3", "pydantic"]);
+  // cap: um requirements gigante não incha o prompt
+  const many = Array.from({ length: 100 }, (_, i) => `pkg${i}==1.0.0`).join("\n");
+  assert.equal(parsePinnedRequirements(many, 40).length, 40);
+  assert.deepEqual(parsePinnedRequirements(""), []);
+});
 
 test("scanPythonImports: cobre import simples, múltiplo, com as, from x.y e ignora relativos", () => {
   const src = [
