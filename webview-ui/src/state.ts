@@ -302,6 +302,10 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         text: stripFileBlockOfPath(m.text, msg.proposal.filePath),
         proposals: [...m.proposals, { proposal: msg.proposal, status: "pending" }],
       }));
+    case "stream/proposalUpdate":
+      // Onda 2: o auto-reparo regenerou este arquivo — troca a proposta NO LUGAR (mesmo id), volta a
+      // "pending" e limpa a validação anterior (o gate/validador a revisita).
+      return mapProposals(state, msg.proposal.id, (p) => ({ ...p, proposal: msg.proposal, status: "pending", validation: undefined }));
     case "validation/result":
       return mapProposals(state, msg.proposalId, (p) => ({
         ...p,

@@ -22,7 +22,7 @@ import { SecretsStore } from "../secrets/SecretsStore";
 import { ContextAssembler } from "../skills/ContextAssembler";
 import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
-import { SkillValidator } from "../skills/SkillValidator";
+import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
@@ -62,8 +62,10 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
-import { GateCheckResult, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, summarizeGate, syntheticInitDirs } from "./projectGate";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
+import { GateCheckResult, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs } from "./projectGate";
+import { normRepairPath, selectRepairTargets } from "./projectRepair";
+import { parseFileBlocks } from "../util/fileBlocks";
 import { runFileCheck } from "../util/execCheck";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
@@ -1880,7 +1882,17 @@ export class Controller {
         // Gate WORKSPACE-WIDE antes do "Pronto": compila/importa o CONJUNTO gerado e bloqueia o Aplicar
         // dos arquivos que não passam (drift de contrato cross-file). Alimenta entry.gateOk. Roda ANTES
         // do project/done para o modal já abrir com os cartões reprovados pintados.
-        await this.runProjectGate(project.language);
+        let gate = await this.runProjectGate(project.language);
+        // Onda 2: AUTO-REPARO dirigido pelo gate — enquanto houver arquivo reprovado, re-pede SÓ esses
+        // arquivos (com os erros do mypy + o CONTRATO REAL dos que passaram) e re-roda o gate, até verde ou
+        // o teto de rodadas. O gate continua BLOQUEANDO o Aplicar se não fechar — nunca entrega em silêncio.
+        const MAX_PROJECT_REPAIRS = 2;
+        for (let round = 1; gate && gate.fileErrors.length > 0 && round <= MAX_PROJECT_REPAIRS; round++) {
+          this.post({ type: "notice", level: "info", message: `Auto-reparo do projeto: ${gate.fileErrors.length} arquivo(s) com erro de contrato — regenerando (rodada ${round}/${MAX_PROJECT_REPAIRS})…` });
+          const n = await this.repairProjectFromGate(gate, project, runtime);
+          if (n === 0) break; // nada regenerado (falha do provedor / sem alvo casável) — insistir não ajuda
+          gate = await this.runProjectGate(project.language);
+        }
         this.post({ type: "project/done" });
         if (done < total) {
           this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
@@ -1896,9 +1908,9 @@ export class Controller {
   // CONJUNTO — pegando o drift de contrato que a validação por-arquivo (isolada) não vê. O resultado por
   // arquivo alimenta `entry.gateOk`; `applyProposal` já recusa `!gateOk` quando gateBlocksApply().
   // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
-  private async runProjectGate(language: ProjectLanguage): Promise<void> {
+  private async runProjectGate(language: ProjectLanguage): Promise<ProjectGateSummary | null> {
     const task = this.currentTask;
-    if (!task || language !== "python") return; // Onda 1: Python-only (compileall/mypy)
+    if (!task || language !== "python") return null; // Onda 1: Python-only (compileall/mypy)
     // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
     // reescreveria o veredito do gate de volta para true — corrida real).
     await task.settleValidations();
@@ -1908,7 +1920,7 @@ export class Controller {
     // não deve virar bloqueio de gate, e materializá-lo poluiria a resolução do conjunto.
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
     const hasPy = props.some((e) => e.proposal.filePath.toLowerCase().endsWith(".py"));
-    if (!hasPy) return; // nada compilável — gate não se aplica
+    if (!hasPy) return null; // nada compilável — gate não se aplica
 
     let root: string | undefined;
     try {
@@ -1965,18 +1977,81 @@ export class Controller {
       // Propaga por-arquivo para gateOk: só bloqueia arquivo com erro ATRIBUÍDO pela ferramenta.
       // Skipped/ok e falha sem atribuição (projectErrors, anômala) NÃO bloqueiam — gateOk permanece true.
       const blocked = new Set(gate.fileErrors.map((f) => f.path));
+      // Reset por RODADA (Onda 2): recomputa gateOk para TODOS os props avaliados, para que um arquivo que
+      // o auto-reparo consertou VOLTE a verde (antes só marcávamos false → um verde tardio ficaria preso).
+      // PRESERVA um bloqueio de validador de skill gate:true: gateOk = (validador passou) E (não bloqueado
+      // pelo gate de projeto). gatePassed([]) = true, então o caso comum (sem validador gate:true) e os
+      // arquivos reparados (results limpo) dependem só do gate de projeto; um gate:true reprovado persiste.
       for (const e of props) {
-        if (blocked.has(normGatePath(e.proposal.filePath))) e.gateOk = false;
+        e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath));
       }
       this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
       log.info(`Gate do projeto: ${gate.summary} (rodou: ${gate.ran.join(", ") || "nada"}; pulou: ${gate.skipped.join(", ") || "nada"})`);
+      return gate;
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
       this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [] });
+      return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  // Onda 2 — AUTO-REPARO dirigido pelo gate. Recebe o veredito do gate (arquivos reprovados + erros do
+  // mypy) e re-pede ao modelo SÓ esses arquivos, injetando o CONTEÚDO REAL dos arquivos que passaram (o
+  // contrato). Cada arquivo regenerado SUBSTITUI a proposta existente NO LUGAR (mesmo id → sem cartão
+  // duplicado; volta a "pending"). Retorna quantos arquivos foram efetivamente trocados. Falha do provedor
+  // ou nenhum alvo casável → 0 (o chamador para o loop). O gate roda de novo depois e decide o gateOk.
+  private async repairProjectFromGate(
+    gate: ProjectGateSummary,
+    project: { language: ProjectLanguage; architecture: ProjectArchitecture; files?: BlueprintFile[] },
+    runtime: ProviderRuntimeConfig
+  ): Promise<number> {
+    const task = this.currentTask;
+    if (!task) return 0;
+    // Só arquivos (não células) e não-parciais: um parcial já tem tratamento próprio e não é contrato confiável.
+    const entries = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
+    const byPath = new Map(entries.map((e) => [normRepairPath(e.proposal.filePath), e.proposal.modified] as const));
+    const targets = selectRepairTargets(gate.fileErrors, byPath, project.files ?? []);
+    if (targets.length === 0) return 0;
+
+    const system = buildProjectRepairPrompt(this.workspaceName(), project.language, project.architecture, targets);
+    const provider = createProvider(runtime, this.egress);
+    const headers = this.buildTraceHeaders([], runtime.modelId, runtime.type, runtime.reasoningEffort, "project");
+    let text = "";
+    try {
+      for await (const chunk of provider.createMessage(system, [{ role: "user", content: "Corrija os arquivos reprovados conforme as instruções e os contratos reais acima." }], {
+        timeoutMs: runtime.timeoutSeconds * 1000,
+        extraHeaders: headers,
+      })) {
+        if (chunk.kind === "text") text += chunk.text;
+        else if (chunk.kind === "error") {
+          log.warn("Auto-reparo do projeto: erro do provedor", chunk.message);
+          break;
+        }
+      }
+    } catch (e) {
+      log.warn("Auto-reparo do projeto falhou ao gerar", e);
+      return 0;
+    }
+
+    // Aplica só os blocos cujos caminhos estavam no reparo — substitui a proposta existente no lugar.
+    const targetPaths = new Set(targets.map((t) => t.path));
+    let repaired = 0;
+    for (const b of parseFileBlocks(text)) {
+      const bp = normRepairPath(b.path);
+      if (!targetPaths.has(bp)) continue; // ignora arquivos fora da lista de reparo
+      const entry = entries.find((e) => normRepairPath(e.proposal.filePath) === bp);
+      if (!entry) continue;
+      entry.proposal.modified = b.content;
+      entry.proposal.partial = false;
+      entry.results = []; // a validação por-arquivo anterior é do conteúdo DRIFADO — obsoleta; limpa p/ o re-gate
+      entry.gateOk = true; // reset otimista; o próximo runProjectGate reavalia e bloqueia se ainda falhar
+      this.post({ type: "stream/proposalUpdate", proposal: entry.proposal });
+      repaired++;
+    }
+    return repaired;
   }
 
   // Resolve um comando de Python utilizável para o gate: venv do workspace primeiro (maior chance de ter
