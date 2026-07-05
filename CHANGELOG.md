@@ -3,6 +3,31 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.1.5] — 2026-07-04
+
+Robustez definitiva contra o truncamento e o vazamento harmony do gpt-oss/HubGPU, validada por
+teste vivo contra o modelo real. Cinco PRs.
+
+### Fixed
+- **Vazamento harmony no "Redigir com IA" (e no Blueprint/resumir)**: no streaming o gpt-oss/HubGPU
+  vaza o canal de análise dentro do `content`, grudado na resposta ("max 2 sentences. Provide 2
+  sentences.O aplicativo…"). As tarefas one-shot estruturadas (charter/blueprint/resumir) passam a
+  rodar em **não-streaming**, onde o raciocínio fica isolado em `reasoning_content` — o vazamento
+  some (comprovado ao vivo). Como bônus, o `finish_reason` vem confiável no corpo (base do salvage/
+  continuação).
+- **Corte "sem sinal" do Charter**: o HubGPU às vezes corta por limite de tokens mas reporta
+  `finish_reason=stop` em vez de `length`. A continuação do charter ganha uma **heurística estrutural
+  conservadora** de reforço (hífen de quebra pendurado ou palavra de ligação pt-BR no fim) — listas de
+  RF/RNF, rótulos e siglas nunca disparam.
+- **stripHarmony endurecido** (defense-in-depth): reconhece mais frases de controle harmony como
+  preâmbulo de linha isolada, sem nunca cortar prosa grudada (que destruiria código).
+
+### Added
+- **Seletor de `max_tokens` (tokens de saída)** no rodapé do composer e comando de paleta
+  **"FORGE: definir máximo de tokens de saída"** — presets `auto/16k/32k/64k/128k`, rebaixados
+  automaticamente à janela realmente servida pelo gateway (sem erro 400). O HubGPU aceita até 128k.
+- **Heartbeat por timer** no modal do Blueprint (o não-streaming não tem chunks de progresso).
+
 ## [2.1.4] — 2026-07-04
 
 ### Fixed
