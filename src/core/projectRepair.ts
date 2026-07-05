@@ -5,9 +5,13 @@
 // (I/O) ficam no Controller.repairProjectFromGate.
 import type { BlueprintFile } from "../shared/protocol";
 
-// Normaliza para casar propostas × blueprint × saída do gate: barras pra frente, sem ./ nem / inicial.
-// Exportada para o Controller montar o mapa de conteúdo com a MESMA chave que este módulo consulta.
-export const normRepairPath = (p: string): string => (p ?? "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").trim();
+// Normaliza para casar propostas × blueprint × saída do gate. Espelha normGatePath (barras pra frente,
+// colapsa //, tira ./ e / final) E ainda tira / inicial — assim normRepairPath(normGatePath(x)) ===
+// normRepairPath(x) para todo formato (o gate reporta caminhos já passados por normGatePath, e o mapa de
+// conteúdo do reparo usa esta função; sem o alinhamento, um caminho com // ou / final não casaria).
+// Exportada para o Controller montar o mapa com a MESMA chave que este módulo consulta.
+export const normRepairPath = (p: string): string =>
+  (p ?? "").replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "").trim();
 const norm = normRepairPath;
 
 export interface RepairContract {

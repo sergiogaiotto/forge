@@ -22,7 +22,7 @@ import { SecretsStore } from "../secrets/SecretsStore";
 import { ContextAssembler } from "../skills/ContextAssembler";
 import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
-import { SkillValidator } from "../skills/SkillValidator";
+import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
@@ -1977,12 +1977,13 @@ export class Controller {
       // Propaga por-arquivo para gateOk: só bloqueia arquivo com erro ATRIBUÍDO pela ferramenta.
       // Skipped/ok e falha sem atribuição (projectErrors, anômala) NÃO bloqueiam — gateOk permanece true.
       const blocked = new Set(gate.fileErrors.map((f) => f.path));
-      // Reset por RODADA (Onda 2): gateOk = !bloqueado para TODOS os props avaliados. Um arquivo que o
-      // auto-reparo consertou precisa VOLTAR a gateOk=true numa nova passada do gate — antes só marcávamos
-      // false, então um verde tardio ficaria preso em false. Em modo projeto o gate de compilação é a
-      // autoridade sobre os .py (os stack validators são advisory/gate:false).
+      // Reset por RODADA (Onda 2): recomputa gateOk para TODOS os props avaliados, para que um arquivo que
+      // o auto-reparo consertou VOLTE a verde (antes só marcávamos false → um verde tardio ficaria preso).
+      // PRESERVA um bloqueio de validador de skill gate:true: gateOk = (validador passou) E (não bloqueado
+      // pelo gate de projeto). gatePassed([]) = true, então o caso comum (sem validador gate:true) e os
+      // arquivos reparados (results limpo) dependem só do gate de projeto; um gate:true reprovado persiste.
       for (const e of props) {
-        e.gateOk = !blocked.has(normGatePath(e.proposal.filePath));
+        e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath));
       }
       this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
       log.info(`Gate do projeto: ${gate.summary} (rodou: ${gate.ran.join(", ") || "nada"}; pulou: ${gate.skipped.join(", ") || "nada"})`);
@@ -2045,6 +2046,7 @@ export class Controller {
       if (!entry) continue;
       entry.proposal.modified = b.content;
       entry.proposal.partial = false;
+      entry.results = []; // a validação por-arquivo anterior é do conteúdo DRIFADO — obsoleta; limpa p/ o re-gate
       entry.gateOk = true; // reset otimista; o próximo runProjectGate reavalia e bloqueia se ainda falhar
       this.post({ type: "stream/proposalUpdate", proposal: entry.proposal });
       repaired++;

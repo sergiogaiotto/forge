@@ -5,10 +5,14 @@ import { normRepairPath, selectRepairTargets } from "../core/projectRepair";
 
 const bp = (path: string, deps: string[] = []): BlueprintFile => ({ path, purpose: "", deps });
 
-test("normRepairPath: barras pra frente, sem ./ nem / inicial", () => {
+test("normRepairPath: espelha normGatePath (//, ./ e / final) + tira / inicial — casa a chave do reparo", () => {
   assert.equal(normRepairPath("src\\app\\create_order.py"), "src/app/create_order.py");
   assert.equal(normRepairPath("./src/app.py"), "src/app.py");
   assert.equal(normRepairPath("/src/app.py"), "src/app.py");
+  // Bordas confirmadas em revisão: sem colapsar // e sem tirar / final, o reparo não casaria o arquivo.
+  assert.equal(normRepairPath("src//app.py"), "src/app.py");
+  assert.equal(normRepairPath("src/app.py/"), "src/app.py");
+  assert.equal(normRepairPath(".\\\\adapters\\\\api.py"), "adapters/api.py"); // backslashes dobrados (repr do Windows)
 });
 
 test("selectRepairTargets: injeta o CONTEÚDO REAL dos deps que PASSARAM como contrato", () => {
