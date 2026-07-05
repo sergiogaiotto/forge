@@ -10,8 +10,9 @@ import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
 import { CompletenessResult, partialFilePath, resilientGenerate } from "../util/completeness";
 import { closedBlockPaths, parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
+import { detectProseFileEdit } from "../util/proseEdits";
 import { safeWorkspacePath } from "../util/safePath";
-import { buildContinuationPrompt, buildTailContinuation } from "./systemPrompt";
+import { buildContinuationPrompt, buildProtocolReemitPrompt, buildTailContinuation } from "./systemPrompt";
 
 // Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
 // completude, não custo (decisão de produto), mas com teto rígido + guarda de "stall" (passagem que
@@ -169,9 +170,75 @@ export class Task {
       d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: "célula", language: proposal.language });
     }
 
-    d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage, proposals: this.proposals.size });
-    // usage REAL da geração (somado entre continuações) — alimenta /tokens e a barra de status.
-    d.post({ type: "stream/end", taskId: d.taskId, usage });
+    // Reparo de protocolo (Onda 3): a geração terminou SEM nenhuma proposta aplicável, mas DESCREVEU uma
+    // edição de arquivo em cerca comum (o sintoma do print — cerca ```lang + "substitua o conteúdo de X").
+    // Dispara UMA reemissão silenciosa como forge-file. detectProseFileEdit é conservador; sem sinal
+    // positivo não há chamada extra (custo zero no caminho comum).
+    if (this.proposals.size === 0 && !this.controller.signal.aborted && detectProseFileEdit(full)) {
+      await this.repairProtocol(full, onUsage);
+    }
+
+    // usage REAL (somado entre continuações E a reemissão do reparo, se houve) — alimenta /tokens e a barra.
+    const finalUsage = { inputTokens, outputTokens };
+    d.emit?.({ type: "generation.end", taskId: d.taskId, durationMs: Date.now() - started, model, input, output: full, usage: finalUsage, proposals: this.proposals.size });
+    d.post({ type: "stream/end", taskId: d.taskId, usage: finalUsage });
+  }
+
+  // Reparo de protocolo (Onda 3): a geração descreveu uma edição de arquivo em cerca comum, sem bloco
+  // forge-file (nenhuma proposta aplicável — o sintoma do print). Faz UMA reemissão SILENCIOSA (não emite
+  // stream/text pro chat) pedindo ao modelo os MESMOS arquivos como forge-file. O modelo conhece o caminho
+  // certo (ele escreveu o código), então NÃO inferimos path no cliente — nada de sobrescrever arquivo
+  // errado por heurística. O que voltar como forge-file entra no pipeline normal (card/validação/gate/
+  // apply). Best-effort: erro do provedor ou nenhum bloco reemitido → desiste em silêncio (a prosa original
+  // permanece; nada fica pior que antes). Uma única passada — sem laço, sem recursão.
+  private async repairProtocol(
+    fullText: string,
+    onUsage: (u: { inputTokens?: number; outputTokens?: number }) => void
+  ): Promise<void> {
+    const d = this.deps;
+    if (this.controller.signal.aborted) return;
+    // Ancora na CAUDA da resposta anterior (não o todo, para não inflar a entrada) + o pedido de reemissão.
+    const anchor = fullText.length > CONTINUATION_ANCHOR_CHARS ? fullText.slice(-CONTINUATION_ANCHOR_CHARS) : fullText;
+    const convo: ChatMessage[] = [
+      ...d.messages,
+      { role: "assistant", content: anchor },
+      { role: "user", content: buildProtocolReemitPrompt() },
+    ];
+    let text = "";
+    try {
+      for await (const chunk of d.provider.createMessage(d.systemPrompt, convo, {
+        timeoutMs: d.timeoutMs,
+        signal: this.controller.signal,
+        extraHeaders: d.extraHeaders,
+      })) {
+        if (chunk.kind === "text") text += chunk.text;
+        else if (chunk.kind === "usage") onUsage({ inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
+        else if (chunk.kind === "error") {
+          log.warn("Reparo de protocolo: erro do provedor", chunk.message);
+          return;
+        }
+      }
+    } catch (err) {
+      log.warn("Reparo de protocolo falhou ao reemitir", err);
+      return;
+    }
+    const blocks = parseFileBlocks(text);
+    if (blocks.length === 0) {
+      // O modelo declinou (o que ele mostrou era ilustrativo, ou insistiu em cerca comum). Desiste em
+      // SILÊNCIO: nenhum aviso ao usuário — um falso-positivo da detecção fica 100% invisível.
+      log.info("Reparo de protocolo: o modelo não reemitiu blocos forge-file (nada recuperado).");
+      return;
+    }
+    // Só agora — com propostas REAIS a mostrar — avisa o usuário (evita o aviso órfão num falso-positivo).
+    d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: "Converti o código em proposta aplicável (não veio como bloco forge-file)." });
+    for (const block of blocks) {
+      const proposal = await this.makeProposal(block.path, block.content);
+      this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
+      d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
+      d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: proposal.original ? "edição" : "novo", language: proposal.language });
+      this.pendingValidations.push(this.validateProposal(proposal));
+    }
+    log.info(`Reparo de protocolo: ${blocks.length} arquivo(s) recuperado(s) como proposta aplicável.`);
   }
 
   // Uma passagem de streaming do provider: acumula e transmite o texto ao vivo, retornando o texto
