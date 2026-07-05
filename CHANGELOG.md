@@ -28,6 +28,13 @@ teste vivo contra o modelo real. Cinco PRs.
   automaticamente à janela realmente servida pelo gateway (sem erro 400). O HubGPU aceita até 128k.
 - **Heartbeat por timer** no modal do Blueprint (o não-streaming não tem chunks de progresso).
 
+### Changed — Interface
+- **Barra do composer enxuta**: mantém só **Anexar contexto → Projeto → TDD → modelo atual** (os
+  seletores de linguagem/arquitetura/UI/framework aparecem apenas com o Modo Projeto ligado). Testes,
+  Ambiente, Índice, Perfil e Papel saíram da barra e ganharam **comandos de paleta** ("FORGE: …"); os
+  slash `/ambiente` `/testes` `/indice` `/perfil` seguem funcionando. O rótulo do provedor
+  ("HubGPU/compat · modelo") foi removido do rodapé — o modelo continua visível no composer.
+
 ## [2.1.4] — 2026-07-04
 
 ### Fixed
