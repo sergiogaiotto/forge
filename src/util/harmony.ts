@@ -7,7 +7,10 @@
 // Este util extrai SÓ o conteúdo do canal FINAL e remove os tokens de controle harmony. Puro/testável.
 // Conservador de propósito: só corta no marcador do canal final (delimitado `<|channel|>final<|message|>`
 // ou na forma colapsada `assistantfinal` — quando o gateway removeu os `<|...|>` mas concatenou os nomes).
-// Não tenta adivinhar prosa de análise SEM marcador (evita destruir conteúdo legítimo do usuário).
+// Não tenta adivinhar prosa de análise SEM marcador GRUDADA no meio de uma linha (evita destruir
+// conteúdo legítimo do usuário/código). A defesa PRIMÁRIA contra o vazamento same-line é o transporte
+// NÃO-STREAMING dos one-shots (charter/blueprint/resumir), que isola o raciocínio em reasoning_content;
+// este util é a rede de segurança (linhas iniciais isoladas de controle harmony conhecidas).
 
 // Início do canal FINAL: com os delimitadores harmony, ou colapsado (sem espaço) — nunca aparece em
 // conteúdo legítimo. NÃO casamos "assistant final" (com espaço), que poderia ocorrer em texto normal.
@@ -16,10 +19,15 @@ const FINAL_CHANNEL_RE = /<\|channel\|>\s*final\s*<\|message\|>|assistantfinal/g
 const HARMONY_TOKEN_RE = /<\|[a-z_]+\|>/gi;
 
 // Frases de CONTROLE do canal analysis que o gpt-oss às vezes vaza SEM marcador, como preâmbulo antes
-// da resposta final (confirmado num project.md real: "Now final output is markdown string." / "Proceed.").
-// Removidas SÓ quando aparecem como LINHAS INICIAIS isoladas — conservador, não casa prosa no meio.
+// da resposta final (confirmado em campo: "Now final output is markdown string." / "Proceed." e, no
+// teste vivo, "Provide 2 sentences." / "We need to output the purpose…"). Removidas SÓ quando aparecem
+// como LINHAS INICIAIS ISOLADAS (dropHarmonyPreamble) — NUNCA cortamos prosa grudada no MEIO de uma
+// linha: isso destruiria código legítimo (o vazamento same-line já é neutralizado a montante — os
+// one-shots rodam em não-streaming, que isola o raciocínio; a geração de código isola por cercas).
+// Os padrões são específicos de análise harmony (inglês, verbo de planejamento) e ancorados a ^...$:
+// não casam um comentário de código ("# provide 2 args" começa com "#") nem uma seção pt-BR.
 const HARMONY_PREAMBLE_LINE =
-  /^(now\b.*\bfinal\s+output\b.*|the\s+final\s+(answer|output)\b.*|proceed[.!…]*|assistant(final|analysis|commentary)?)$/i;
+  /^(now\b.*\bfinal\s+output\b.*|the\s+final\s+(answer|output)\b.*|proceed[.!…]*|assistant(final|analysis|commentary)?|provide\s+\d+\s+sentences?[.!…]*|we\s+need\s+to\s+(output|produce|write|emit|craft)\b.*)$/i;
 
 // Descarta linhas iniciais que sejam vazias, um "." solto, ou uma frase de controle harmony conhecida —
 // até a 1ª linha de conteúdo real. O teto de 8 linhas DESCARTADAS NÃO VAZIAS é o guarda contra

@@ -165,3 +165,28 @@ test("stripHarmony: após o marcador final, linha parecida com preâmbulo é PRE
     "Proceed.\nCom o cadastro em duas etapas."
   );
 });
+
+// ---- PR4: defense-in-depth do preâmbulo de análise harmony (sem marcador) ----------------------
+// Padrões específicos que o gpt-oss vazou no teste vivo ("Provide 2 sentences." / "We need to output…")
+// são removidos SÓ como LINHA INICIAL isolada — nunca cortando prosa grudada no meio (destruiria código).
+test("stripHarmony: preâmbulo 'Provide N sentences.' / 'We need to output…' (linha isolada) é removido", () => {
+  assert.equal(stripHarmony("Provide 2 sentences.\n\nO aplicativo gerencia finanças pessoais."), "O aplicativo gerencia finanças pessoais.");
+  assert.equal(stripHarmony("We need to output markdown string.\n- RF-01: autenticar"), "- RF-01: autenticar");
+  assert.equal(stripHarmony("We need to craft the final answer.\nProceed.\n# Título\ncorpo"), "# Título\ncorpo");
+});
+
+// DELIBERADO (o Plan agent alertou): vazamento GRUDADO na mesma linha SEM marcador NÃO é cortado — o
+// custo de destruir código legítimo supera o benefício; esse caso já é neutralizado a montante pelo
+// não-streaming (PR2). Este teste TRAVA a conservadoria (se alguém tentar cortar same-line, quebra aqui).
+test("stripHarmony: vazamento grudado same-line SEM marcador é PRESERVADO (conservador)", () => {
+  const glued = "Provide 2 sentences.O aplicativo gerencia finanças pessoais.";
+  assert.equal(stripHarmony(glued), glued);
+});
+
+// NÃO pode tocar conteúdo legítimo: "provide"/"we need" no MEIO da linha, em comentário de código, ou
+// como sufixo — os padrões são ancorados a ^...$ e a verbos de planejamento harmony em inglês.
+test("stripHarmony: 'provide'/'we need' no meio da linha ou em comentário NÃO são removidos", () => {
+  assert.equal(stripHarmony("# provide 2 args to the function"), "# provide 2 args to the function");
+  assert.equal(stripHarmony("- RF-05: we need to validate all inputs"), "- RF-05: we need to validate all inputs");
+  assert.equal(stripHarmony("O sistema deve provide relatórios em PDF"), "O sistema deve provide relatórios em PDF");
+});
