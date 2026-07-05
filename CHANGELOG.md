@@ -3,6 +3,27 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.2.0] — 2026-07-05
+
+Geração de projeto **auto-curável**: o Modo Projeto agora detecta, bloqueia e conserta sozinho o drift
+de contrato entre arquivos — o defeito que fazia um projeto gerado "completo" não rodar (ex.: um
+`import` de símbolo que nenhum arquivo define derrubando o app no boot). Três ondas.
+
+### Added
+- **Gate de compilação workspace-wide (Onda 1)**: antes do "Pronto", o Modo Projeto materializa TODAS as
+  propostas juntas (com `__init__.py` sintéticos) e roda `compileall` + `mypy` sobre o CONJUNTO, pegando
+  o drift de contrato cross-file (import/atributo fantasma) que a validação por-arquivo isolada não vê. O
+  arquivo reprovado tem o "Aplicar" bloqueado. Degradação segura: sem as ferramentas, o gate é consultivo.
+- **Garantia de mypy + estado "parcial" honesto (Onda 1.5)**: o gate instala o `mypy` no venv do projeto
+  best-effort (só no venv, nunca no python global) — sem ele, `compileall` só veria sintaxe e o drift
+  passaria. Quando a coerência não pôde ser verificada, o cartão do gate mostra "parcial" em âmbar, em vez
+  de se disfarçar de verde.
+- **Auto-reparo dirigido pelo gate (Onda 2)**: quando o gate reprova, o FORGE re-pede ao modelo SÓ os
+  arquivos reprovados — com os erros exatos do `mypy` e o CONTEÚDO REAL dos arquivos que passaram (o
+  contrato a copiar) — e re-roda o gate, até verde ou o teto de 2 rodadas. As propostas são substituídas
+  no lugar (sem cartão duplicado). O gate continua bloqueando o Aplicar se não fechar: nunca entrega um
+  projeto quebrado em silêncio.
+
 ## [2.1.5] — 2026-07-04
 
 Robustez definitiva contra o truncamento e o vazamento harmony do gpt-oss/HubGPU, validada por
