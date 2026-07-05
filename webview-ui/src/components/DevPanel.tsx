@@ -783,12 +783,13 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                 : "Revise os arquivos abaixo — passe o mouse para ver o objetivo e as dependências de cada um. “Aprovar e gerar” cria todos na ordem de dependência; “Cancelar” descarta o plano."}
             </div>
             {gate && (
-              // Veredito do gate de compilação: verde (passou), consultivo (não pôde rodar) ou reprovado.
+              // Veredito do gate: reprovado (vermelho) · parcial/consultivo = coerência NÃO verificada
+              // (âmbar, NÃO verde) · verde só quando compileall E mypy rodaram sem erro de contrato.
               <div
                 className="assistant-warning"
-                style={{ marginTop: 4, borderColor: gate.advisory ? undefined : gateErrors.size || gate.projectErrors.length ? "#d16969" : "#86c98e" }}
+                style={{ marginTop: 4, borderColor: gateErrors.size || gate.projectErrors.length ? "#d16969" : gate.advisory || gate.partial ? "#d1a13a" : "#86c98e" }}
               >
-                <Icon name={gate.advisory || gateErrors.size || gate.projectErrors.length ? "alert-triangle" : "check"} size={14} /> {gate.summary}
+                <Icon name={gateErrors.size || gate.projectErrors.length || gate.advisory || gate.partial ? "alert-triangle" : "check"} size={14} /> {gate.summary}
                 {gate.projectErrors.map((e, i) => (
                   <div key={i} className="mono" style={{ marginTop: 4, fontSize: 11, color: "#d16969", whiteSpace: "pre-wrap" }}>
                     {e}

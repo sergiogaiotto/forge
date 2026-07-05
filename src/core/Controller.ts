@@ -25,7 +25,7 @@ import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector"
 import { SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
-import { buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
+import { buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { ObsEvent } from "../obs/types";
 import { estimateTokens, estimateTokensOf } from "../util/tokenEstimate";
@@ -1931,6 +1931,9 @@ export class Controller {
       }
 
       const py = await this.resolveGatePython();
+      // Onda 1.5: garante o mypy no venv ANTES de checar — sem ele o gate só teria compileall (sintaxe) e
+      // ficaria "parcial", deixando passar o drift de contrato (o ImportError fantasma que derruba o app).
+      await this.ensureGateMypy(py);
       const timeoutMs = 120_000;
       const outputCap = 32_000; // teto amplo: um projeto MUITO drifado emite muitos erros; não truncar a atribuição
       const checks: GateCheckResult[] = [];
@@ -1965,12 +1968,12 @@ export class Controller {
       for (const e of props) {
         if (blocked.has(normGatePath(e.proposal.filePath))) e.gateOk = false;
       }
-      this.post({ type: "project/gate", advisory: gate.advisory, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
       log.info(`Gate do projeto: ${gate.summary} (rodou: ${gate.ran.join(", ") || "nada"}; pulou: ${gate.skipped.join(", ") || "nada"})`);
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
-      this.post({ type: "project/gate", advisory: true, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [] });
+      this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [] });
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -1989,6 +1992,27 @@ export class Controller {
       if (probe.status !== "skipped") return cand; // achou (rodou; ENOENT vira skipped)
     }
     return candidates[0] ?? "python"; // nada respondeu: usa o 1º e deixa o ENOENT tornar o gate consultivo
+  }
+
+  // Onda 1.5: garante o mypy no venv do workspace (best-effort). O gate só pega o DRIFT de contrato
+  // cross-file via mypy; compileall só vê sintaxe. Sem mypy o gate fica "parcial" e não bloqueia — então
+  // um projeto que não roda (import fantasma) passaria. Instala SÓ quando o python do gate É o venv do
+  // workspace (nunca polui o python global). Falha/offline → não instala, gate degrada para "parcial".
+  private async ensureGateMypy(py: string): Promise<void> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) return;
+      const isWin = process.platform === "win32";
+      const venv = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+      if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
+      const probe = await runFileCheck({ id: "probe", label: "mypy", gate: false }, py, ["-m", "mypy", "--version"], { timeoutMs: 15_000 });
+      if (probe.status === "ok") return; // mypy já disponível no venv
+      if (this.runService.isBusy()) return; // não atropela uma execução em andamento
+      // Best-effort: se a instalação não iniciar/falhar (offline, sem índice pip), o gate fica "parcial".
+      await this.runService.runCommand("gate · mypy (coerência)", buildMypyInstall(venv), this.config.env().timeoutSeconds * 1000);
+    } catch (e) {
+      log.warn("Gate: não consegui garantir o mypy no venv — seguindo (o gate pode ficar parcial)", e);
+    }
   }
 
   private workspaceName(): string {

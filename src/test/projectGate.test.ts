@@ -110,6 +110,7 @@ const check = (r: ValidatorResult, errors: Array<[string, string[]]> = []): Gate
 test("summarizeGate: TODAS as checagens puladas → consultivo, nada bloqueado", () => {
   const s = summarizeGate([check(res("compileall", "skipped")), check(res("mypy", "skipped"))]);
   assert.equal(s.advisory, true);
+  assert.equal(s.partial, false); // consultivo (nada rodou) ≠ parcial (compileall rodou, mypy não)
   assert.deepEqual(s.fileErrors, []);
   assert.deepEqual(s.projectErrors, []);
   assert.match(s.summary, /consultivo/i);
@@ -138,6 +139,7 @@ test("summarizeGate: reprovação de gate SEM arquivo atribuível → projectErr
 test("summarizeGate: compileall ok + mypy ok → verde (compila e importa)", () => {
   const s = summarizeGate([check(res("compileall", "ok")), check(res("mypy", "ok"))]);
   assert.equal(s.advisory, false);
+  assert.equal(s.partial, false); // mypy rodou → coerência verificada de fato
   assert.deepEqual(s.fileErrors, []);
   assert.match(s.summary, /verde/i);
   assert.match(s.summary, /mypy/i);
@@ -146,6 +148,7 @@ test("summarizeGate: compileall ok + mypy ok → verde (compila e importa)", () 
 test("summarizeGate: compileall ok mas mypy PULADO → 'parcial' (drift não verificado), não verde falso", () => {
   const s = summarizeGate([check(res("compileall", "ok")), check(res("mypy", "skipped"))]);
   assert.equal(s.advisory, false); // uma checagem de gate rodou (compileall)
+  assert.equal(s.partial, true); // mas o mypy NÃO rodou → coerência não verificada (a UI avisa, não celebra)
   assert.deepEqual(s.fileErrors, []);
   assert.match(s.summary, /parcial/i);
   assert.match(s.summary, /drift/i);
