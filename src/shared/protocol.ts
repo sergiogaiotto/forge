@@ -281,6 +281,9 @@ export type ExtToWebview =
   | { type: "stream/reasoning"; taskId: string; delta: string }
   | { type: "stream/text"; taskId: string; delta: string }
   | { type: "stream/proposal"; taskId: string; proposal: DiffProposal }
+  // Onda 2 (auto-reparo): substitui NO LUGAR (mesmo proposal.id) o conteúdo de uma proposta já exibida —
+  // o gate reprovou o arquivo e o modelo o regenerou. Não cria cartão novo; volta o existente a "pendente".
+  | { type: "stream/proposalUpdate"; proposal: DiffProposal }
   // usage: tokens REAIS da geração (somados entre continuações) — alimenta /tokens e a barra de status.
   | { type: "stream/end"; taskId: string; usage?: { inputTokens: number; outputTokens: number } }
   // usage: tokens JÁ consumidos até o erro (parcial) — sem ele /tokens subcontaria gasto real.

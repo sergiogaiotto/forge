@@ -1,6 +1,7 @@
 // System prompt base do FORGE. Define a persona do assistente para times de dados/IA e
 // o protocolo de edição de arquivos que a extensão faz parse em propostas de diff revisáveis.
 import { BlueprintFile, CharterKey, FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG, ProjectArchitecture, ProjectFramework, ProjectLanguage, ProjectUI } from "../shared/protocol";
+import type { RepairTarget } from "./projectRepair";
 
 // Re-exporta para manter os importadores existentes (cellBlocks, testes) sem alteração.
 export { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG };
@@ -382,6 +383,49 @@ arquitetura ${ARCH_LABEL[architecture]}.${uiLine ? ` ${uiLine}` : ""} Siga à ri
    TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para ${SETUP_HINT[language]}.
    Os comandos devem ser reais e consistentes com o manifesto e a estrutura que você gerou.
 7. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`
+  );
+}
+
+// Onda 2 — AUTO-REPARO dirigido pelo gate: o verificador de tipos (mypy) reprovou arquivos por DRIFT de
+// contrato cross-file. Pede ao modelo para REGERAR só os arquivos reprovados, casando com as assinaturas
+// REAIS dos arquivos que passaram (o contrato injetado), com os erros do mypy em foco. Herda o prompt base
+// (protocolo forge-file + anti-elipse + anti-símbolo-fantasma). Reusa a continuação resiliente do Task.
+export function buildProjectRepairPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture, targets: RepairTarget[]): string {
+  const blocks = targets
+    .map((t) => {
+      const contracts = t.contracts.length
+        ? t.contracts.map((c) => `--- CONTRATO REAL de ${c.path} (reuse estes nomes/assinaturas EXATAMENTE) ---\n${c.content}`).join("\n\n")
+        : "(sem arquivos de contrato disponíveis — corrija guiado pelos erros do verificador)";
+      return [
+        `### Corrigir: ${t.path}`,
+        `Erros do verificador de tipos (mypy) NESTE arquivo:`,
+        t.errors.map((e) => `- ${e}`).join("\n"),
+        ``,
+        `Conteúdo ATUAL (com o drift) de ${t.path}:`,
+        `${FORGE_FENCE}`,
+        t.content,
+        `${FORGE_FENCE}`,
+        ``,
+        contracts,
+      ].join("\n");
+    })
+    .join("\n\n=====\n\n");
+  return (
+    buildBasePrompt(workspaceName) +
+    `
+
+MODO PROJETO · AUTO-REPARO (${LANG_LABEL[language]}, ${ARCH_LABEL[architecture]}): você gerou os arquivos abaixo, mas o
+verificador de tipos apontou ERROS DE CONTRATO cross-file — você usou nomes/assinaturas que os arquivos importados NÃO
+expõem. Regenere SOMENTE os arquivos listados, corrigindo cada erro e casando EXATAMENTE com os CONTRATOS REAIS mostrados.
+Regras:
+- Emita CADA arquivo corrigido como um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO (protocolo acima), com o \`path=\` correto.
+- Use SOMENTE símbolos (classes, campos, métodos, enums, funções) que EXISTEM nos contratos reais. Se um consumidor precisa
+  de algo que o arquivo-fonte não define, use o nome EXATO que ele TEM (ex.: se a entidade tem o campo \`id\`, não use \`order_id\`;
+  se \`OrderId = UUID\`, não chame \`.new()\`). ${NO_PHANTOM_SYMBOL}
+- NÃO gere arquivos fora da lista. NÃO altere a intenção — só faça o código casar com o contrato real.
+- ${NO_ELLIPSIS_RULE}
+
+${blocks}`
   );
 }
 

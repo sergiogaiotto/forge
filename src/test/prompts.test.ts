@@ -10,12 +10,33 @@ import {
   buildContinuationPrompt,
   buildProjectFromBlueprintPrompt,
   buildProjectPrompt,
+  buildProjectRepairPrompt,
   buildReviewPrompt,
   buildTailContinuation,
   buildTddPrompt,
   frameworkInstruction,
   uiLayerInstruction,
 } from "../core/systemPrompt";
+
+// Onda 2 — o prompt de auto-reparo mostra o arquivo reprovado, os erros do mypy e o CONTRATO REAL dos
+// deps que passaram, exigindo blocos forge-file completos e proibindo símbolos inventados.
+test("buildProjectRepairPrompt: injeta erros, contrato real e o protocolo forge-file", () => {
+  const p = buildProjectRepairPrompt("ws", "python", "hexagonal", [
+    {
+      path: "src/app/create_order.py",
+      content: "from src.domain.entities import OrderStatus",
+      errors: ['linha 1: Module "src.domain.entities" has no attribute "OrderStatus"'],
+      contracts: [{ path: "src/domain/entities.py", content: "class Order:\n    id: OrderId" }],
+    },
+  ]);
+  assert.match(p, /AUTO-REPARO/);
+  assert.match(p, /src\/app\/create_order\.py/);
+  assert.match(p, /has no attribute "OrderStatus"/); // o erro do mypy entra no prompt
+  assert.match(p, /CONTRATO REAL de src\/domain\/entities\.py/); // o contrato real é injetado
+  assert.match(p, /class Order/);
+  assert.match(p, /forge-file/); // exige o protocolo de blocos aplicáveis
+  assert.match(p, /PROIBIDO|Use SOMENTE/); // regra anti-símbolo-fantasma
+});
 
 // Camada de UI OPCIONAL do Modo Projeto (seletor no composer): "auto" não injeta nada (comportamento
 // clássico); as demais viram instrução explícita no blueprint E na geração, por linguagem.
