@@ -8,6 +8,7 @@ import type {
   ProjectArchitecture,
   ProjectBlueprintView,
   ProjectFramework,
+  ProjectGateFileView,
   ProjectLanguage,
   ProjectUI,
   RagChunkView,
@@ -20,6 +21,8 @@ import type {
 // Pedido de projeto em curso (o brief), retido para o "Tentar de novo" após uma falha do blueprint.
 // `ui` viaja junto para o retry reenviar a mesma escolha de camada de UI.
 export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework };
+// Resultado do gate workspace-wide (compileall/mypy sobre o conjunto gerado). advisory = não pôde rodar.
+export type ProjectGateState = { advisory: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[] };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 import { renderContextReport, renderSummarized } from "./commands";
 export type { ProfileView } from "../../src/shared/protocol";
@@ -98,7 +101,8 @@ export interface UIState {
   // error: falha do blueprint — o modal FICA ABERTO mostrando o erro + "Tentar de novo" (não some).
   // warning: aviso não-fatal DENTRO do modal (ex.: plano parcial recuperado após truncamento).
   // brief: o pedido em curso, para o retry reenviar sem redigitar.
-  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string; error?: string; warning?: string; brief?: ProjectBrief } | null;
+  // gate: resultado do gate workspace-wide (compileall/mypy) — pinta os cartões reprovados e resume.
+  project: { blueprint: ProjectBlueprintView | null; busy: boolean; done: boolean; planStep?: string; error?: string; warning?: string; brief?: ProjectBrief; gate?: ProjectGateState } | null;
   // Seq monotônico incrementado a cada "project/appliedAll" (aplicou todos os arquivos). O DevPanel
   // observa a mudança para desmarcar o Modo Projeto automaticamente (0 = nunca ocorreu).
   appliedAllAt: number;
@@ -228,8 +232,9 @@ export function reducer(state: UIState, action: Action): UIState {
     case "project/planning":
       return { ...state, project: { blueprint: null, busy: true, done: false, brief: action.brief } };
     case "project/generating":
-      // Aprovou e começou a gerar → o aviso de "revise antes de aprovar" já cumpriu o papel.
-      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false, error: undefined, warning: undefined } };
+      // Aprovou e começou a gerar → o aviso de "revise antes de aprovar" já cumpriu o papel. Limpa o
+      // gate anterior (a regeração produz um veredito novo) para não pintar cartões com erro obsoleto.
+      return { ...state, project: { ...(state.project ?? { blueprint: null, done: false }), busy: true, done: false, error: undefined, warning: undefined, gate: undefined } };
     case "project/close":
       return { ...state, project: null };
     case "newConversation":
@@ -312,9 +317,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "profile/state":
       return { ...state, profile: msg.profile };
     case "project/blueprint":
-      // Blueprint chegou → limpa qualquer erro anterior, preserva o brief (para retry futuro).
+      // Blueprint chegou → limpa qualquer erro/gate anterior, preserva o brief (para retry futuro).
       // warning (ex.: plano parcial após truncamento) renderiza DENTRO do modal, acima da lista.
-      return { ...state, project: { ...state.project, blueprint: msg.blueprint, busy: false, done: false, error: undefined, warning: msg.warning } };
+      return { ...state, project: { ...state.project, blueprint: msg.blueprint, busy: false, done: false, error: undefined, warning: msg.warning, gate: undefined } };
     case "project/blueprintError":
       // NÃO fecha o modal: mantém aberto com o erro real + "Tentar de novo" (o brief está retido).
       // Fallback ao toast só se, por acaso, não houver modal (state.project null).
@@ -342,6 +347,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "project/planStep":
       // Narração do planejamento (só relevante enquanto o blueprint não chegou).
       return state.project ? { ...state, project: { ...state.project, planStep: msg.label } } : state;
+    case "project/gate":
+      // Gate workspace-wide: guarda o veredito para pintar os cartões reprovados e o resumo no modal.
+      return state.project ? { ...state, project: { ...state.project, gate: { advisory: msg.advisory, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors } } } : state;
     case "project/done":
       return state.project ? { ...state, project: { ...state.project, busy: false, done: true } } : state;
     case "project/appliedAll":

@@ -229,6 +229,36 @@ test("buildTailContinuation: manda emitir o restante dos arquivos, sem repetir n
   assert.match(p, /NÃO reabra/i);
 });
 
+// Onda 1 (quick wins 1.3/1.4): o prompt do projeto injeta o PROPÓSITO do charter e as deps FIXADAS do
+// requirements.txt — sem isso o modelo ignora o charter (sai o exemplo Pedido/Pagamento) e alucina libs.
+test("buildBlueprintSystemPrompt: injeta propósito do charter e deps fixadas quando há contexto", () => {
+  const ctx = { purpose: "Agente de IA para P&D de materiais", pinnedDeps: ["fastapi==0.110.0", "pydantic==2.6.0"] };
+  const p = buildBlueprintSystemPrompt("python", "hexagonal", "auto", "auto", ctx);
+  assert.match(p, /PROP[ÓO]SITO DO PROJETO/i);
+  assert.match(p, /Agente de IA para P&D/);
+  assert.match(p, /DEPEND[ÊE]NCIAS J[ÁA] FIXADAS/i);
+  assert.match(p, /fastapi==0\.110\.0/);
+  // sem contexto (compat retroativa): nada de propósito/deps
+  assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("PROPÓSITO DO PROJETO"));
+});
+
+test("buildProjectFromBlueprintPrompt: injeta contexto + regra NO_PHANTOM_SYMBOL", () => {
+  const ctx = { purpose: "Sistema de recomendação interno", pinnedDeps: ["numpy==1.26.4"] };
+  const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "a.py", purpose: "p", deps: [] }], "auto", "auto", ctx);
+  assert.match(guided, /Sistema de recomenda[çc][ãa]o interno/);
+  assert.match(guided, /numpy==1\.26\.4/);
+  assert.match(guided, /COER[ÊE]NCIA DE S[ÍI]MBOLOS/i); // NO_PHANTOM_SYMBOL
+  assert.match(guided, /OrderStatus/); // cita o vetor exato do drift
+  assert.match(guided, /ImportError\/AttributeError/);
+});
+
+test("buildProjectPrompt: regra NO_PHANTOM_SYMBOL presente (com e sem contexto)", () => {
+  assert.match(buildProjectPrompt("proj", "python", "hexagonal"), /COER[ÊE]NCIA DE S[ÍI]MBOLOS/i);
+  const withCtx = buildProjectPrompt("proj", "python", "hexagonal", "auto", "auto", { purpose: "X do domínio Y", pinnedDeps: [] });
+  assert.match(withCtx, /X do dom[íi]nio Y/);
+  assert.match(withCtx, /COER[ÊE]NCIA DE S[ÍI]MBOLOS/i);
+});
+
 test("buildProjectPrompt ajusta arquitetura, manifesto e interface por linguagem", () => {
   const go = buildProjectPrompt("p", "go", "clean");
   assert.match(go, /\bGo\b/);

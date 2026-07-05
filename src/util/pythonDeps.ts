@@ -193,6 +193,25 @@ function normalizePkg(name: string): string {
   return name.toLowerCase().replace(/[-_.]+/g, "-");
 }
 
+// Especificadores de dependência JÁ FIXADOS num requirements.txt (linha por linha, sem comentários,
+// sem opções `-r`/`--index-url`, sem in-line comment `pkg==1.2  # nota`), preservando o pin exato
+// (`fastapi==0.110.0`). Alimenta o prompt do Modo Projeto: dar ao modelo as versões REAIS do workspace
+// evita que ele alucine outra lib/versão para o mesmo fim (drift de dependência do print). Cap por
+// orçamento — um requirements gigante não deve inchar o prompt. Puro/testável.
+export function parsePinnedRequirements(content: string, max = 40): string[] {
+  const out: string[] = [];
+  for (const raw of (content ?? "").split("\n")) {
+    let line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith("-")) continue;
+    // Remove comentário in-line (` # …`) preservando um `#` colado ao token (raro em specs).
+    const hash = line.indexOf(" #");
+    if (hash !== -1) line = line.slice(0, hash).trim();
+    if (line) out.push(line);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 // Acrescenta ao requirements.txt os pacotes AUSENTES (uma linha por pacote, sem pin — o pip resolve a
 // versão), preservando TODO o conteúdo existente (pins, comentários, ordem). Idempotente: pacotes já
 // declarados (mesmo com pin/extra/caixa diferente) não são re-adicionados.

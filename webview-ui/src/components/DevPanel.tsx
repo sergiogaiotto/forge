@@ -713,6 +713,13 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
   const bp = proj.blueprint;
   const files: BlueprintFileView[] = bp?.files ?? [];
   const anyComplete = files.some((f) => f.status === "complete");
+  // Gate workspace-wide: mapa path→erros para pintar os cartões reprovados (casa './x' com 'x'). Só os
+  // arquivos com erro ATRIBUÍDO são pintados como bloqueados; projectErrors (falha sem atribuição) é um
+  // aviso não-bloqueante mostrado no banner.
+  const gate = proj.gate;
+  const normPath = (p: string) => p.replace(/^[./\\]+/, "").replace(/\\/g, "/");
+  const gateErrors = new Map<string, string[]>();
+  for (const f of gate?.files ?? []) gateErrors.set(normPath(f.path), f.errors);
   const close = () => dispatch({ kind: "project/close" });
   // Reenvia o mesmo pedido (brief retido) após uma falha do planejamento — sem redigitar.
   const retry = () => {
@@ -775,23 +782,41 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                 ? "Arquivos gerados. Clique em “Aplicar tudo” para gravá-los no workspace, ou feche para revisar antes."
                 : "Revise os arquivos abaixo — passe o mouse para ver o objetivo e as dependências de cada um. “Aprovar e gerar” cria todos na ordem de dependência; “Cancelar” descarta o plano."}
             </div>
-            <div className="plan-list">
-              {files.map((f) => (
-                <div
-                  key={f.path}
-                  className="plan-item"
-                  title={`${f.path}\n\n${f.purpose || "(sem descrição)"}${f.deps.length ? `\n\nDepende de: ${f.deps.join(", ")}` : ""}`}
-                >
-                  <span className="dot" style={{ background: STATUS_DOT[f.status] }} title={STATUS_LABEL[f.status]} />
-                  <div className="plan-file">
-                    <span className="mono">{f.path}</span>
-                    <span className="purpose">{f.purpose}</span>
+            {gate && (
+              // Veredito do gate de compilação: verde (passou), consultivo (não pôde rodar) ou reprovado.
+              <div
+                className="assistant-warning"
+                style={{ marginTop: 4, borderColor: gate.advisory ? undefined : gateErrors.size || gate.projectErrors.length ? "#d16969" : "#86c98e" }}
+              >
+                <Icon name={gate.advisory || gateErrors.size || gate.projectErrors.length ? "alert-triangle" : "check"} size={14} /> {gate.summary}
+                {gate.projectErrors.map((e, i) => (
+                  <div key={i} className="mono" style={{ marginTop: 4, fontSize: 11, color: "#d16969", whiteSpace: "pre-wrap" }}>
+                    {e}
                   </div>
-                  <span className="plan-st" style={{ color: STATUS_DOT[f.status] }}>
-                    {STATUS_LABEL[f.status]}
-                  </span>
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
+            <div className="plan-list">
+              {files.map((f) => {
+                const errs = gateErrors.get(normPath(f.path)) ?? [];
+                const blocked = errs.length > 0;
+                return (
+                  <div
+                    key={f.path}
+                    className="plan-item"
+                    title={`${f.path}\n\n${f.purpose || "(sem descrição)"}${f.deps.length ? `\n\nDepende de: ${f.deps.join(", ")}` : ""}${blocked ? `\n\nGate reprovou:\n${errs.join("\n")}` : ""}`}
+                  >
+                    <span className="dot" style={{ background: blocked ? STATUS_DOT.failed : STATUS_DOT[f.status] }} title={blocked ? "gate reprovou" : STATUS_LABEL[f.status]} />
+                    <div className="plan-file">
+                      <span className="mono">{f.path}</span>
+                      <span className="purpose">{blocked ? errs[0] : f.purpose}</span>
+                    </div>
+                    <span className="plan-st" style={{ color: blocked ? STATUS_DOT.failed : STATUS_DOT[f.status] }}>
+                      {blocked ? "bloqueado" : STATUS_LABEL[f.status]}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
             <div className="actions" style={{ marginTop: 12, justifyContent: "flex-end", gap: 8 }}>
               {!proj.done ? (

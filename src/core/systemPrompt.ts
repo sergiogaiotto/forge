@@ -15,6 +15,47 @@ const NO_ELLIPSIS_RULE =
   "FIM, linha por linha, INCLUSIVE as partes que não mudaram. Um bloco com qualquer omissão NÃO é " +
   "aplicável e será rejeitado — mesmo que o arquivo seja longo, emita-o inteiro.";
 
+// Regra anti-símbolo-fantasma (irmã do NO_ELLIPSIS_RULE), voltada à COERÊNCIA cross-file de um projeto
+// multi-arquivo: a causa-raiz do "projeto que não roda" é o consumidor alucinar uma API que o arquivo
+// de origem não declara (`from domain.models import OrderStatus` sem esse enum existir). Verificada pelo
+// gate de compilação (compileall/mypy sobre o conjunto), então não é só conselho — é bloqueio.
+const NO_PHANTOM_SYMBOL =
+  "COERÊNCIA DE SÍMBOLOS (OBRIGATÓRIO): é PROIBIDO importar ou usar um símbolo que nenhum arquivo DESTE " +
+  "projeto define. Antes de escrever `from x import Y` (ou usar `x.Y`, `Y(...)`, `obj.campo`), confirme que " +
+  "`Y` existe COM ESSE NOME EXATO no arquivo de origem que você emitiu — mesma classe/função/constante/enum/" +
+  "atributo e mesma assinatura. NÃO invente uma API 'convencional' que a origem não declara (ex.: um enum " +
+  "`OrderStatus`, um campo `.id`, um construtor `.new()`, ou um método onde só existe atributo). Se precisar " +
+  "de um símbolo, DEFINA-o no arquivo dono ANTES de consumi-lo. Import/atributo fantasma quebra o projeto " +
+  "(ImportError/AttributeError) e é reprovado pelo gate de compilação — o arquivo consumidor fica bloqueado.";
+
+// Contexto opcional do WORKSPACE injetado nos prompts do Modo Projeto: o PROPÓSITO do charter
+// (.forge/project.md) e as dependências FIXADAS (requirements.txt). Sem isso o modelo ignora o charter
+// (sai o exemplo canônico Pedido/Pagamento) e alucina libs/versões — os dois achados da auditoria.
+export interface ProjectPromptContext {
+  purpose?: string;
+  pinnedDeps?: string[];
+}
+
+function renderProjectContext(ctx?: ProjectPromptContext): string {
+  if (!ctx) return "";
+  const parts: string[] = [];
+  const purpose = ctx.purpose?.trim();
+  if (purpose) {
+    parts.push(
+      "PROPÓSITO DO PROJETO (do charter .forge/project.md — é a FONTE DA VERDADE do domínio; NÃO troque " +
+        `por um domínio de exemplo genérico tipo Pedido/Pagamento):\n${purpose.slice(0, 1200)}`
+    );
+  }
+  const deps = (ctx.pinnedDeps ?? []).map((d) => d.trim()).filter(Boolean);
+  if (deps.length) {
+    parts.push(
+      "DEPENDÊNCIAS JÁ FIXADAS no requirements.txt do workspace (use EXATAMENTE estes pacotes/versões; não " +
+        `invente outra biblioteca nem outra versão para o mesmo fim):\n${deps.map((d) => `- ${d}`).join("\n")}`
+    );
+  }
+  return parts.join("\n\n");
+}
+
 export function buildBasePrompt(workspaceName: string): string {
   return `IDIOMA (OBRIGATÓRIO): responda SEMPRE em português do Brasil (pt-BR). TODO o texto que você
 produzir — o raciocínio/análise, as explicações, títulos, listas e mensagens ao usuário — DEVE estar
@@ -221,9 +262,17 @@ export function frameworkInstruction(language: ProjectLanguage, framework: Proje
 
 // Fase F — BLUEPRINT: pede ao modelo o PLANO de arquivos (aprovável) ANTES do código. Saída = SÓ um
 // array JSON [{path, purpose, deps}] em ordem de dependência (parseado por parseBlueprint). Sem código.
-export function buildBlueprintSystemPrompt(language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI, framework?: ProjectFramework): string {
+export function buildBlueprintSystemPrompt(
+  language: ProjectLanguage,
+  architecture: ProjectArchitecture,
+  ui?: ProjectUI,
+  framework?: ProjectFramework,
+  context?: ProjectPromptContext
+): string {
+  const ctx = renderProjectContext(context);
   return [
     `Você é o FORGE. Planeje um PROJETO completo em ${LANG_LABEL[language]}, na arquitetura ${ARCH_LABEL[architecture]}.`,
+    ...(ctx ? [ctx] : []),
     archetypeLayers(architecture),
     ...(frameworkInstruction(language, framework) ? [frameworkInstruction(language, framework)] : []),
     ...(uiLayerInstruction(language, ui) ? [uiLayerInstruction(language, ui)] : []),
@@ -271,11 +320,13 @@ export function buildProjectFromBlueprintPrompt(
   architecture: ProjectArchitecture,
   files: BlueprintFile[],
   ui?: ProjectUI,
-  framework?: ProjectFramework
+  framework?: ProjectFramework,
+  context?: ProjectPromptContext
 ): string {
   const list = files.map((f) => `- ${f.path} — ${f.purpose}${f.deps.length ? ` (usa: ${f.deps.join(", ")})` : ""}`).join("\n");
   const fwLine = frameworkInstruction(language, framework);
   const uiLine = [fwLine, uiLayerInstruction(language, ui)].filter(Boolean).join("\n");
+  const ctx = renderProjectContext(context);
   return (
     buildBasePrompt(workspaceName) +
     `
@@ -285,23 +336,31 @@ arquitetura ${ARCH_LABEL[architecture]}, NA ORDEM, cada um como um bloco \`${FOR
 \`path=\` correto. NÃO invente arquivos fora da lista nem omita nenhum:
 
 ${list}
-
+${ctx ? `\n${ctx}\n` : ""}
 ${archetypeLayers(architecture)}${uiLine ? `\n${uiLine}` : ""}
 COERÊNCIA entre arquivos: reuse os mesmos nomes/assinaturas (o adaptador implementa a MESMA interface —
 ${INTERFACE_MECH[language]} — que o domínio declara; imports e assinaturas casam). Inclua o manifesto
 (${MANIFEST[language]}). O README.md deve ser COMPLETO: propósito, funcionalidades e uma seção
 \`## Como rodar\` com TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para
-${SETUP_HINT[language]}. ${NO_ELLIPSIS_RULE}`
+${SETUP_HINT[language]}. ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`
   );
 }
 
 // Modo Projeto: gera um PROJETO COMPLETO na linguagem + arquitetura escolhidas, reusando o protocolo
 // forge-file (cada arquivo vira uma proposta aplicável). Herda o prompt base (idioma, protocolo, anti-elipse).
-export function buildProjectPrompt(workspaceName: string, language: ProjectLanguage, architecture: ProjectArchitecture, ui?: ProjectUI, framework?: ProjectFramework): string {
+export function buildProjectPrompt(
+  workspaceName: string,
+  language: ProjectLanguage,
+  architecture: ProjectArchitecture,
+  ui?: ProjectUI,
+  framework?: ProjectFramework,
+  context?: ProjectPromptContext
+): string {
   const uiLine = [frameworkInstruction(language, framework), uiLayerInstruction(language, ui)].filter(Boolean).join(" ");
+  const ctx = renderProjectContext(context);
   return (
     buildBasePrompt(workspaceName) +
-    `
+    `${ctx ? `\n\n${ctx}` : ""}
 
 MODO PROJETO (OBRIGATÓRIO nesta tarefa): gere um PROJETO COMPLETO em ${LANG_LABEL[language]}, na
 arquitetura ${ARCH_LABEL[architecture]}.${uiLine ? ` ${uiLine}` : ""} Siga à risca:
@@ -322,7 +381,7 @@ arquitetura ${ARCH_LABEL[architecture]}.${uiLine ? ` ${uiLine}` : ""} Siga à ri
    (a) o PROPÓSITO da aplicação; (b) as FUNCIONALIDADES principais; (c) uma seção \`## Como rodar\` com
    TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para ${SETUP_HINT[language]}.
    Os comandos devem ser reais e consistentes com o manifesto e a estrutura que você gerou.
-7. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_ELLIPSIS_RULE}`
+7. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`
   );
 }
 

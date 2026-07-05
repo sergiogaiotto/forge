@@ -32,6 +32,11 @@ export interface ProjectBlueprintView {
   brief: string;
   files: BlueprintFileView[];
 }
+// Gate workspace-wide do Modo Projeto: erros de compilação/import atribuídos a um arquivo do plano.
+export interface ProjectGateFileView {
+  path: string;
+  errors: string[];
+}
 
 // Modo Projeto: linguagem e arquétipo de arquitetura escolhidos pelo dev para gerar um projeto completo.
 export type ProjectLanguage = "python" | "typescript" | "java" | "go";
@@ -326,6 +331,10 @@ export type ExtToWebview =
   // Atualização PONTUAL do status de UM arquivo (progresso um-a-um durante a geração) — evita reenviar
   // o array inteiro a cada arquivo que fecha.
   | { type: "project/fileStatus"; path: string; status: ProjectFileStatus }
+  // Resultado do gate workspace-wide (compileall/mypy sobre o conjunto): pinta os arquivos reprovados.
+  // advisory=true → nenhuma verificação pôde rodar (nada bloqueado). files → erros por arquivo;
+  // projectErrors → falha ampla (sem arquivo atribuível) que bloqueia todos os .py.
+  | { type: "project/gate"; advisory: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[] }
   | { type: "project/done" }
   // Todos os arquivos do projeto foram APLICADOS (após "Aplicar tudo"). O webview desmarca o Modo
   // Projeto automaticamente — fim de fluxo: a próxima mensagem volta a ser chat/diagnóstico normal.
