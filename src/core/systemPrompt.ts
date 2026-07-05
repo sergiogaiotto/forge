@@ -99,7 +99,12 @@ ${FORGE_FENCE}
   para que o editor gere um diff correto e o usuário possa aplicar com um clique.
 - ${NO_ELLIPSIS_RULE}
 - Escreva uma breve explicação em texto antes do bloco. Não coloque vários arquivos no mesmo bloco.
-- Se a tarefa não exigir mudança de arquivo (ex.: explicação), responda normalmente sem bloco.
+- Se você MOSTRAR o conteúdo de um arquivo do workspace a criar ou alterar, é OBRIGATÓRIO emiti-lo como
+  bloco forge-file (protocolo acima, com \`path=\`). Mostrar o código de um arquivo em cerca comum de três
+  crases e pedir para o usuário copiar/colar é PROIBIDO: cerca comum NÃO vira uma proposta aplicável.
+  Cerca comum de três crases serve APENAS para o que NÃO é um arquivo a aplicar — um comando de shell, um
+  trecho ilustrativo, ou o código que já vai DENTRO de um bloco forge-file (ex.: um \`\`\`bash num README).
+  Se a tarefa for apenas explicar, sem criar nem alterar arquivo, responda em texto normalmente.
 
 Protocolo de NOTEBOOKS (.ipynb) — edição célula-a-célula:
 - Quando o usuário está num notebook, NÃO reescreva o arquivo inteiro. Edite por CÉLULA com blocos
@@ -166,16 +171,18 @@ Formato da resposta (markdown, conciso):
    \`arquivo:linha\` · o problema · a correção concreta.
 3. Não invente problemas; se algo estiver bom, diga. Não repita o diff inteiro.
 
-Quando uma correção for objetiva, você PODE propô-la como um bloco de edição de arquivo usando o
-protocolo \`${FORGE_FILE_BLOCK_LANG}\` (com o conteúdo COMPLETO do arquivo corrigido), para que o Dev
-aplique com um clique. Cerque o bloco com QUATRO crases — abertura e fechamento — assim:
+Nem todo achado precisa virar arquivo — a maioria você apenas aponta em TEXTO (mantenha a revisão
+concisa). Mas QUANDO for propor a correção concreta de um arquivo, ela DEVE vir como um bloco de edição
+usando o protocolo \`${FORGE_FILE_BLOCK_LANG}\` (com o conteúdo COMPLETO do arquivo corrigido), para que o
+Dev aplique com um clique. Cerque o bloco com QUATRO crases — abertura e fechamento — assim:
 
 ${FORGE_FENCE}${FORGE_FILE_BLOCK_LANG} path=caminho/relativo/arquivo.py
 <conteúdo COMPLETO e final do arquivo corrigido>
 ${FORGE_FENCE}
 
 O fechamento (\`${FORGE_FENCE}\`) fica sozinho na linha; quatro crases preservam cercas de três que o
-conteúdo porventura tenha. ${NO_ELLIPSIS_RULE} Caso contrário, apenas descreva a correção.`;
+conteúdo porventura tenha. ${NO_ELLIPSIS_RULE} Colar o arquivo corrigido em cerca comum de três crases e
+pedir para o Dev copiar/colar é PROIBIDO — não vira uma proposta aplicável.`;
 }
 
 const LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript (Node)", java: "Java", go: "Go" };
