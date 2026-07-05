@@ -1558,10 +1558,20 @@ function RunCard({
     ((!isTests && status === "fail") || (isTests && outcome === "error"));
   const title = run.label ? run.label : run.command || "execução";
   const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
+  // O conserto precisa voltar como bloco forge-file — o ÚNICO formato que o FORGE transforma numa
+  // proposta com botão "Aplicar". Sem reforçar isto, o modelo tende a devolver o código em cerca
+  // comum (três crases) + "substitua o conteúdo de X", que o dev só consegue copiar/colar à mão.
+  const applyProtocol =
+    "Emita o arquivo corrigido como um bloco forge-file (QUATRO crases, cabeçalho `path=`), com o " +
+    "conteúdo COMPLETO e final do arquivo. NÃO descreva a mudança em prosa nem cole o código em cerca " +
+    "comum de três crases pedindo para eu copiar/colar — cerca comum não vira uma proposta aplicável.";
+  // A saída do runner vai delimitada por um RÓTULO textual (não por cerca de crases): uma cerca de três
+  // crases aqui vira um exemplo de formatação que o modelo espelha, devolvendo cerca comum no lugar do bloco.
+  const evidence = `--- saída (apenas diagnóstico, não reformatar) ---\n${run.output.slice(-2500)}\n--- fim da saída ---`;
   const fixText =
     outcome === "failed"
-      ? `Os testes falharam:\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o código para os testes passarem (sem enfraquecer os testes).`
-      : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}):\n\`\`\`\n${run.output.slice(-2500)}\n\`\`\`\nCorrija o arquivo.`;
+      ? `Os testes falharam.\n${evidence}\n\nCorrija o CÓDIGO para os testes passarem (sem enfraquecer os testes). ${applyProtocol} Use no \`path=\` o arquivo que você corrigir.`
+      : `A execução de \`${run.filePath}\` falhou (exit ${run.exitCode ?? "?"}).\n${evidence}\n\nCorrija o arquivo. ${applyProtocol} Use \`path=${run.filePath}\`.`;
   return (
     <div className="run-card">
       <div className={`run-head ${status}`} onClick={() => !running && setOpen((v) => !v)}>

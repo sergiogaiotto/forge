@@ -161,6 +161,27 @@ test("prompt de revisão também proíbe omissões no bloco corrigido", () => {
   assert.match(p, /restante do código/);
 });
 
+// Reforço apply-first: mostrar um arquivo do workspace TEM de ser forge-file — cerca comum + "copie/cole"
+// é proibido (o sintoma do print). Mas a proibição NÃO é absoluta: shell/exemplo/```bash em README seguem.
+test("prompt base: mostrar arquivo do workspace exige forge-file (proíbe cerca comum + copiar/colar)", () => {
+  const p = buildBasePrompt("x");
+  assert.match(p, /OBRIGAT[ÓO]RIO emiti-lo como/i); // regra afirmativa
+  assert.match(p, /copiar\/colar é PROIBIDO/i);
+  assert.match(p, /forge-file/);
+  // não é proibição absoluta: shell/exemplo/README dentro de um forge-file continuam válidos
+  assert.match(p, /comando de shell/i);
+});
+
+// Revisão: propor a correção de um arquivo DEVE virar forge-file (era "PODE"), mas nem todo achado vira
+// arquivo — preserva a concisão multi-lente sem convidar à cerca comum + copiar/colar.
+test("prompt de revisão: propor correção de arquivo DEVE ser forge-file, não cerca comum", () => {
+  const p = buildReviewPrompt();
+  assert.match(p, /DEVE vir como um bloco/i); // imperativo CONDICIONAL (era "PODE propô-la")
+  assert.match(p, /Nem todo achado precisa virar arquivo/i); // não força reescrita de todo achado
+  assert.ok(!/\bPODE prop[ôo]/i.test(p)); // não convida mais à cerca comum
+  assert.match(p, /copiar\/colar é PROIBIDO/i);
+});
+
 test("buildContinuationPrompt cita o arquivo, manda continuar e proíbe reabrir a cerca", () => {
   const p = buildContinuationPrompt("src/a.py");
   assert.match(p, /src\/a\.py/);
