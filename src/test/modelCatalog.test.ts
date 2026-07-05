@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
+import { MAX_OUTPUT_PRESETS, maxOutputLabel } from "../shared/protocol";
 
 test("gpt-oss-120b: janela 128k, saída generosa e suporta reasoning effort", () => {
   const m = getModelMeta("openai-compatible", "openai/gpt-oss-120b");
@@ -61,4 +62,27 @@ test("resolveMaxOutput: override válido vence; inválido cai no catálogo; nunc
   assert.equal(resolveMaxOutput(8000, meta), 8000); // override válido vence
   assert.equal(resolveMaxOutput(9999999, meta), 131072); // limitado à janela
   assert.equal(resolveMaxOutput(4096.9, meta), 4096); // floor
+});
+
+// Clamp contra a janela SERVIDA — evita o footgun de um teto de saída que o gateway recusaria com 400.
+test("clampOutputToServed: rebaixa o teto quando o servedWindow é menor que o pedido", () => {
+  const meta = getModelMeta("openai-compatible", "openai/gpt-oss-120b"); // janela nominal 131072
+  // servedWindow=0 → usa o nominal do catálogo: 128k pedido não é rebaixado (cabe, menos a reserva)
+  assert.equal(clampOutputToServed(131072, meta, 0, 4096), 131072 - 4096);
+  // gateway serve só 8192 → 128k pedido é rebaixado a 8192 - reserva
+  assert.equal(clampOutputToServed(131072, meta, 8192, 4096), 8192 - 4096);
+  // pedido já pequeno cabe sem rebaixar
+  assert.equal(clampOutputToServed(16384, meta, 65536, 4096), 16384);
+  // piso útil de 1024: nunca rebaixa abaixo disso mesmo com janela minúscula
+  assert.equal(clampOutputToServed(131072, meta, 2000, 4096), 1024);
+  // servedWindow acima do nominal do catálogo é limitado ao nominal
+  assert.equal(clampOutputToServed(131072, meta, 999999, 4096), 131072 - 4096);
+});
+
+test("MAX_OUTPUT_PRESETS/maxOutputLabel: presets até 128k e rótulos legíveis", () => {
+  assert.deepEqual(MAX_OUTPUT_PRESETS, [0, 16384, 32768, 65536, 131072]);
+  assert.equal(maxOutputLabel(0), "auto");
+  assert.equal(maxOutputLabel(undefined), "auto");
+  assert.equal(maxOutputLabel(32768), "32k");
+  assert.equal(maxOutputLabel(131072), "128k");
 });

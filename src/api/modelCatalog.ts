@@ -54,3 +54,13 @@ export function resolveMaxOutput(override: number, meta: ModelMeta): number {
   if (Number.isFinite(o) && o > 0) return Math.min(o, meta.contextWindow);
   return meta.maxOutputTokens;
 }
+
+// Rebaixa o teto de saída à janela realmente SERVIDA pelo gateway (menos uma reserva de entrada) —
+// evita o footgun de o dev escolher um valor (ex.: 128k) que excede o --max-model-len servido e viraria
+// 400 em toda geração. `servedWindow` = forge.provider.maxContextWindow (0 = usar o nominal do catálogo).
+// Nunca rebaixa abaixo de 1024 (piso útil). Puro/testável.
+export function clampOutputToServed(resolved: number, meta: ModelMeta, servedWindow: number, reserve: number): number {
+  const window = Number.isFinite(servedWindow) && servedWindow > 0 ? Math.min(servedWindow, meta.contextWindow) : meta.contextWindow;
+  const ceiling = Math.max(1024, window - Math.max(0, reserve));
+  return Math.min(resolved, ceiling);
+}

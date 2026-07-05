@@ -58,6 +58,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("forge.showOutput", () => log.show()),
     vscode.commands.registerCommand("forge.setupObservability", async () => {
       await controller.setupObservability();
+    }),
+    vscode.commands.registerCommand("forge.setMaxOutput", async () => {
+      await controller.pickMaxOutput();
     })
   );
 
