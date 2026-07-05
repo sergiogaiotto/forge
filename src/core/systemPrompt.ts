@@ -532,3 +532,17 @@ export function buildTailContinuation(): string {
 - NÃO repita nada do que já escreveu; NÃO reabra um bloco já fechado.
 - ${NO_ELLIPSIS_RULE}`;
 }
+
+// Reparo de protocolo (Onda 3): a resposta anterior MOSTROU o conteúdo de arquivo(s) em cerca comum (três
+// crases), sem o bloco forge-file — então NADA virou uma proposta aplicável (o sintoma do print, em que o
+// dev tinha de copiar/colar). Mensagem de USUÁRIO que pede a REEMISSÃO só como forge-file. Roda numa
+// chamada SILENCIOSA no Task (o texto vira proposta, não prosa nova no chat) — ver core/Task.ts
+// (repairProtocol) e util/proseEdits.ts (a detecção que decide disparar). O system prompt já traz o
+// protocolo completo; aqui reforçamos a reemissão e a ordem de ignorar trechos ilustrativos.
+export function buildProtocolReemitPrompt(): string {
+  return `Você mostrou o conteúdo de um ou mais arquivos em cerca comum (três crases), SEM o bloco \`${FORGE_FILE_BLOCK_LANG}\` — então NADA disso virou uma proposta aplicável com um clique. REEMITA agora, para CADA arquivo do workspace que você quer criar ou alterar, um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO seguindo o protocolo (QUATRO crases na abertura e no fechamento, cabeçalho \`path=\` com o caminho relativo CORRETO). Regras estritas:
+- Responda APENAS com os blocos de arquivo — o PRIMEIRO caractere já é a cerca de abertura. NADA de saudação, explicação ou comentário.
+- Um arquivo por bloco, com o conteúdo COMPLETO do início ao fim (o mesmo que você mostrou, agora aplicável).
+- Se algum trecho que você mostrou era só ILUSTRATIVO (um exemplo, um comando de shell — NÃO um arquivo a aplicar), IGNORE-o: não emita bloco para ele. Se NENHUM trecho for um arquivo a aplicar, responda vazio.
+- ${NO_ELLIPSIS_RULE}`;
+}
