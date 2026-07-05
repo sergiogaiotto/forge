@@ -61,6 +61,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("forge.setMaxOutput", async () => {
       await controller.pickMaxOutput();
+    }),
+    // Ações que saíram da barra do composer (composer enxuto), acessíveis pela paleta:
+    vscode.commands.registerCommand("forge.prepareEnv", async () => {
+      await focusView();
+      await controller.prepareEnv();
+    }),
+    vscode.commands.registerCommand("forge.pickRole", async () => {
+      await focusView();
+      await controller.pickProjectRole();
+    }),
+    vscode.commands.registerCommand("forge.inspectIndex", async () => {
+      await focusView(); // Índice/Perfil abrem um modal no webview — revela a view e manda abrir.
+      controller.openWebviewPanel("inspect");
+    }),
+    vscode.commands.registerCommand("forge.openProfile", async () => {
+      await focusView();
+      controller.openWebviewPanel("profile");
     })
   );
 

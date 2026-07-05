@@ -69,6 +69,26 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     if (state.appliedAllAt) setProjectMode(false);
   }, [state.appliedAllAt]);
 
+  // Comando de paleta ("FORGE: Inspecionar índice" / "Abrir perfil") pediu para abrir um modal — o
+  // pedido chega no ESTADO (forge.uiPanel, com seq monotônico), robusto à corrida de montagem (cold
+  // start / fim do onboarding). Abre UMA vez (compara o seq com o último visto) — replicando o clique do
+  // slash — e confirma ao host via ui/panelConsumed, que limpa o pedido (não reabre em remount).
+  const lastPanelSeq = useRef(0);
+  useEffect(() => {
+    const req = forge.uiPanel;
+    if (!req || req.seq <= lastPanelSeq.current) return;
+    lastPanelSeq.current = req.seq;
+    if (req.panel === "inspect") {
+      setShowInspect(true);
+      post({ type: "inspect/open" });
+    } else {
+      dispatch({ kind: "clearProfile" });
+      setShowProfile(true);
+      post({ type: "profile/refresh" });
+    }
+    post({ type: "ui/panelConsumed" });
+  }, [forge.uiPanel, dispatch]);
+
   const enabledSkills = forge.skills.filter((s) => s.enabled).length;
   const enabledMcp = forge.mcp.filter((m) => m.enabled);
 
@@ -467,17 +487,6 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             </span>
             <span
               className="pill"
-              title="Modo TDD: escreve o teste primeiro, depois a implementação"
-              onClick={() => {
-                setTdd((v) => !v);
-                setProjectMode(false);
-              }}
-              style={{ color: tdd ? "#e0863c" : undefined, fontWeight: tdd ? 500 : undefined }}
-            >
-              <Icon name={tdd ? "circle-check" : "circle"} size={14} color={tdd ? "#e0863c" : undefined} /> TDD
-            </span>
-            <span
-              className="pill"
               title="Modo Projeto: gera um projeto COMPLETO na linguagem e arquitetura escolhidas"
               onClick={() => {
                 setProjectMode((v) => !v);
@@ -486,6 +495,17 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               style={{ color: projectMode ? "#e0863c" : undefined, fontWeight: projectMode ? 500 : undefined }}
             >
               <Icon name={projectMode ? "circle-check" : "circle"} size={14} color={projectMode ? "#e0863c" : undefined} /> Projeto
+            </span>
+            <span
+              className="pill"
+              title="Modo TDD: escreve o teste primeiro, depois a implementação"
+              onClick={() => {
+                setTdd((v) => !v);
+                setProjectMode(false);
+              }}
+              style={{ color: tdd ? "#e0863c" : undefined, fontWeight: tdd ? 500 : undefined }}
+            >
+              <Icon name={tdd ? "circle-check" : "circle"} size={14} color={tdd ? "#e0863c" : undefined} /> TDD
             </span>
             {projectMode && (
               <>
@@ -543,40 +563,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                 )}
               </>
             )}
-            <span className="pill" title="Rodar a suíte de testes (pytest)" onClick={() => post({ type: "tests/run" })}>
-              <Icon name="terminal" size={14} color="#86c98e" /> Testes
-            </span>
-            <span
-              className="pill"
-              title="Preparar ambiente: cria o venv e instala as dependências (requirements.txt/pyproject)"
-              onClick={() => post({ type: "env/prepare" })}
-            >
-              <Icon name="plug" size={14} color="#c9a26d" /> Ambiente
-            </span>
-            <span
-              className="pill"
-              title="Inspecionar (read-only) as skills injetadas e o que está indexado no RAG"
-              onClick={() => {
-                setShowInspect(true);
-                post({ type: "inspect/open" });
-              }}
-            >
-              <Icon name="database" size={14} color="#7fb3d5" /> Índice
-            </span>
-            <span
-              className="pill"
-              title="Perfil do projeto — stack, papel e convenções"
-              onClick={() => {
-                dispatch({ kind: "clearProfile" }); // força "carregando…" e evita dados stale ao reabrir
-                setShowProfile(true);
-                post({ type: "profile/refresh" });
-              }}
-            >
-              <Icon name="list-check" size={14} /> Perfil
-            </span>
-            <span className="pill" title="Definir seu papel no projeto — ajusta o estilo/defaults" onClick={() => post({ type: "profile/pickRole" })}>
-              <Icon name="users" size={14} /> Papel
-            </span>
+            {/* Testes/Ambiente/Índice/Perfil/Papel saíram da barra (composer enxuto): acessíveis pela
+                paleta de comandos ("FORGE: …") e pelos slash /testes /ambiente /indice /perfil. */}
             <span className="pill" title={forge.provider.modelId}>
               <Icon name="cpu" size={14} /> {forge.provider.modelId}
             </span>
@@ -604,9 +592,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
 
       {/* Barra de status */}
       <div className="statusbar">
-        <div className="sb-item brand">
-          <Icon name="flame" size={13} /> {forge.provider.label ?? forge.provider.modelId}
-        </div>
+        {/* O rótulo do provedor ("HubGPU/compat · modelo") saiu do rodapé a pedido; o modelo atual
+            continua visível no pill do composer. */}
         <div className="sb-item" style={{ color: "#7bbf6a" }}>
           <Icon name="shield-check" size={13} /> Licença ✓
         </div>

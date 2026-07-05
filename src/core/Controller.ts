@@ -130,6 +130,10 @@ export class Controller {
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   private poster: ((msg: ExtToWebview) => void) | undefined;
+  // Pedido pendente de abrir um modal do webview (Índice/Perfil) via comando de paleta — vai no estado
+  // (ForgeState.uiPanel) com seq monotônico; limpo quando o webview confirma (`ui/panelConsumed`).
+  private uiPanel: { panel: "inspect" | "profile"; seq: number } | undefined;
+  private uiPanelSeq = 0;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.secrets = new SecretsStore(context.secrets);
@@ -1195,6 +1199,7 @@ export class Controller {
       presets: PROVIDER_PRESETS,
       telemetryEnabled: this.config.telemetryEnabled(),
       version: "1.0.0",
+      uiPanel: this.uiPanel,
     };
   }
 
@@ -1448,6 +1453,12 @@ export class Controller {
       case "inspect/open":
         await this.inspectOpen();
         break;
+      case "ui/panelConsumed":
+        // o webview abriu o modal pedido pela paleta — limpa o pedido e re-emite o estado limpo para
+        // que qualquer remount futuro NÃO reabra (fecha a janela de corrida).
+        this.uiPanel = undefined;
+        await this.postState();
+        break;
       case "skills/body":
         await this.inspectSkillBody(msg.name);
         break;
@@ -1573,6 +1584,16 @@ export class Controller {
     }));
     const pick = await vscode.window.showQuickPick(items, { title: "Máximo de tokens de saída (por sessão)", placeHolder: "Escolha o teto de saída — valores altos são rebaixados ao que o gateway serve" });
     if (pick) await this.setMaxOutput(pick.value);
+  }
+
+  // Comando de paleta → abre um modal do webview (Índice/Perfil). Registra o pedido no ESTADO (com seq
+  // monotônico) e re-emite o estado, em vez de postar uma mensagem fire-and-forget: assim o webview
+  // recebe o pedido no handshake ready→postState mesmo no cold start / fim do onboarding (quando o
+  // listener ainda não montou). O extension.ts revela a view antes (focusView). O webview abre o modal
+  // uma única vez (compara o seq) e confirma via `ui/panelConsumed`, que limpa o pedido aqui.
+  openWebviewPanel(panel: "inspect" | "profile"): void {
+    this.uiPanel = { panel, seq: ++this.uiPanelSeq };
+    void this.postState();
   }
 
   // Teto de saída efetivo: precedência sessão > config admin > catálogo, com CLAMP contra a janela
