@@ -103,6 +103,15 @@ export function buildPytestInstall(venvPython: string): string {
   return `${interp} -m pip install pytest`;
 }
 
+// Instalação do mypy num venv EXISTENTE (nunca global). O gate workspace-wide do Modo Projeto usa mypy
+// para pegar o DRIFT de contrato cross-file (import/atributo fantasma) que o compileall — só sintaxe —
+// não vê. Sem mypy no venv o gate fica "parcial" e NÃO bloqueia; instalá-lo é o que faz o gate morder.
+// Best-effort: se falhar (offline/sem índice pip), a degradação segura do gate ("parcial") é preservada.
+export function buildMypyInstall(venvPython: string): string {
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -m pip install mypy`;
+}
+
 // Monta o comando de teste usando o interpretador do venv quando o comando é pytest. Cobre:
 //   "pytest -q"           → `"<venv>" -m pytest -q`
 //   "python -m pytest -q" → `"<venv>" -m pytest -q`  (python/python3 SEM caminho — nome nu)

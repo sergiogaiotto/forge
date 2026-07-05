@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import { test } from "node:test";
 import {
+  buildMypyInstall,
   buildPytestInstall,
   buildPytestProbe,
   buildVenvSetupCommand,
@@ -44,6 +45,11 @@ test("buildPytestProbe: proba o ambiente onde os testes VÃO RODAR (venv → mó
 test("buildPytestInstall: instala no venv EXISTENTE (o caso sem venv passa antes pelo prepareEnv)", () => {
   assert.equal(buildPytestInstall("C:/p/.venv/Scripts/python.exe"), "C:/p/.venv/Scripts/python.exe -m pip install pytest");
   assert.equal(buildPytestInstall("C:/meu proj/.venv/Scripts/python.exe"), '"C:/meu proj/.venv/Scripts/python.exe" -m pip install pytest');
+});
+
+test("buildMypyInstall: instala mypy no venv do gate (aspas em caminho com espaço)", () => {
+  assert.equal(buildMypyInstall("C:/p/.venv/Scripts/python.exe"), "C:/p/.venv/Scripts/python.exe -m pip install mypy");
+  assert.equal(buildMypyInstall("C:/meu proj/.venv/Scripts/python.exe"), '"C:/meu proj/.venv/Scripts/python.exe" -m pip install mypy');
 });
 
 // REGRESSÃO (print do dev: ModuleNotFoundError com venv preparado): o "Executar" rodava o python do

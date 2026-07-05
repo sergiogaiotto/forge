@@ -130,6 +130,7 @@ export interface ProjectGateSummary {
   skipped: string[]; // labels puladas (não instaladas / timeout)
   fileErrors: { path: string; errors: string[] }[]; // atribuídos a um arquivo → bloqueiam esse arquivo
   projectErrors: string[]; // reprovou SEM atribuir a arquivo → bloqueia todos os .py (fallback)
+  partial: boolean; // compilou (sintaxe ok) mas o mypy NÃO rodou → coerência cross-file NÃO verificada (NÃO é verde)
   summary: string;
 }
 
@@ -166,6 +167,9 @@ export function summarizeGate(checks: GateCheckResult[]): ProjectGateSummary {
     .sort((a, b) => a.path.localeCompare(b.path));
   const advisory = !anyGateRan;
   const mypyRan = ran.some((l) => /mypy/i.test(l)); // o mypy é o que pega o DRIFT de contrato cross-file
+  // "Parcial": um gate rodou (compileall) e não achou erro, mas o mypy NÃO rodou — logo a coerência
+  // cross-file (import/atributo fantasma) NÃO foi verificada. NÃO é verde: a UI deve avisar, não celebrar.
+  const partial = !advisory && fileErrors.length === 0 && projectErrors.length === 0 && !mypyRan;
   // Só BLOQUEIA arquivos com erro ATRIBUÍDO (a ferramenta apontou o arquivo). Uma reprovação sem
   // atribuição (traceback do próprio tooling, env quebrado) é ANÔMALA e vira aviso não-bloqueante — não
   // dá para saber se é defeito do código ou da ferramenta, e um bloqueio amplo por env seria falso.
@@ -179,5 +183,5 @@ export function summarizeGate(checks: GateCheckResult[]): ProjectGateSummary {
           ? "Gate verde: o conjunto compila e importa (compileall + mypy sem erros de contrato)."
           : "Gate parcial: compilou sem erro de sintaxe (compileall), mas o mypy não rodou — o drift de contrato cross-file NÃO foi verificado.";
 
-  return { advisory, ran, skipped, fileErrors, projectErrors, summary };
+  return { advisory, ran, skipped, fileErrors, projectErrors, partial, summary };
 }

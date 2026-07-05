@@ -22,7 +22,7 @@ import type {
 // `ui` viaja junto para o retry reenviar a mesma escolha de camada de UI.
 export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework };
 // Resultado do gate workspace-wide (compileall/mypy sobre o conjunto gerado). advisory = não pôde rodar.
-export type ProjectGateState = { advisory: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[] };
+export type ProjectGateState = { advisory: boolean; partial: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[] };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 import { renderContextReport, renderSummarized } from "./commands";
 export type { ProfileView } from "../../src/shared/protocol";
@@ -349,7 +349,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return state.project ? { ...state, project: { ...state.project, planStep: msg.label } } : state;
     case "project/gate":
       // Gate workspace-wide: guarda o veredito para pintar os cartões reprovados e o resumo no modal.
-      return state.project ? { ...state, project: { ...state.project, gate: { advisory: msg.advisory, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors } } } : state;
+      return state.project ? { ...state, project: { ...state.project, gate: { advisory: msg.advisory, partial: msg.partial, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors } } } : state;
     case "project/done":
       return state.project ? { ...state, project: { ...state.project, busy: false, done: true } } : state;
     case "project/appliedAll":
