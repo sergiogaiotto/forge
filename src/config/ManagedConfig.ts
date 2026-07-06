@@ -132,6 +132,12 @@ export class ManagedConfig {
     };
   }
 
+  // Diagnóstico LOCAL (P3): log estruturado NDJSON + bundle exportável. Sempre REDIGIDO (masked); distinto
+  // da observabilidade do Langfuse (opt-in/egress). `enabled` permite desligar a gravação local por política.
+  diagnostics(): { enabled: boolean } {
+    return { enabled: this.cfg().get<boolean>("diagnostics.enabled", true) };
+  }
+
   search(): { server: string; tool: string; queryArg: string } {
     const c = this.cfg();
     return {

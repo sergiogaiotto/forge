@@ -79,6 +79,8 @@ import { validatorsFromStack } from "../skills/stackValidators";
 import { Role, resolveRole, roleGuidance, roleGuidanceLine, roleLabel, roleSkills, setRole, stripFrontmatter } from "../util/roleDefaults";
 import { Observability } from "../obs/Observability";
 import { LangfuseDirectSink } from "../obs/LangfuseDirectSink";
+import { LocalDiagnosticsLog } from "../obs/LocalDiagnosticsLog";
+import { renderDiagnosticsBundle } from "../obs/diagnostics";
 import { Runner } from "./Runner";
 import { RunService } from "./RunService";
 import { Task } from "./Task";
@@ -118,6 +120,7 @@ export class Controller {
   private readonly obs: Observability;
 
   private readonly sessionId = crypto.randomUUID(); // id de sessão p/ correlação no Langfuse
+  private readonly diag: LocalDiagnosticsLog; // log de diagnóstico LOCAL (P3) — sempre-ligado, redigido
   private skills: SkillMeta[] = [];
   private sessionToken: SessionToken | undefined;
   // Fase F: sessão do Modo Projeto — o blueprint aprovado e o status por arquivo (orquestração).
@@ -156,10 +159,18 @@ export class Controller {
     this.mcp = new McpManager(this.registry, this.egress, this.approvalGate, this.auditor, this.secrets);
     this.rag = new CodebaseIndex(this.egress, () => this.config.rag(), () => this.workspaceRoot());
     this.rag.setOnChange(() => void this.postState()); // atualiza o indicador de RAG ao vivo
+    // Diagnóstico LOCAL (P3): log estruturado sempre-ligado em globalStorage/logs, redigido, independente
+    // do opt-in do Langfuse. Recebe o MESMO ObsEvent via o tee em Observability (antes do gate de egress).
+    this.diag = new LocalDiagnosticsLog(
+      path.join(this.context.globalStorageUri.fsPath, "logs"),
+      () => this.sessionId,
+      { enabled: () => this.config.diagnostics().enabled, now: () => new Date().toISOString() }
+    );
     this.obs = new Observability(
       () => this.config.observability(),
       new LangfuseDirectSink(() => this.config.observability(), () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET), this.egress),
-      { onError: (m) => log.warn(m) }
+      { onError: (m) => log.warn(m) },
+      this.diag
     );
     this.previewService = new PreviewService({
       workspaceRoot: () => this.workspaceRoot(),
@@ -192,6 +203,7 @@ export class Controller {
   async initialize(): Promise<void> {
     this.registry.load(this.config.mcpCatalog());
     void this.sweepValidatorTemp(); // remove órfãos .forge/val-* de um host morto antes do finally
+    void this.diag.prune(7 * 24 * 60 * 60 * 1000); // higiene: descarta logs de diagnóstico com +7 dias
     await this.reindexSkills();
     await this.restoreSession();
     this.setupWatchers();
@@ -2902,6 +2914,45 @@ export class Controller {
   }
 
   // ---- revisão de código (in-network) ----------------------------------------
+
+  // Comando "Exportar diagnóstico" (P3): gera um bundle REDIGIDO (manifesto + resumo + eventos NDJSON da
+  // sessão atual) e abre no editor para o dev anexar a um relato de bug. Tudo LOCAL — nada é enviado.
+  async exportDiagnostics(): Promise<void> {
+    try {
+      const dir = path.join(this.context.globalStorageUri.fsPath, "logs");
+      await fs.mkdir(dir, { recursive: true });
+      const records = this.diag.records();
+      const text = renderDiagnosticsBundle(records, this.diagnosticsManifest());
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const file = path.join(dir, `forge-diagnostico-${stamp}.md`);
+      await fs.writeFile(file, text, "utf8");
+      await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+      void vscode.window.showInformationMessage(`FORGE: diagnóstico exportado (${records.length} eventos, redigido). Anexe este arquivo ao relato de bug.`);
+    } catch (e) {
+      log.error("Falha ao exportar diagnóstico", e);
+      this.post({ type: "notice", level: "error", message: "Não consegui exportar o diagnóstico (veja Mostrar logs)." });
+    }
+  }
+
+  // Manifesto do bundle: versões + config NÃO-secreta (NUNCA segredos/chaves — só presença booleana quando
+  // relevante). Serve ao suporte para reproduzir o ambiente sem expor credenciais.
+  private diagnosticsManifest(): Record<string, unknown> {
+    const obs = this.config.observability();
+    return {
+      forgeVersion: this.context.extension?.packageJSON?.version ?? "?",
+      vscodeVersion: vscode.version,
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      sessionId: this.sessionId,
+      skills: this.skills.length,
+      langfuseEnabled: obs.enabled,
+      langfuseCapture: obs.capture,
+      diagnosticsEnabled: this.config.diagnostics().enabled,
+      egress: this.config.egressPolicy(),
+      generatedAt: new Date().toISOString(),
+    };
+  }
 
   async reviewChanges(): Promise<void> {
     if (!(await this.ensureSession())) {

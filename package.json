@@ -128,6 +128,12 @@
         "icon": "$(output)"
       },
       {
+        "command": "forge.exportDiagnostics",
+        "title": "Exportar diagnóstico (bundle redigido)",
+        "category": "FORGE",
+        "icon": "$(bug)"
+      },
+      {
         "command": "forge.setupObservability",
         "title": "Configurar observabilidade (Langfuse)",
         "category": "FORGE"
@@ -372,6 +378,11 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Telemetria de produto opt-in (distinta da observabilidade do admin via gateway/Langfuse)."
+        },
+        "forge.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Log de **diagnóstico local** (P3): grava um NDJSON estruturado e sempre **redigido** (segredos/PII mascarados) em `globalStorage/logs`, além de um buffer em memória. Alimenta o comando **FORGE: Exportar diagnóstico** (bundle para anexar a um relato de bug). Sempre-ligado e **100% local** — distinto da observabilidade do Langfuse, que é opt-in e sai da máquina. Desligue (`false`) para não gravar nada em disco."
         },
         "forge.identity.requireEmail": {
           "type": "boolean",
