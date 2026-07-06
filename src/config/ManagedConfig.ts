@@ -74,6 +74,14 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("validation.gateBlocksApply", true);
   }
 
+  // Gate de DEFINIÇÃO DE PRONTO (P2) no Modo Projeto: quando o conjunto está completo mas falta manifesto de
+  // dependências, qualquer teste, ou um README com "como rodar", bloqueia o Aplicar de todos (bloqueio +
+  // aviso, sem auto-reparo). Desligue (`false`) para projetos onde teste/README não se aplicam (ex.: script
+  // descartável). Respeita o `validation.gateBlocksApply` mestre — se ele estiver off, nada bloqueia.
+  definitionOfDone(): boolean {
+    return this.cfg().get<boolean>("gate.definitionOfDone", true);
+  }
+
   rag(): RagConfig {
     const c = this.cfg();
     return {

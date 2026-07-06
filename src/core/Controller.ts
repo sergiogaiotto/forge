@@ -69,6 +69,7 @@ import { parseFileBlocks } from "../util/fileBlocks";
 import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
 import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
+import { evaluateDodGate } from "../util/dodCheck";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
@@ -1899,7 +1900,7 @@ export class Controller {
         // Gate WORKSPACE-WIDE antes do "Pronto": compila/importa o CONJUNTO gerado e bloqueia o Aplicar
         // dos arquivos que não passam (drift de contrato cross-file). Alimenta entry.gateOk. Roda ANTES
         // do project/done para o modal já abrir com os cartões reprovados pintados.
-        let gate = await this.runProjectGate(project.language, project.architecture);
+        let gate = await this.runProjectGate(project.language, project.architecture, done === total);
         // Onda 2: AUTO-REPARO dirigido pelo gate — enquanto houver arquivo reprovado, re-pede SÓ esses
         // arquivos (com os erros do mypy + o CONTRATO REAL dos que passaram) e re-roda o gate, até verde ou
         // o teto de rodadas. O gate continua BLOQUEANDO o Aplicar se não fechar — nunca entrega em silêncio.
@@ -1908,12 +1909,18 @@ export class Controller {
           this.post({ type: "notice", level: "info", message: `Auto-reparo do projeto: ${gate.fileErrors.length} arquivo(s) com erro de contrato — regenerando (rodada ${round}/${MAX_PROJECT_REPAIRS})…` });
           const n = await this.repairProjectFromGate(gate, project, runtime);
           if (n === 0) break; // nada regenerado (falha do provedor / sem alvo casável) — insistir não ajuda
-          gate = await this.runProjectGate(project.language, project.architecture);
+          gate = await this.runProjectGate(project.language, project.architecture, done === total);
         }
         // Violações de arquitetura NÃO passam pelo auto-reparo (ver runProjectGate): avisa o dev para
         // corrigir a DIREÇÃO do import — os arquivos seguem bloqueados no Aplicar até então.
         if (gate?.architectureErrors?.length) {
           this.post({ type: "notice", level: "warn", message: `Arquitetura: ${gate.architectureErrors.length} arquivo(s) violam a regra de camadas (a camada interna importa a externa) — corrija a DIREÇÃO do import (inverta a dependência / use uma port). Esses arquivos estão bloqueados no Aplicar.` });
+        }
+        // Definição de pronto (P2): requisitos AUSENTES do conjunto (manifesto/teste/README). Como a falta
+        // não se atribui a um arquivo, bloqueia o Aplicar de TODOS — o dev gera o que falta e re-roda. Não
+        // entra no auto-reparo (é bloco de arquivo NOVO, que o reparo de type-drift descarta): só avisa.
+        if (gate?.dodErrors?.length) {
+          this.post({ type: "notice", level: "warn", message: `Definição de pronto: o projeto está incompleto (${gate.dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar. ${gate.dodErrors.join(" ")}` });
         }
         // Smoke test ADVISORY (P4): se o conjunto passou no gate estático (sem erros por-arquivo nem
         // amplos), tenta RODAR a suíte gerada no venv do workspace — o sinal "de fato roda". Nunca
@@ -1936,7 +1943,7 @@ export class Controller {
   // CONJUNTO — pegando o drift de contrato que a validação por-arquivo (isolada) não vê. O resultado por
   // arquivo alimenta `entry.gateOk`; `applyProposal` já recusa `!gateOk` quando gateBlocksApply().
   // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
-  private async runProjectGate(language: ProjectLanguage, architecture: ProjectArchitecture): Promise<ProjectGateSummary | null> {
+  private async runProjectGate(language: ProjectLanguage, architecture: ProjectArchitecture, complete: boolean): Promise<ProjectGateSummary | null> {
     const task = this.currentTask;
     if (!task || language !== "python") return null; // Onda 1: Python-only (compileall/mypy)
     // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
@@ -2005,27 +2012,51 @@ export class Controller {
         errors: [`viola a arquitetura ${architecture}: ${LAYER_RULE[architecture]}. Import(s) proibido(s) da camada externa: ${v.imports.join(", ")}.`],
       }));
 
+      // Definição de PRONTO (DoD, P2): requisitos AUSENTES do CONJUNTO (manifesto de deps / qualquer teste /
+      // README com "como rodar"). Diferente da arquitetura (que culpa UM arquivo), a falta é do conjunto —
+      // não se atribui a um arquivo. Só avalia quando COMPLETO (todo o blueprint gerado); geração parcial
+      // (falha do provedor) não deve bloquear. O universo do DoD é o PROJETO INTEIRO — as propostas desta
+      // rodada (INCLUSIVE as parciais/truncadas, que aqui entram por PRESENÇA — não pelo `props` filtrado, que
+      // as descarta) MAIS os arquivos já APLICADOS em rodadas anteriores. Sem isso o DoD acusaria como ausente
+      // um manifesto/README que só truncou ou que já foi aplicado (falsos-positivos da revisão adversarial).
+      // Quando algo falta de fato, FECHA o Aplicar de TODOS — bloqueio + aviso, SEM auto-reparo (o que falta é
+      // bloco de arquivo NOVO, que o reparo de type-drift descarta).
+      const dodProposals = [...task.proposals.values()]
+        .filter((e) => !e.proposal.cell)
+        .map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified, partial: e.proposal.partial }));
+      const appliedPaths = (this.projectSession?.files ?? [])
+        .filter((f) => f.status === "applied")
+        .map((f) => normGatePath(f.path));
+      const dod = evaluateDodGate({ complete, enabled: this.config.definitionOfDone(), language, proposals: dodProposals, appliedPaths });
+      const dodErrors = dod.errors;
+      const dodBlocksAll = dod.blocks;
+
       // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído) OU violação de
-      // arquitetura. gatePassed([]) = true no caso comum; um validador de skill gate:true reprovado persiste.
+      // arquitetura; o DoD (ausência project-level) bloqueia TODOS. gatePassed([]) = true no caso comum; um
+      // validador de skill gate:true reprovado persiste.
       const blocked = new Set([...gate.fileErrors.map((f) => f.path), ...violations.map((v) => v.path)]);
       for (const e of props) {
-        e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath));
+        e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath)) && !dodBlocksAll;
       }
 
       const totalBlocked = gate.fileErrors.length + architectureErrors.length;
-      const summary =
-        totalBlocked > 0
-          ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${gate.fileErrors.length ? ` — ${gate.fileErrors.length} de compilação/contrato` : ""}${architectureErrors.length ? ` — ${architectureErrors.length} de arquitetura (regra de camadas)` : ""}. Corrija antes de aplicar.`
+      const fileParts: string[] = [];
+      if (gate.fileErrors.length) fileParts.push(`${gate.fileErrors.length} de compilação/contrato`);
+      if (architectureErrors.length) fileParts.push(`${architectureErrors.length} de arquitetura (regra de camadas)`);
+      const summary = dodBlocksAll
+        ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
+        : totalBlocked > 0
+          ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${fileParts.length ? ` — ${fileParts.join(" · ")}` : ""}. Corrija antes de aplicar.`
           : gate.summary;
-      // A UI pinta os cartões de AMBOS (toolchain + arquitetura); o auto-reparo (que consome o gate
-      // RETORNADO) recebe só os fileErrors do toolchain.
-      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary, files: [...gate.fileErrors, ...architectureErrors], projectErrors: gate.projectErrors });
-      log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
-      return { ...gate, summary, architectureErrors };
+      // A UI pinta os cartões de compilação/arquitetura (por-arquivo) e mostra o DoD como aviso project-level;
+      // o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors do toolchain.
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary, files: [...gate.fileErrors, ...architectureErrors], projectErrors: gate.projectErrors, dod: dodErrors });
+      log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
+      return { ...gate, summary, architectureErrors, dodErrors };
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
-      this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [] });
+      this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [] });
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
