@@ -25,7 +25,7 @@ import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector"
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
-import { buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
+import { buildBanditInstall, buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { ObsEvent } from "../obs/types";
 import { estimateTokens, estimateTokensOf } from "../util/tokenEstimate";
@@ -70,6 +70,7 @@ import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
 import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
 import { evaluateDodGate } from "../util/dodCheck";
+import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
@@ -1922,10 +1923,19 @@ export class Controller {
         if (gate?.dodErrors?.length) {
           this.post({ type: "notice", level: "warn", message: `Definição de pronto: o projeto está incompleto (${gate.dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar. ${gate.dodErrors.join(" ")}` });
         }
+        // Segurança (P2): achados de ALTO risco do bandit bloqueiam o arquivo. Fora do auto-reparo — o dev
+        // corrige a vulnerabilidade (o prompt de reparo de type-drift não sabe endereçar segurança).
+        if (gate?.securityErrors?.length) {
+          this.post({ type: "notice", level: "warn", message: `Segurança: ${gate.securityErrors.length} arquivo(s) com achado de ALTO risco do bandit (severidade+confiança altas) — Aplicar bloqueado. Corrija a vulnerabilidade apontada no cartão.` });
+        }
         // Smoke test ADVISORY (P4): se o conjunto passou no gate estático (sem erros por-arquivo nem
         // amplos), tenta RODAR a suíte gerada no venv do workspace — o sinal "de fato roda". Nunca
-        // bloqueia; degrada em silêncio sem venv/pytest/deps.
-        if (gate && gate.fileErrors.length === 0 && gate.projectErrors.length === 0) {
+        // bloqueia; degrada em silêncio sem venv/pytest/deps. NÃO roda se QUALQUER eixo do gate bloqueou:
+        // além de compilação/contrato, um bloqueio de SEGURANÇA (bandit) ou de ARQUITETURA. O de segurança é
+        // crítico — o gate marcou o arquivo como ALTO risco de EXECUÇÃO (shell injection / eval); rodar o
+        // pytest importaria e EXECUTARIA justo o código que o gate recusou aplicar (o bandit é AST, não
+        // executa — o smoke executaria). Achado da revisão adversarial.
+        if (gate && gate.fileErrors.length === 0 && gate.projectErrors.length === 0 && !gate.securityErrors?.length && !gate.architectureErrors?.length) {
           await this.runProjectSmoke(project.language, taskId);
         }
         this.post({ type: "project/done" });
@@ -1968,6 +1978,9 @@ export class Controller {
       // Onda 1.5: garante o mypy no venv ANTES de checar — sem ele o gate só teria compileall (sintaxe) e
       // ficaria "parcial", deixando passar o drift de contrato (o ImportError fantasma que derruba o app).
       await this.ensureGateMypy(py);
+      // Garante o bandit no venv (best-effort, como o mypy) para o gate de segurança morder out-of-the-box.
+      const securityMode = this.config.securityGate();
+      if (securityMode !== "off") await this.ensureGateBandit(py);
       const timeoutMs = 120_000;
       const outputCap = 32_000; // teto amplo: um projeto MUITO drifado emite muitos erros; não truncar a atribuição
       const checks: GateCheckResult[] = [];
@@ -2031,32 +2044,44 @@ export class Controller {
       const dodErrors = dod.errors;
       const dodBlocksAll = dod.blocks;
 
-      // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído) OU violação de
-      // arquitetura; o DoD (ausência project-level) bloqueia TODOS. gatePassed([]) = true no caso comum; um
-      // validador de skill gate:true reprovado persiste.
-      const blocked = new Set([...gate.fileErrors.map((f) => f.path), ...violations.map((v) => v.path)]);
+      // Gate de SEGURANÇA (P2): SAST (bandit) sobre a árvore materializada. Conservador — só severidade ALTA
+      // E confiança ALTA BLOQUEIA (senha hardcoded, eval de input, cripto fraca); o resto é advisory. O bandit
+      // analisa por AST (NÃO executa o código, ao contrário do smoke test). SEPARADO do toolchain (fora do
+      // summarizeGate/auto-reparo), como a arquitetura. bandit ausente/sem relatório → null (fail-open).
+      const security = securityMode !== "off" ? await this.runSecurityScan(py, root, securityMode) : null;
+      const securityErrors = security?.blocking ?? [];
+      const securityAdvisories = security?.advisories ?? [];
+
+      // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído), violação de
+      // arquitetura OU achado de segurança bloqueante; o DoD (ausência project-level) bloqueia TODOS.
+      // gatePassed([]) = true no caso comum; um validador de skill gate:true reprovado persiste.
+      const blocked = new Set([...gate.fileErrors.map((f) => f.path), ...violations.map((v) => v.path), ...securityErrors.map((s) => s.path)]);
       for (const e of props) {
         e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath)) && !dodBlocksAll;
       }
 
-      const totalBlocked = gate.fileErrors.length + architectureErrors.length;
+      const totalBlocked = gate.fileErrors.length + architectureErrors.length + securityErrors.length;
       const fileParts: string[] = [];
       if (gate.fileErrors.length) fileParts.push(`${gate.fileErrors.length} de compilação/contrato`);
       if (architectureErrors.length) fileParts.push(`${architectureErrors.length} de arquitetura (regra de camadas)`);
+      if (securityErrors.length) fileParts.push(`${securityErrors.length} de segurança (bandit ALTO)`);
       const summary = dodBlocksAll
         ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
         : totalBlocked > 0
           ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${fileParts.length ? ` — ${fileParts.join(" · ")}` : ""}. Corrija antes de aplicar.`
-          : gate.summary;
-      // A UI pinta os cartões de compilação/arquitetura (por-arquivo) e mostra o DoD como aviso project-level;
-      // o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors do toolchain.
-      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary, files: [...gate.fileErrors, ...architectureErrors], projectErrors: gate.projectErrors, dod: dodErrors });
-      log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
-      return { ...gate, summary, architectureErrors, dodErrors };
+          : securityAdvisories.length
+            ? `${gate.summary} · segurança: ${securityAdvisories.length} aviso(s) do bandit (não bloqueiam).`
+            : gate.summary;
+      // A UI pinta os cartões de compilação/arquitetura/segurança (por-arquivo) e mostra DoD + avisos de
+      // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
+      const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), `… e mais ${securityAdvisories.length - 12} aviso(s) — veja o log de diagnóstico.`] : securityAdvisories;
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView });
+      log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
+      return { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories };
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
-      this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [] });
+      this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [], security: [] });
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -2216,6 +2241,58 @@ export class Controller {
     } catch (e) {
       log.warn("Gate: não consegui garantir o mypy no venv — seguindo (o gate pode ficar parcial)", e);
     }
+  }
+
+  // Garante o bandit no venv do workspace (best-effort, espelho do ensureGateMypy). Só num venv do
+  // workspace (nunca no python global/system). Falha/offline → não instala; o gate de segurança fica
+  // consultivo (não bloqueia). Chamado só quando forge.gate.security != "off".
+  private async ensureGateBandit(py: string): Promise<void> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) return;
+      const isWin = process.platform === "win32";
+      const venv = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+      if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
+      const probe = await runFileCheck({ id: "probe", label: "bandit", gate: false }, py, ["-m", "bandit", "--version"], { timeoutMs: 15_000 });
+      if (probe.status === "ok") return; // bandit já disponível no venv
+      if (this.runService.isBusy()) return; // não atropela uma execução em andamento
+      await this.runService.runCommand("gate · bandit (segurança)", buildBanditInstall(venv), this.config.env().timeoutSeconds * 1000);
+    } catch (e) {
+      log.warn("Gate: não consegui garantir o bandit no venv — seguindo (segurança consultiva)", e);
+    }
+  }
+
+  // Gate de SEGURANÇA (P2): roda o bandit (SAST) sobre a árvore temp materializada e classifica os achados
+  // de forma conservadora (só severidade+confiança ALTAS bloqueiam). bandit ausente/sem relatório → null
+  // (fail-open: nada bloqueia). Análise por AST — NÃO executa o código gerado (distinto do smoke test).
+  private async runSecurityScan(py: string, root: string, mode: SecurityMode): Promise<{ blocking: { path: string; errors: string[] }[]; advisories: string[] } | null> {
+    // O relatório vai para um ARQUIVO (`-o`), NÃO para o stdout. Isso o torna imune a: (1) fusão de
+    // stdout+stderr do runner — um aviso do interpretador com `{`/`}` quebraria o recorte do JSON; (2)
+    // truncamento por outputCap; (3) frases benignas do código escaneado ("no such file or directory")
+    // confundindo a heurística de disponibilidade. Achados da revisão adversarial. O `.json` fica DENTRO da
+    // árvore temp (descartada no finally) e o bandit só varre `.py`, então não se escaneia a si mesmo.
+    const reportPath = path.join(root, ".forge-bandit-report.json");
+    // -q silencia o progresso; -f json + -o escreve o relatório; -r . varre a árvore. Exit 1 quando ACHA
+    // issues é NORMAL — o veredito vem do relatório, não do código de saída.
+    const result = await runFileCheck(
+      { id: "gate:bandit", label: "bandit", gate: false },
+      py,
+      ["-m", "bandit", "-r", ".", "-f", "json", "-o", reportPath, "-q"],
+      { cwd: root, timeoutMs: 120_000, outputCap: 8_000 }
+    );
+    if (result.status === "skipped") return null; // ENOENT (sem python) / timeout → inconclusivo (fail-open)
+    // Relatório ausente/ilegível (bandit não instalado → não escreve arquivo; ou crash) → null (fail-open).
+    // parseBanditReport distingue "sem relatório" (null) de "rodou e nada achou" ([]) — um relatório
+    // truncado nunca é confundido com varredura limpa.
+    const reportRaw = await fs.readFile(reportPath, "utf8").catch(() => "");
+    const findings = parseBanditReport(reportRaw);
+    if (findings === null) return null;
+    // bandit emite caminhos relativos ao cwd (=root) por causa do `-r .`; o ramo absoluto é defensivo.
+    const rel = (p: string): string => {
+      const raw = (p ?? "").trim();
+      return raw && (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)) ? normGatePath(path.relative(root, raw)) : normGatePath(raw);
+    };
+    return splitSecurityFindings(findings.map((f) => ({ ...f, path: rel(f.path) })), mode);
   }
 
   private workspaceName(): string {

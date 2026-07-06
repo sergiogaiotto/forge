@@ -82,6 +82,15 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("gate.definitionOfDone", true);
   }
 
+  // Gate de SEGURANÇA (P2) no Modo Projeto: roda o bandit (SAST) sobre o projeto gerado. "conservative"
+  // (padrão): só achados de severidade ALTA E confiança ALTA bloqueiam o Aplicar (senha hardcoded, eval de
+  // input, cripto fraca); o resto é advisory. "advisory": nada bloqueia (só surface). "off": não roda.
+  // bandit ausente → consultivo (fail-open). Respeita o `validation.gateBlocksApply` mestre.
+  securityGate(): "conservative" | "advisory" | "off" {
+    const v = this.cfg().get<string>("gate.security", "conservative");
+    return v === "advisory" || v === "off" ? v : "conservative";
+  }
+
   rag(): RagConfig {
     const c = this.cfg();
     return {

@@ -308,6 +308,17 @@
           "default": true,
           "markdownDescription": "Gate de **definição de pronto** (P2) no **Modo Projeto**: quando o projeto foi gerado por completo mas falta **manifesto de dependências** (requirements.txt / pyproject.toml), **qualquer teste** (test_*.py / tests/) ou um **README com \"## Como rodar\"**, bloqueia o **Aplicar** de todos os arquivos (bloqueio + aviso, sem auto-reparo). Determinístico e conservador — só acusa ausência real. Desligue (`false`) para projetos onde teste/README não se aplicam. Respeita o `forge.validation.gateBlocksApply` mestre."
         },
+        "forge.gate.security": {
+          "type": "string",
+          "enum": ["conservative", "advisory", "off"],
+          "enumDescriptions": [
+            "Só achados de severidade ALTA E confiança ALTA do bandit bloqueiam o Aplicar; o resto é advisory (padrão).",
+            "Roda o bandit e mostra os achados, mas NUNCA bloqueia o Aplicar.",
+            "Não roda o gate de segurança."
+          ],
+          "default": "conservative",
+          "markdownDescription": "Gate de **segurança** (P2) no **Modo Projeto**: roda o **bandit** (SAST) sobre o projeto gerado — pega senha/segredo hardcoded, `eval`/`exec` de input, cripto fraca, `yaml.load` inseguro, etc. (análise por AST; **não executa** o código). `conservative` (padrão): só severidade **ALTA + confiança ALTA** bloqueia o Aplicar (pouquíssimo falso-positivo); o resto é advisory. `advisory`: nunca bloqueia. `off`: não roda. bandit ausente → consultivo (fail-open); se estiver no venv do workspace, é instalado best-effort. Respeita o `forge.validation.gateBlocksApply` mestre."
+        },
         "forge.rag.enabled": {
           "type": "boolean",
           "default": true,

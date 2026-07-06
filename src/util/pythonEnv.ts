@@ -112,6 +112,15 @@ export function buildMypyInstall(venvPython: string): string {
   return `${interp} -m pip install mypy`;
 }
 
+// Instalação do bandit (SAST) num venv EXISTENTE (nunca global). O gate de segurança do Modo Projeto usa o
+// bandit para pegar vulnerabilidades por AST (senha hardcoded, eval, cripto fraca) que compileall/mypy não
+// veem. Sem bandit no venv o gate de segurança fica consultivo (não bloqueia). Best-effort, como o mypy:
+// se falhar (offline/sem índice pip), a degradação segura (segurança consultiva) é preservada.
+export function buildBanditInstall(venvPython: string): string {
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -m pip install bandit`;
+}
+
 // Monta o comando de teste usando o interpretador do venv quando o comando é pytest. Cobre:
 //   "pytest -q"           → `"<venv>" -m pytest -q`
 //   "python -m pytest -q" → `"<venv>" -m pytest -q`  (python/python3 SEM caminho — nome nu)

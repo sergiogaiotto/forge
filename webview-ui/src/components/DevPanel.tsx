@@ -808,6 +808,18 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                     ))}
                   </div>
                 )}
+                {(gate.security ?? []).length > 0 && (
+                  // Segurança (P2): avisos ADVISORY do bandit (os bloqueantes de ALTO risco já pintam o cartão
+                  // do arquivo). Âmbar — informam, não bloqueiam. Os de ALTO risco bloqueiam via `files`.
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d1a13a" }}>Segurança (bandit) — avisos (não bloqueiam):</div>
+                    {(gate.security ?? []).map((e, i) => (
+                      <div key={i} className="mono" style={{ marginTop: 3, fontSize: 11, color: "#d1a13a", whiteSpace: "pre-wrap" }}>
+                        • {e}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             <div className="plan-list">

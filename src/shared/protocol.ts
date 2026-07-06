@@ -337,7 +337,7 @@ export type ExtToWebview =
   // Resultado do gate workspace-wide (compileall/mypy sobre o conjunto): pinta os arquivos reprovados.
   // advisory=true → nenhuma verificação pôde rodar (nada bloqueado). files → erros por arquivo;
   // projectErrors → falha ampla (sem arquivo atribuível) que bloqueia todos os .py.
-  | { type: "project/gate"; advisory: boolean; partial: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[] }
+  | { type: "project/gate"; advisory: boolean; partial: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[] }
   | { type: "project/done" }
   // Todos os arquivos do projeto foram APLICADOS (após "Aplicar tudo"). O webview desmarca o Modo
   // Projeto automaticamente — fim de fluxo: a próxima mensagem volta a ser chat/diagnóstico normal.
