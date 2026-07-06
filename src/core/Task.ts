@@ -83,6 +83,24 @@ export class Task {
     return this.proposals.get(id);
   }
 
+  // taskId desta task — o host o usa para correlacionar propostas sintetizadas FORA do stream (ex.: o
+  // botão "Salvar como arquivo" do CodeBox). O reducer da webview ignora o taskId ao anexar a proposta
+  // (usa o último balão do assistente), mas o tipo da mensagem stream/proposal o exige.
+  get taskId(): string {
+    return this.deps.taskId;
+  }
+
+  // Botão "Salvar como arquivo" (Onda 3): o dev decidiu aplicar um trecho que o modelo mostrou em cerca
+  // comum (não virou forge-file e o reparo automático não disparou). Sintetiza uma proposta REAL — o MESMO
+  // pipeline de card/validação/gate/apply — a partir de um caminho CONFIRMADO pelo dev, nunca uma escrita
+  // crua. A validação (fire-and-forget, como no run()) alimenta o gate como em qualquer proposta.
+  async registerManualProposal(filePath: string, content: string): Promise<DiffProposal> {
+    const proposal = await this.makeProposal(filePath, content);
+    this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
+    this.pendingValidations.push(this.validateProposal(proposal));
+    return proposal;
+  }
+
   async run(): Promise<void> {
     const d = this.deps;
     const started = Date.now();

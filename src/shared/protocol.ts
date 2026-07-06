@@ -407,6 +407,9 @@ export type WebviewToExt =
   | { type: "proposal/discard"; proposalId: string }
   | { type: "proposal/viewDiff"; proposalId: string }
   | { type: "proposal/copy"; proposalId: string }
+  // Botão "Salvar como arquivo" do CodeBox: transforma um trecho em cerca comum numa PROPOSTA aplicável
+  // (card + diff + gate + Aplicar), com o caminho CONFIRMADO pelo dev. Ver Controller.saveCodeBlock.
+  | { type: "codeBlock/save"; filePath: string; content: string }
   | { type: "profile/addRule"; rule: string }
   | { type: "profile/open" }
   | { type: "profile/pickRole" }
