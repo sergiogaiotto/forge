@@ -79,40 +79,76 @@ const PYPI_BY_IMPORT: Record<string, string> = {
   "google.generativeai": "google-generativeai",
 };
 
-// Remove o conteúdo DENTRO de strings triplas ("""…"""/'''…''') das linhas de um fonte — docstrings
-// trazem "import x" ilustrativo que NÃO é código (falso positivo confirmado em revisão adversarial).
-// Rastreio simples de abre/fecha por linha; o que sobra fora das triplas é preservado na posição.
-function stripTripleStrings(src: string): string[] {
-  const out: string[] = [];
-  let open: '"""' | "'''" | null = null;
-  for (const line of src.split("\n")) {
-    let result = "";
-    let i = 0;
-    while (i < line.length) {
-      if (open) {
-        const close = line.indexOf(open, i);
-        if (close < 0) {
-          i = line.length;
-          break;
+// Remove o CONTEÚDO de literais de string (aspas TRIPLAS """…""" / '''…''' E de UMA linha "…" / '…', com
+// escape), preservando a estrutura de linhas e o código FORA das strings. Sem isso, um `import x` /
+// `from x import y` DENTRO de uma string — mensagem de erro, texto de ajuda, exemplo em prosa, docstring —
+// seria lido como import de verdade. Isso alimenta a reconciliação de dependências (P4), que MERGEIA o
+// resultado num requirements.txt legítimo — logo um `x = "…; from tensorflow import k"` injetaria o pacote
+// ERRADO. Escapes (\") não fecham a string; strings de uma linha não cruzam \n (salvo continuação `\`).
+// Achado da revisão adversarial (vetores `from`-em-string e `import … #`-em-string).
+function stripStringLiterals(src: string): string[] {
+  const s = src ?? "";
+  const lines: string[] = [];
+  let cur = "";
+  let quote: string | null = null; // delimitador aberto: '"', "'", '"""' ou "'''"
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === "\\") {
+        // Escape: NÃO fecha a string; pula o próximo char. Preserva a quebra numa continuação de linha.
+        if (s[i + 1] === "\n") {
+          lines.push(cur);
+          cur = "";
         }
-        i = close + 3;
-        open = null;
-      } else {
-        const dq = line.indexOf('"""', i);
-        const sq = line.indexOf("'''", i);
-        const idx = dq < 0 ? sq : sq < 0 ? dq : Math.min(dq, sq);
-        if (idx < 0) {
-          result += line.slice(i);
-          break;
-        }
-        result += line.slice(i, idx);
-        open = idx === dq ? '"""' : "'''";
-        i = idx + 3;
+        i += 2;
+        continue;
       }
+      if (s.startsWith(quote, i)) {
+        i += quote.length;
+        quote = null;
+        continue;
+      }
+      if (ch === "\n") {
+        lines.push(cur); // conteúdo da string descartado, mas a quebra (triplas) é preservada
+        cur = "";
+      }
+      i += 1;
+      continue;
     }
-    out.push(result);
+    if (ch === "#") {
+      // Comentário Python: o resto da linha não é código nem abre string. Pula até o \n (deixado para o ramo
+      // abaixo fechar a linha). SEM isto, uma aspa ímpar num comentário (`# don't forget`, `# it's fine`)
+      // abriria uma string-fantasma que engoliria todos os imports seguintes — requirements incompleto
+      // (regressão pega na revisão). Um `#` DENTRO de uma string já foi tratado no ramo `quote` acima.
+      const nl = s.indexOf("\n", i);
+      if (nl < 0) break; // comentário até o fim do arquivo
+      i = nl; // preserva o \n para o ramo de quebra de linha abaixo
+      continue;
+    }
+    if (ch === "\\" && (s[i + 1] === "\n" || (s[i + 1] === "\r" && s[i + 2] === "\n"))) {
+      // Continuação de linha explícita em CÓDIGO (`\` no fim da linha): junta as linhas físicas num só
+      // statement lógico — NÃO emite quebra. SEM isto, `import a, \\<nl> b` seria lido como duas linhas e os
+      // módulos continuados (`b`) sumiriam do scan (sub-detecção → requirements incompleto). Achado da revisão.
+      i += s[i + 1] === "\r" ? 3 : 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = s.startsWith(ch + ch + ch, i) ? ch + ch + ch : ch;
+      i += quote.length;
+      continue;
+    }
+    if (ch === "\n") {
+      lines.push(cur);
+      cur = "";
+      i += 1;
+      continue;
+    }
+    cur += ch;
+    i += 1;
   }
-  return out;
+  lines.push(cur);
+  return lines;
 }
 
 // Extrai os módulos TOP-LEVEL importados de fontes Python. Cobre `import a`, `import a.b as c`,
@@ -132,7 +168,7 @@ export function scanPythonImports(sources: string[]): string[] {
     }
   };
   for (const src of sources) {
-    for (const line of stripTripleStrings(src)) {
+    for (const line of stripStringLiterals(src)) {
       // `import os; import requests` — cada statement é avaliado separadamente.
       for (const stmt of line.split(";")) {
         const im = stmt.match(/^\s*import\s+([A-Za-z_][\w.]*(?:\s+as\s+\w+)?(?:\s*,\s*[A-Za-z_][\w.]*(?:\s+as\s+\w+)?)*)\s*(?:#.*)?$/);
@@ -226,4 +262,33 @@ export function mergeRequirements(existing: string, packages: string[]): { conte
 // Gera um requirements.txt do zero a partir dos pacotes detectados (cabeçalho explica a origem).
 export function renderRequirements(packages: string[]): string {
   return ["# Gerado pelo FORGE a partir dos imports do código — revise e ajuste pins se necessário.", ...packages].join("\n") + "\n";
+}
+
+// RECONCILIAÇÃO pré-entrega (P4): confere se o requirements.txt GERADO declara os pacotes que o código
+// gerado de fato IMPORTA. O DoD (P2) garante que o manifesto EXISTE; esta função garante que está CORRETO —
+// o gap que faz "instala e roda" falhar (o modelo importa fastapi mas esquece de listar). Devolve o
+// manifesto ACRESCIDO dos ausentes (via mergeRequirements: idempotente, preserva pins/comentários). PURO.
+//   `pyFiles`: os .py gerados (path + content) — o CONTENT alimenta o scan de imports.
+//   `projectPaths`: TODOS os caminhos do projeto (propostas + já aplicados) — usados SÓ para montar o
+//     conjunto de módulos LOCAIS (basename dos .py + segmentos de diretório), para NÃO tratar um módulo do
+//     próprio projeto como pacote pip (ex.: `from adapters import x` num layout src/ — "adapters" existe no
+//     PyPI e viraria um install errado). Só paths, sem I/O — cobre também os arquivos de rodadas anteriores.
+//   `manifestContent`: o conteúdo do requirements.txt gerado.
+// Herda o conservadorismo de mapImportsToPackages: descarta stdlib, locais, namespaces ambíguos e dotted
+// sem mapeamento — nunca adiciona um pacote "adivinhado". Pior caso: um `pip install` extra visível.
+export function reconcileRequirements(
+  pyFiles: { path: string; content: string }[],
+  projectPaths: string[],
+  manifestContent: string
+): { content: string; added: string[] } {
+  const local = new Set<string>();
+  for (const raw of projectPaths) {
+    const segs = (raw ?? "").replace(/\\/g, "/").replace(/^\.\//, "").split("/").filter(Boolean);
+    if (!segs.length) continue;
+    const base = segs[segs.length - 1];
+    if (/\.py$/i.test(base)) local.add(base.replace(/\.py$/i, "")); // nome do módulo (order.py → order)
+    for (const seg of segs.slice(0, -1)) local.add(seg); // diretórios são pacotes locais (src/adapters/…)
+  }
+  const detected = mapImportsToPackages(scanPythonImports(pyFiles.map((f) => (f.content ?? "").slice(0, 16_000))), local);
+  return mergeRequirements(manifestContent, detected);
 }
