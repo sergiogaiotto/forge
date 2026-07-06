@@ -56,6 +56,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage("FORGE: licença e credenciais removidas.");
     }),
     vscode.commands.registerCommand("forge.showOutput", () => log.show()),
+    vscode.commands.registerCommand("forge.exportDiagnostics", async () => {
+      await controller.exportDiagnostics();
+    }),
     vscode.commands.registerCommand("forge.setupObservability", async () => {
       await controller.setupObservability();
     }),

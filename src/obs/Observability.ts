@@ -23,7 +23,10 @@ export class Observability {
   constructor(
     private readonly getConfig: () => ObsConfig,
     private readonly sink: ObsSink,
-    private readonly deps: { id?: () => string; now?: () => string; rand?: () => number; onError?: (m: string) => void } = {}
+    private readonly deps: { id?: () => string; now?: () => string; rand?: () => number; onError?: (m: string) => void } = {},
+    // Log de diagnóstico LOCAL (P3): recebe TODO evento ANTES do gate de egress do Langfuse. Sempre-ligado
+    // e redigido; nunca sujeito a cfg.enabled/amostragem. Opcional (ausente = sem log local).
+    private readonly local?: { write: (e: ObsEvent) => void }
   ) {}
 
   private id = (): string => (this.deps.id ? this.deps.id() : randomUUID());
@@ -40,6 +43,9 @@ export class Observability {
   }
 
   private recordUnsafe(e: ObsEvent): void {
+    // Diagnóstico LOCAL primeiro e SEMPRE (não é egress): registra o evento em disco/buffer independente
+    // do opt-in do Langfuse. O writer local é fail-open (nunca lança), então não afeta o caminho remoto.
+    this.local?.write(e);
     const cfg = this.getConfig();
     if (!cfg.enabled) return;
 
