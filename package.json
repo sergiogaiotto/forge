@@ -303,6 +303,11 @@
           "default": true,
           "markdownDescription": "Quando uma skill define um validador como *gate*, falha na validação bloqueia o **Aplicar** do diff (RF-039)."
         },
+        "forge.gate.definitionOfDone": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Gate de **definição de pronto** (P2) no **Modo Projeto**: quando o projeto foi gerado por completo mas falta **manifesto de dependências** (requirements.txt / pyproject.toml), **qualquer teste** (test_*.py / tests/) ou um **README com \"## Como rodar\"**, bloqueia o **Aplicar** de todos os arquivos (bloqueio + aviso, sem auto-reparo). Determinístico e conservador — só acusa ausência real. Desligue (`false`) para projetos onde teste/README não se aplicam. Respeita o `forge.validation.gateBlocksApply` mestre."
+        },
         "forge.rag.enabled": {
           "type": "boolean",
           "default": true,

@@ -133,6 +133,11 @@ export interface ProjectGateSummary {
   // SEPARADAS: não entram no summarizeGate (para não poluir advisory/parcial do toolchain) nem no auto-reparo
   // de type-drift. Preenchido pelo Controller.runProjectGate, não pelo summarizeGate. Ver util/layerCheck.ts.
   architectureErrors?: { path: string; errors: string[] }[];
+  // Achados da DEFINIÇÃO DE PRONTO (DoD): requisitos AUSENTES do conjunto (manifesto/teste/README). São
+  // project-level (a falta não se atribui a um arquivo) e BLOQUEIAM o Aplicar de TODOS quando o conjunto
+  // está completo. Também FORA do summarizeGate e do auto-reparo. Preenchido pelo Controller. Ver
+  // util/dodCheck.ts.
+  dodErrors?: string[];
   projectErrors: string[]; // reprovou SEM atribuir a arquivo → bloqueia todos os .py (fallback)
   partial: boolean; // compilou (sintaxe ok) mas o mypy NÃO rodou → coerência cross-file NÃO verificada (NÃO é verde)
   summary: string;

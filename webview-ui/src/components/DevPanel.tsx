@@ -787,14 +787,27 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
               // (âmbar, NÃO verde) · verde só quando compileall E mypy rodaram sem erro de contrato.
               <div
                 className="assistant-warning"
-                style={{ marginTop: 4, borderColor: gateErrors.size || gate.projectErrors.length ? "#d16969" : gate.advisory || gate.partial ? "#d1a13a" : "#86c98e" }}
+                style={{ marginTop: 4, borderColor: gateErrors.size || gate.projectErrors.length || gate.dod?.length ? "#d16969" : gate.advisory || gate.partial ? "#d1a13a" : "#86c98e" }}
               >
-                <Icon name={gateErrors.size || gate.projectErrors.length || gate.advisory || gate.partial ? "alert-triangle" : "check"} size={14} /> {gate.summary}
+                <Icon name={gateErrors.size || gate.projectErrors.length || gate.dod?.length || gate.advisory || gate.partial ? "alert-triangle" : "check"} size={14} /> {gate.summary}
                 {gate.projectErrors.map((e, i) => (
                   <div key={i} className="mono" style={{ marginTop: 4, fontSize: 11, color: "#d16969", whiteSpace: "pre-wrap" }}>
                     {e}
                   </div>
                 ))}
+                {(gate.dod ?? []).length > 0 && (
+                  // Definição de pronto (P2): requisitos AUSENTES do conjunto (manifesto/teste/README). Como a
+                  // falta é do CONJUNTO (não de um arquivo), aparece aqui como aviso project-level e bloqueia o
+                  // Aplicar de todos — o dev gera o que falta e re-roda.
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d16969" }}>Definição de pronto — Aplicar bloqueado até fechar:</div>
+                    {(gate.dod ?? []).map((e, i) => (
+                      <div key={i} className="mono" style={{ marginTop: 3, fontSize: 11, color: "#d16969", whiteSpace: "pre-wrap" }}>
+                        • {e}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             <div className="plan-list">
