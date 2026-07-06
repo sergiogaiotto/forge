@@ -68,6 +68,7 @@ import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
+import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
@@ -1898,7 +1899,7 @@ export class Controller {
         // Gate WORKSPACE-WIDE antes do "Pronto": compila/importa o CONJUNTO gerado e bloqueia o Aplicar
         // dos arquivos que não passam (drift de contrato cross-file). Alimenta entry.gateOk. Roda ANTES
         // do project/done para o modal já abrir com os cartões reprovados pintados.
-        let gate = await this.runProjectGate(project.language);
+        let gate = await this.runProjectGate(project.language, project.architecture);
         // Onda 2: AUTO-REPARO dirigido pelo gate — enquanto houver arquivo reprovado, re-pede SÓ esses
         // arquivos (com os erros do mypy + o CONTRATO REAL dos que passaram) e re-roda o gate, até verde ou
         // o teto de rodadas. O gate continua BLOQUEANDO o Aplicar se não fechar — nunca entrega em silêncio.
@@ -1907,7 +1908,12 @@ export class Controller {
           this.post({ type: "notice", level: "info", message: `Auto-reparo do projeto: ${gate.fileErrors.length} arquivo(s) com erro de contrato — regenerando (rodada ${round}/${MAX_PROJECT_REPAIRS})…` });
           const n = await this.repairProjectFromGate(gate, project, runtime);
           if (n === 0) break; // nada regenerado (falha do provedor / sem alvo casável) — insistir não ajuda
-          gate = await this.runProjectGate(project.language);
+          gate = await this.runProjectGate(project.language, project.architecture);
+        }
+        // Violações de arquitetura NÃO passam pelo auto-reparo (ver runProjectGate): avisa o dev para
+        // corrigir a DIREÇÃO do import — os arquivos seguem bloqueados no Aplicar até então.
+        if (gate?.architectureErrors?.length) {
+          this.post({ type: "notice", level: "warn", message: `Arquitetura: ${gate.architectureErrors.length} arquivo(s) violam a regra de camadas (a camada interna importa a externa) — corrija a DIREÇÃO do import (inverta a dependência / use uma port). Esses arquivos estão bloqueados no Aplicar.` });
         }
         // Smoke test ADVISORY (P4): se o conjunto passou no gate estático (sem erros por-arquivo nem
         // amplos), tenta RODAR a suíte gerada no venv do workspace — o sinal "de fato roda". Nunca
@@ -1930,7 +1936,7 @@ export class Controller {
   // CONJUNTO — pegando o drift de contrato que a validação por-arquivo (isolada) não vê. O resultado por
   // arquivo alimenta `entry.gateOk`; `applyProposal` já recusa `!gateOk` quando gateBlocksApply().
   // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
-  private async runProjectGate(language: ProjectLanguage): Promise<ProjectGateSummary | null> {
+  private async runProjectGate(language: ProjectLanguage, architecture: ProjectArchitecture): Promise<ProjectGateSummary | null> {
     const task = this.currentTask;
     if (!task || language !== "python") return null; // Onda 1: Python-only (compileall/mypy)
     // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
@@ -1982,21 +1988,40 @@ export class Controller {
       }
       checks.push({ result: mypy, errors: mypyErrors });
 
-      const gate = summarizeGate(checks);
-      // Propaga por-arquivo para gateOk: só bloqueia arquivo com erro ATRIBUÍDO pela ferramenta.
-      // Skipped/ok e falha sem atribuição (projectErrors, anômala) NÃO bloqueiam — gateOk permanece true.
-      const blocked = new Set(gate.fileErrors.map((f) => f.path));
-      // Reset por RODADA (Onda 2): recomputa gateOk para TODOS os props avaliados, para que um arquivo que
-      // o auto-reparo consertou VOLTE a verde (antes só marcávamos false → um verde tardio ficaria preso).
-      // PRESERVA um bloqueio de validador de skill gate:true: gateOk = (validador passou) E (não bloqueado
-      // pelo gate de projeto). gatePassed([]) = true, então o caso comum (sem validador gate:true) e os
-      // arquivos reparados (results limpo) dependem só do gate de projeto; um gate:true reprovado persiste.
+      const gate = summarizeGate(checks); // SÓ toolchain (compileall/mypy) → advisory/resumo honestos
+
+      // Gate de ARQUITETURA (P2): a REGRA DE OURO — a camada interna (domínio/entidades/model) não pode
+      // importar a externa (adapters/infra/repository). O mypy não pega (importar na direção errada tipa e
+      // compila). PURO sobre o conteúdo das propostas (roda até sem Python). Fica SEPARADO do toolchain:
+      // BLOQUEIA o Aplicar, mas (1) FORA do summarizeGate — para não poluir advisory/parcial quando só ele
+      // roda; e (2) FORA do auto-reparo de type-drift — cujo prompt "reuse o contrato" empurraria a
+      // re-violar. O dev corrige a DIREÇÃO do import (inverter a dependência / usar uma port).
+      const violations = findLayerViolations(
+        props.map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified })),
+        architecture
+      );
+      const architectureErrors = violations.map((v) => ({
+        path: v.path,
+        errors: [`viola a arquitetura ${architecture}: ${LAYER_RULE[architecture]}. Import(s) proibido(s) da camada externa: ${v.imports.join(", ")}.`],
+      }));
+
+      // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído) OU violação de
+      // arquitetura. gatePassed([]) = true no caso comum; um validador de skill gate:true reprovado persiste.
+      const blocked = new Set([...gate.fileErrors.map((f) => f.path), ...violations.map((v) => v.path)]);
       for (const e of props) {
         e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath));
       }
-      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary: gate.summary, files: gate.fileErrors, projectErrors: gate.projectErrors });
-      log.info(`Gate do projeto: ${gate.summary} (rodou: ${gate.ran.join(", ") || "nada"}; pulou: ${gate.skipped.join(", ") || "nada"})`);
-      return gate;
+
+      const totalBlocked = gate.fileErrors.length + architectureErrors.length;
+      const summary =
+        totalBlocked > 0
+          ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${gate.fileErrors.length ? ` — ${gate.fileErrors.length} de compilação/contrato` : ""}${architectureErrors.length ? ` — ${architectureErrors.length} de arquitetura (regra de camadas)` : ""}. Corrija antes de aplicar.`
+          : gate.summary;
+      // A UI pinta os cartões de AMBOS (toolchain + arquitetura); o auto-reparo (que consome o gate
+      // RETORNADO) recebe só os fileErrors do toolchain.
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary, files: [...gate.fileErrors, ...architectureErrors], projectErrors: gate.projectErrors });
+      log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
+      return { ...gate, summary, architectureErrors };
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
