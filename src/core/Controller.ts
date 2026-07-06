@@ -24,7 +24,7 @@ import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
-import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
+import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, reconcileRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
 import { buildBanditInstall, buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { ObsEvent } from "../obs/types";
@@ -1928,6 +1928,11 @@ export class Controller {
         if (gate?.securityErrors?.length) {
           this.post({ type: "notice", level: "warn", message: `Segurança: ${gate.securityErrors.length} arquivo(s) com achado de ALTO risco do bandit (severidade+confiança altas) — Aplicar bloqueado. Corrija a vulnerabilidade apontada no cartão.` });
         }
+        // Reconciliação de dependências (P4): o DoD garante que o manifesto EXISTE; aqui garantimos que está
+        // CORRETO — acrescenta ao requirements.txt gerado os pacotes que o código importa mas não declara.
+        // Só com o projeto COMPLETO (uma geração parcial ainda não tem todos os imports). Não é gate: corrige
+        // a proposta do manifesto e re-posta o cartão. Ver reconcileProjectRequirements.
+        if (done === total) this.reconcileProjectRequirements();
         // Smoke test ADVISORY (P4): se o conjunto passou no gate estático (sem erros por-arquivo nem
         // amplos), tenta RODAR a suíte gerada no venv do workspace — o sinal "de fato roda". Nunca
         // bloqueia; degrada em silêncio sem venv/pytest/deps. NÃO roda se QUALQUER eixo do gate bloqueou:
@@ -2149,6 +2154,48 @@ export class Controller {
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  // Reconciliação de dependências (P4): depois do gate, confere se o requirements.txt GERADO declara os
+  // pacotes que o código gerado de fato IMPORTA e acrescenta os AUSENTES à proposta do manifesto. O DoD
+  // garante que o manifesto EXISTE; isto garante que está CORRETO — o gap que faz "instala e roda" falhar.
+  // Auto-corrige a proposta (idempotente/conservador via reconcileRequirements) e re-posta o cartão
+  // (stream/proposalUpdate, o mesmo do auto-reparo). pyproject-only fica de fora (editar TOML é frágil; o
+  // Preparar ambiente ainda completa no install). PURO na decisão (reconcileRequirements); aqui só coleta e
+  // reage. Nunca bloqueia. Chamado só com o projeto COMPLETO.
+  private reconcileProjectRequirements(): void {
+    if (!this.config.reconcileDependencies()) return;
+    const task = this.currentTask;
+    if (!task) return;
+    // Exclui células e parciais (o parcial pode ter imports cortados — reconciliar sobre ele erraria).
+    const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
+    const isReqTxt = (p: string) => /(^|\/)requirements[^/]*\.txt$/i.test(p) || /(^|\/)requirements\/[^/]+\.txt$/i.test(p);
+    const manifest = props.find((e) => isReqTxt(normGatePath(e.proposal.filePath)));
+    if (!manifest) return; // sem requirements.txt (pyproject-only / ausente) → fora do escopo desta reconciliação
+    const pyFiles = props
+      .filter((e) => e.proposal.filePath.toLowerCase().endsWith(".py"))
+      .map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified }));
+    if (pyFiles.length === 0) return; // nada de Python → nada a reconciliar
+    // Caminhos do projeto INTEIRO para os módulos locais: propostas desta rodada + arquivos já aplicados
+    // (só o path basta para reconhecer um módulo local — sem I/O).
+    const projectPaths = [
+      ...props.map((e) => normGatePath(e.proposal.filePath)),
+      ...(this.projectSession?.files ?? []).filter((f) => f.status === "applied").map((f) => normGatePath(f.path)),
+    ];
+    let content: string;
+    let added: string[];
+    try {
+      ({ content, added } = reconcileRequirements(pyFiles, projectPaths, manifest.proposal.modified));
+    } catch (e) {
+      log.warn("Reconciliação de dependências falhou — seguindo (não bloqueia)", e);
+      return;
+    }
+    if (added.length === 0) return; // manifesto já coerente
+    // Auto-corrige a proposta NO LUGAR (mesmo id) e re-posta o cartão para refletir o arquivo corrigido.
+    manifest.proposal = { ...manifest.proposal, modified: content };
+    this.post({ type: "stream/proposalUpdate", proposal: manifest.proposal });
+    this.post({ type: "notice", level: "info", message: `Reconciliação de dependências: adicionei ao ${manifest.proposal.filePath} ${added.length} pacote(s) usado(s) no código mas não declarado(s): ${added.join(", ")}. Revise antes de aplicar.` });
+    log.info(`Reconciliação: +${added.length} em ${manifest.proposal.filePath} (${added.join(", ")})`);
   }
 
   // Onda 2 — AUTO-REPARO dirigido pelo gate. Recebe o veredito do gate (arquivos reprovados + erros do

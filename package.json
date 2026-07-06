@@ -319,6 +319,11 @@
           "default": "conservative",
           "markdownDescription": "Gate de **segurança** (P2) no **Modo Projeto**: roda o **bandit** (SAST) sobre o projeto gerado — pega senha/segredo hardcoded, `eval`/`exec` de input, cripto fraca, `yaml.load` inseguro, etc. (análise por AST; **não executa** o código). `conservative` (padrão): só severidade **ALTA + confiança ALTA** bloqueia o Aplicar (pouquíssimo falso-positivo); o resto é advisory. `advisory`: nunca bloqueia. `off`: não roda. bandit ausente → consultivo (fail-open); se estiver no venv do workspace, é instalado best-effort. Respeita o `forge.validation.gateBlocksApply` mestre."
         },
+        "forge.project.reconcileDependencies": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Reconciliação de **dependências** (P4) no **Modo Projeto**: depois do gate, confere se o `requirements.txt` gerado declara os pacotes que o código de fato **importa** e acrescenta os **ausentes** à proposta do manifesto (idempotente; preserva pins/comentários; **conservador** — nunca adiciona pacote ambíguo, filtra stdlib e módulos locais). Complementa o gate de definição de pronto (que garante que o manifesto **existe**; este garante que está **correto**). Projetos só-`pyproject.toml` ficam de fora (editar TOML é frágil). Desligue (`false`) para não auto-editar a proposta do manifesto."
+        },
         "forge.rag.enabled": {
           "type": "boolean",
           "default": true,

@@ -91,6 +91,13 @@ export class ManagedConfig {
     return v === "advisory" || v === "off" ? v : "conservative";
   }
 
+  // Reconciliação de dependências (P4) no Modo Projeto: depois do gate, acrescenta ao requirements.txt GERADO
+  // os pacotes que o código importa mas não declara (idempotente, conservador — nunca adiciona ambíguo).
+  // Desligue (`false`) para não auto-editar a proposta do manifesto.
+  reconcileDependencies(): boolean {
+    return this.cfg().get<boolean>("project.reconcileDependencies", true);
+  }
+
   rag(): RagConfig {
     const c = this.cfg();
     return {
