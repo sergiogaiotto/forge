@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
+import { fileExtForLang } from "../../../src/util/codeLang";
 import { Block, Inline, parseMarkdownBlocks } from "../markdown";
 import { Icon } from "../icons";
+import { post } from "../vscode";
 
 // Renderiza a AST de markdown (ver ../markdown.ts) como nós React. Nunca usa HTML cru: cada nó é um
 // elemento React, então não há superfície de XSS vinda do texto do modelo.
@@ -30,11 +32,20 @@ function renderInline(nodes: Inline[]): React.ReactNode {
   });
 }
 
-// Box de código com cabeçalho (linguagem + copiar). É o "bloco estilizado" que faltava para as
-// cercas markdown comuns (```python, ```bash) — antes elas caíam como texto cru no chat.
-// `open` = cerca ainda chegando no streaming: não oferecemos "copiar" um trecho incompleto.
+// Box de código com cabeçalho (linguagem + copiar + salvar como arquivo). É o "bloco estilizado" que
+// faltava para as cercas markdown comuns (```python, ```bash) — antes elas caíam como texto cru no chat.
+// `open` = cerca ainda chegando no streaming: não oferecemos ações sobre um trecho incompleto.
+//
+// "Salvar como arquivo" (Onda 3): fecha o último caminho de copiar/colar. Quando o modelo mostra código
+// em cerca comum por escolha própria (não virou forge-file e o reparo automático não disparou), o dev
+// confirma um caminho e o trecho vira uma PROPOSTA aplicável no host (card + diff + gate) — sem colar à
+// mão. Só aparece para linguagens que são "conteúdo de arquivo" (não shell/saída/texto — ver codeLang.ts).
 function CodeBox({ lang, code, open }: { lang: string; code: string; open: boolean }): JSX.Element {
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savePath, setSavePath] = useState("");
+  const [saved, setSaved] = useState(false);
+  const ext = fileExtForLang(lang);
   const copy = () => {
     void navigator.clipboard?.writeText(code).then(
       () => {
@@ -43,6 +54,18 @@ function CodeBox({ lang, code, open }: { lang: string; code: string; open: boole
       },
       () => undefined
     );
+  };
+  const beginSave = () => {
+    setSavePath((p) => p || `novo_arquivo.${ext}`);
+    setSaving(true);
+  };
+  const confirmSave = () => {
+    const filePath = savePath.trim();
+    if (!filePath) return;
+    post({ type: "codeBlock/save", filePath, content: code });
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
   };
   return (
     <div className={open ? "md-code md-code-open" : "md-code"}>
@@ -54,12 +77,49 @@ function CodeBox({ lang, code, open }: { lang: string; code: string; open: boole
           <span className="md-code-progress">
             <Icon name="refresh" size={11} className="spin" /> gerando…
           </span>
+        ) : saved ? (
+          <span className="md-code-progress">
+            <Icon name="check" size={12} /> proposta criada
+          </span>
         ) : (
-          <button className="md-code-copy" onClick={copy} title="Copiar">
-            <Icon name={copied ? "check" : "copy"} size={12} /> {copied ? "Copiado" : "Copiar"}
-          </button>
+          <span className="md-code-actions">
+            {ext && (
+              <button
+                className="md-code-copy"
+                onClick={beginSave}
+                title="Salvar este código como um arquivo (vira uma proposta aplicável, com diff e gate)"
+              >
+                <Icon name="file" size={12} /> Salvar como arquivo
+              </button>
+            )}
+            <button className="md-code-copy" onClick={copy} title="Copiar">
+              <Icon name={copied ? "check" : "copy"} size={12} /> {copied ? "Copiado" : "Copiar"}
+            </button>
+          </span>
         )}
       </div>
+      {saving && (
+        <div className="md-code-saverow">
+          <input
+            className="md-code-pathinput"
+            value={savePath}
+            onChange={(e) => setSavePath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirmSave();
+              else if (e.key === "Escape") setSaving(false);
+            }}
+            placeholder="caminho/relativo/arquivo.ext"
+            spellCheck={false}
+            autoFocus
+          />
+          <button className="md-code-copy" onClick={confirmSave} title="Criar a proposta aplicável">
+            <Icon name="check" size={12} /> Salvar
+          </button>
+          <button className="md-code-copy" onClick={() => setSaving(false)} title="Cancelar">
+            <Icon name="x" size={12} /> Cancelar
+          </button>
+        </div>
+      )}
       <pre>
         <code>{code}</code>
       </pre>

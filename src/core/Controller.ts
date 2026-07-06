@@ -1367,6 +1367,9 @@ export class Controller {
       case "proposal/apply":
         await this.applyProposal(msg.proposalId);
         break;
+      case "codeBlock/save":
+        await this.saveCodeBlock(msg.filePath, msg.content);
+        break;
       case "proposal/applyAndRun":
         await this.applyAndRun(msg.proposalId);
         break;
@@ -2538,6 +2541,38 @@ export class Controller {
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
     return true;
+  }
+
+  // Botão "Salvar como arquivo" do CodeBox (Onda 3): transforma um trecho em cerca comum numa PROPOSTA
+  // aplicável (card + diff + gate + Aplicar), com o caminho CONFIRMADO pelo dev — não escreve direto.
+  // Reusa todo o pipeline de proposta, então o dev revê o diff e o quality gate continua valendo. O
+  // caminho é validado (safeWorkspacePath) aqui e de novo no applyProposal (defesa em profundidade).
+  private async saveCodeBlock(filePath: string, content: string): Promise<void> {
+    const rel = (filePath ?? "").trim();
+    if (!rel) {
+      this.post({ type: "notice", level: "warn", message: "Informe um caminho de arquivo para salvar o trecho." });
+      return;
+    }
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para salvar um trecho como arquivo." });
+      return;
+    }
+    if (!safeWorkspacePath(ws, rel)) {
+      this.post({ type: "notice", level: "error", message: `Caminho inválido ou fora do workspace: ${rel}` });
+      return;
+    }
+    const task = this.currentTask;
+    if (!task) {
+      this.post({ type: "notice", level: "warn", message: "Gere uma resposta antes de salvar um trecho como arquivo." });
+      return;
+    }
+    const proposal = await task.registerManualProposal(rel, content);
+    // O reducer da webview anexa a proposta ao último balão do assistente (ignora o taskId; postamos o da
+    // task só para satisfazer o tipo). A cerca comum ```lang PERMANECE visível no balão — o strip do
+    // reducer (stripFileBlockOfPath) só remove blocos forge-file, nunca cercas comuns; isso é intencional:
+    // o dev mantém o código à vista, agora com um cartão "Aplicar" ao lado.
+    this.post({ type: "stream/proposal", taskId: task.taskId, proposal });
   }
 
   // Aplica uma proposta de célula no notebook ao vivo e registra o índice final

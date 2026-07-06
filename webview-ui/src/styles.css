@@ -302,6 +302,34 @@ h6.md-h {
   gap: 5px;
   color: var(--accent-soft);
 }
+.md-code-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.md-code-saverow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #16181c;
+  border-bottom: 1px solid #2c2f36;
+}
+.md-code-pathinput {
+  flex: 1;
+  min-width: 0;
+  background: #0f1115;
+  border: 1px solid #2c2f36;
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 7px;
+  outline: none;
+}
+.md-code-pathinput:focus {
+  border-color: var(--accent-soft);
+}
 .md-code-open {
   border-color: #4a3a1c;
 }
