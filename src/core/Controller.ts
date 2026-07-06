@@ -67,6 +67,7 @@ import { GateCheckResult, mypyUnavailable, normGatePath, parseCompileallErrors, 
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { runFileCheck } from "../util/execCheck";
+import { summarizeSmoke } from "../util/smoke";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
@@ -1896,6 +1897,12 @@ export class Controller {
           if (n === 0) break; // nada regenerado (falha do provedor / sem alvo casável) — insistir não ajuda
           gate = await this.runProjectGate(project.language);
         }
+        // Smoke test ADVISORY (P4): se o conjunto passou no gate estático (sem erros por-arquivo nem
+        // amplos), tenta RODAR a suíte gerada no venv do workspace — o sinal "de fato roda". Nunca
+        // bloqueia; degrada em silêncio sem venv/pytest/deps.
+        if (gate && gate.fileErrors.length === 0 && gate.projectErrors.length === 0) {
+          await this.runProjectSmoke(project.language, taskId);
+        }
         this.post({ type: "project/done" });
         if (done < total) {
           this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
@@ -1928,22 +1935,9 @@ export class Controller {
     let root: string | undefined;
     try {
       root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-gate-"));
-      // Materializa a árvore (cada path CONTIDO na raiz temp — mesma guarda do applyProposal).
-      const relPaths: string[] = [];
-      for (const e of props) {
-        const abs = safeWorkspacePath(root, e.proposal.filePath);
-        if (!abs) continue;
-        await fs.mkdir(path.dirname(abs), { recursive: true });
-        await fs.writeFile(abs, e.proposal.modified, "utf8");
-        relPaths.push(normGatePath(e.proposal.filePath));
-      }
-      // __init__.py sintéticos para os pacotes resolverem no mypy (import cross-file).
-      for (const dir of syntheticInitDirs(relPaths)) {
-        const abs = safeWorkspacePath(root, `${dir}/__init__.py`);
-        if (!abs) continue;
-        await fs.mkdir(path.dirname(abs), { recursive: true });
-        await fs.writeFile(abs, "", "utf8");
-      }
+      // Materializa a árvore (cada path CONTIDO na raiz temp) + __init__.py sintéticos. Compartilhado
+      // com o smoke test (runProjectSmoke) — ver writeProjectTree.
+      await this.writeProjectTree(root, props);
 
       const py = await this.resolveGatePython();
       // Onda 1.5: garante o mypy no venv ANTES de checar — sem ele o gate só teria compileall (sintaxe) e
@@ -1996,6 +1990,69 @@ export class Controller {
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
       this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [] });
       return null;
+    } finally {
+      if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  // Materializa as propostas de arquivo numa árvore temp (cada path CONTIDO na raiz via safeWorkspacePath)
+  // e semeia os __init__.py sintéticos para os imports cross-file resolverem. COMPARTILHADO pelo gate
+  // estático (compileall/mypy) e pelo smoke test (pytest). Retorna os caminhos relativos materializados.
+  private async writeProjectTree(root: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<string[]> {
+    const relPaths: string[] = [];
+    for (const e of props) {
+      const abs = safeWorkspacePath(root, e.proposal.filePath);
+      if (!abs) continue;
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, e.proposal.modified, "utf8");
+      relPaths.push(normGatePath(e.proposal.filePath));
+    }
+    for (const dir of syntheticInitDirs(relPaths)) {
+      const abs = safeWorkspacePath(root, `${dir}/__init__.py`);
+      if (!abs) continue;
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, "", "utf8");
+    }
+    return relPaths;
+  }
+
+  // Smoke test ADVISORY (P4): depois do gate estático verde, tenta RODAR a suíte gerada (pytest) contra a
+  // árvore materializada usando o VENV do workspace — o sinal "de fato roda", além de "compila e tipa". As
+  // deps de terceiros resolvem do venv; os módulos do projeto, da árvore temp (cwd). NUNCA bloqueia o
+  // Aplicar e NUNCA instala nada (egress deny-by-default): sem venv/pytest/deps, degrada para advisory.
+  // Respeita forge.test.enabled e só roda quando há suíte gerada (test_*.py / *_test.py). O `taskId`
+  // ancora o aviso na resposta da geração.
+  private async runProjectSmoke(language: ProjectLanguage, taskId: string): Promise<void> {
+    if (language !== "python" || !this.config.test().enabled) return;
+    const task = this.currentTask;
+    if (!task) return;
+    const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
+    const hasTests = props.some((e) => /(^|\/)test_[^/]*\.py$|_test\.py$/i.test(normGatePath(e.proposal.filePath)));
+    if (!hasTests) return; // sem suíte gerada — nada a rodar
+    const ws = this.workspaceRoot();
+    const venvPy = ws ? findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV) : undefined;
+    if (!venvPy) {
+      this.post({ type: "stream/notice", taskId, level: "info", message: "Smoke test dos testes gerados pulado: sem venv do workspace. Rode Preparar ambiente para validar que o projeto de fato roda." });
+      return;
+    }
+    let root: string | undefined;
+    try {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-smoke-"));
+      await this.writeProjectTree(root, props);
+      const timeoutMs = this.config.run().timeoutSeconds * 1000;
+      // -p no:cacheprovider: não escreve .pytest_cache na árvore temp (que é descartada mesmo).
+      const result = await runFileCheck(
+        { id: "smoke:pytest", label: "pytest (smoke)", gate: false },
+        venvPy,
+        ["-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        { cwd: root, timeoutMs, outputCap: 8000 }
+      );
+      const verdict = summarizeSmoke(result);
+      this.post({ type: "stream/notice", taskId, level: verdict.level, message: verdict.message });
+      log.info(`Smoke test do projeto: ${verdict.message}`);
+    } catch (e) {
+      // Falha do PRÓPRIO smoke (temp/exec) nunca trava a entrega — é advisory.
+      log.warn("Smoke test do projeto falhou ao executar — ignorado (advisory)", e);
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
