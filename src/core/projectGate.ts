@@ -129,6 +129,10 @@ export interface ProjectGateSummary {
   ran: string[]; // labels das checagens que executaram (ok ou failed)
   skipped: string[]; // labels puladas (não instaladas / timeout)
   fileErrors: { path: string; errors: string[] }[]; // atribuídos a um arquivo → bloqueiam esse arquivo
+  // Violações do gate de ARQUITETURA (regra de camadas). BLOQUEIAM o Aplicar como os fileErrors, mas ficam
+  // SEPARADAS: não entram no summarizeGate (para não poluir advisory/parcial do toolchain) nem no auto-reparo
+  // de type-drift. Preenchido pelo Controller.runProjectGate, não pelo summarizeGate. Ver util/layerCheck.ts.
+  architectureErrors?: { path: string; errors: string[] }[];
   projectErrors: string[]; // reprovou SEM atribuir a arquivo → bloqueia todos os .py (fallback)
   partial: boolean; // compilou (sintaxe ok) mas o mypy NÃO rodou → coerência cross-file NÃO verificada (NÃO é verde)
   summary: string;
