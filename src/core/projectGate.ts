@@ -138,6 +138,11 @@ export interface ProjectGateSummary {
   // está completo. Também FORA do summarizeGate e do auto-reparo. Preenchido pelo Controller. Ver
   // util/dodCheck.ts.
   dodErrors?: string[];
+  // Achados de SEGURANÇA (bandit/SAST). `securityErrors` são os BLOQUEANTES (severidade+confiança altas),
+  // por-arquivo — bloqueiam o Aplicar como a arquitetura. `securityAdvisories` são os demais (advisory),
+  // project-level, só surface. Ambos FORA do summarizeGate e do auto-reparo. Ver util/banditParse.ts.
+  securityErrors?: { path: string; errors: string[] }[];
+  securityAdvisories?: string[];
   projectErrors: string[]; // reprovou SEM atribuir a arquivo → bloqueia todos os .py (fallback)
   partial: boolean; // compilou (sintaxe ok) mas o mypy NÃO rodou → coerência cross-file NÃO verificada (NÃO é verde)
   summary: string;
