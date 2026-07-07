@@ -98,6 +98,13 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("project.reconcileDependencies", true);
   }
 
+  // Templates de skill (P2, nível 3) no Modo Projeto: quando uma skill com `templates` no frontmatter ativa,
+  // materializa os .tmpl como forge-file (scaffold determinístico, fora do LLM), em gap-fill (nunca sobrescreve
+  // o que o LLM gerou). As propostas herdam o gate. Desligue (`false`) para não materializar scaffold de skill.
+  skillTemplates(): boolean {
+    return this.cfg().get<boolean>("skills.templates", true);
+  }
+
   rag(): RagConfig {
     const c = this.cfg();
     return {

@@ -235,6 +235,11 @@
           "default": 8,
           "markdownDescription": "Número de skills injetadas no discovery quando o retrieval por relevância está ativo."
         },
+        "forge.skills.templates": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "No Modo Projeto, materializa como forge-file o **scaffold determinístico** (`.tmpl`) declarado no frontmatter das skills ativadas — fora do LLM, em gap-fill (nunca sobrescreve o que o LLM gerou). As propostas herdam o gate. Desligue para não materializar scaffold de skill."
+        },
         "forge.egress.allowExternal": {
           "type": "boolean",
           "default": false,

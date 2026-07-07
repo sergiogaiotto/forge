@@ -4,7 +4,7 @@ import { lexicalScore, SkillSelector } from "../skills/SkillSelector";
 import { SkillMeta } from "../skills/types";
 
 function skill(name: string, description: string, enabled = true): SkillMeta {
-  return { name, description, path: `/skills/${name}`, source: "managed", enabled, validators: [] };
+  return { name, description, path: `/skills/${name}`, source: "managed", enabled, validators: [], templates: [] };
 }
 
 const skills: SkillMeta[] = [

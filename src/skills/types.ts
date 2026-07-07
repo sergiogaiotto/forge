@@ -8,12 +8,21 @@ export interface SkillValidatorSpec {
   appliesTo?: string[]; // extensões de arquivo, ex.: [".py"]
 }
 
+// Nível 3 (P2 templates): um asset de SCAFFOLD que a skill materializa como forge-file (fora do LLM,
+// determinístico). `src` é o caminho do .tmpl DENTRO do diretório da skill (confinado via loadAsset); `dest`
+// é o caminho RELATIVO no workspace onde o arquivo é materializado. Ambos validados como relativos seguros.
+export interface SkillTemplateSpec {
+  src: string;
+  dest: string;
+}
+
 export interface SkillFrontmatter {
   name: string;
   description: string;
   license?: string;
   metadata?: Record<string, unknown>;
   validators?: SkillValidatorSpec[];
+  templates?: SkillTemplateSpec[];
 }
 
 export interface SkillMeta {
@@ -23,6 +32,7 @@ export interface SkillMeta {
   source: SkillSource;
   enabled: boolean;
   validators: SkillValidatorSpec[];
+  templates: SkillTemplateSpec[]; // P2: assets de scaffold declarados no frontmatter (podem ser [])
 }
 
 export interface FrontmatterError {
