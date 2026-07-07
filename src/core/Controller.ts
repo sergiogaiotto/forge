@@ -1086,16 +1086,27 @@ export class Controller {
     const sorted = order.length ? toApply.slice().sort((a, b) => rank(a.filePath) - rank(b.filePath)) : toApply;
     let applied = 0;
     let blocked = 0;
+    const appliedPaths: string[] = [];
     for (const p of sorted) {
       const ok = await this.applyProposal(p.id, { force: opts?.forceBlocked });
       if (ok) {
         applied++;
+        appliedPaths.push(p.filePath);
         if (this.projectSession) {
           const f = this.projectSession.files.find((x) => norm(x.path) === norm(p.filePath));
           if (f) f.status = "applied";
         }
       } else {
         blocked++;
+      }
+    }
+    // Estrutura de pacotes: materializa os __init__.py REAIS que faltam (CR-7). O gate só cria
+    // sintéticos numa árvore temp; sem estes no workspace, um layout src/ multi-diretório pode falhar
+    // no empacotamento (setuptools find), no pytest e em ferramentas sem suporte a namespace packages.
+    if (this.projectSession?.language === "python" && appliedPaths.length) {
+      const n = await this.ensurePythonPackageInits(appliedPaths);
+      if (n > 0) {
+        this.post({ type: "notice", level: "info", message: `Estrutura de pacotes: criei ${n} arquivo(s) __init__.py ausente(s) para os imports do projeto resolverem.` });
       }
     }
     if (this.projectSession) {
@@ -1109,6 +1120,28 @@ export class Controller {
     if (blocked) parts.push(`${blocked} bloqueado(s) pelo quality gate${opts?.forceBlocked ? "" : ' — use "Forçar bloqueados" se revisou'}`);
     if (partial.length) parts.push(`${partial.length} parcial(is) pulado(s) — revise e aplique pelo cartão`);
     this.post({ type: "notice", level: partial.length || blocked ? "warn" : "info", message: `Aplicar tudo: ${parts.join(" · ")}.` });
+  }
+
+  // Garante os __init__.py REAIS dos pacotes Python (o gate só semeia sintéticos numa árvore temp).
+  // Reusa syntheticInitDirs (mesma regra do gate: sobe a cadeia de ancestrais de cada .py, pula nomes
+  // inválidos de pacote e dirs que já têm __init__.py entre os aplicados). Idempotente: não sobrescreve
+  // um __init__.py existente. Best-effort: uma falha de escrita não bloqueia o apply. CR-7 da auditoria.
+  private async ensurePythonPackageInits(appliedRelPaths: string[]): Promise<number> {
+    const root = this.workspaceRoot();
+    if (!root) return 0;
+    let created = 0;
+    for (const dir of syntheticInitDirs(appliedRelPaths.map(normGatePath), "python")) {
+      const abs = safeWorkspacePath(root, `${dir}/__init__.py`);
+      if (!abs || existsSync(abs)) continue;
+      try {
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        await fs.writeFile(abs, "", "utf8");
+        created++;
+      } catch {
+        /* best-effort: não bloqueia o apply */
+      }
+    }
+    return created;
   }
 
   // ---- Visualizador read-only de Skills e RAG (o dev inspeciona o que é injetado) ------

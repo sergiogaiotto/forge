@@ -65,6 +65,24 @@ test("frameworkInstruction: auto vazio; FastAPI/Flask/Litestar explícitos; Pyth
   assert.equal(frameworkInstruction("typescript", "fastapi"), "");
 });
 
+// Correções de runnability (Modo Projeto): o manifesto Python é requirements.txt (ativa a reconciliação
+// anti-drift do FORGE), o FastAPI ganha entrypoint executável + uvicorn documentado + Pydantic v2, e o
+// template-engine Python exige Form(...) e caminho de templates robusto ao CWD (via __file__).
+test("Modo Projeto Python/FastAPI: requirements.txt, entrypoint uvicorn, Pydantic v2 e Form()", () => {
+  const p = buildProjectPrompt("proj", "python", "hexagonal", "template-engine", "fastapi");
+  assert.match(p, /requirements\.txt/); // Fix Q3: manifesto = requirements.txt
+  assert.match(p, /N[ÃA]O use pyproject/i); // não pyproject como manifesto no Modo Projeto
+  assert.match(p, /uvicorn/); // Fix C: comando de execução documentado
+  assert.match(p, /__main__/); // entrypoint executável
+  assert.match(p, /field_validator|Pydantic v2/); // Fix CR-6: Pydantic v2, não v1
+  assert.match(p, /Form\(/); // Fix binding de formulário
+  assert.match(p, /__file__/); // caminho de templates robusto ao CWD
+  // o guiado (a partir do blueprint) também carrega framework + UI
+  const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "main.py", purpose: "app", deps: [] }], "template-engine", "fastapi");
+  assert.match(guided, /uvicorn/);
+  assert.match(guided, /Form\(/);
+});
+
 test("prompts do projeto propagam o framework (e convivem com a camada de UI)", () => {
   assert.match(buildBlueprintSystemPrompt("python", "hexagonal", "auto", "fastapi"), /FastAPI/);
   assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("FRAMEWORK WEB")); // auto = como antes
