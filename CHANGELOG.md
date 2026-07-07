@@ -3,6 +3,63 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.4.0] — 2026-07-07
+
+**Auditoria da geração de código — os 4 pilares.** Uma auditoria multi-agente da geração no Modo Projeto
+apontou a causa-raiz do "copiar/colar" (só o bloco `forge-file` vira proposta aplicável; em turnos de
+remediação o modelo desviava do protocolo e o próprio FORGE o induzia) e endereçou quatro frentes: tornar o
+**Aplicar** o caminho natural (P1), promover **convenções a gate duro** no host (P2), dar **observabilidade
+local** sempre-ligada (P3) e provar que o **projeto de fato roda/compila** em mais linguagens (P4). 14 PRs
+(#102–#115), cada um com revisão adversarial multi-lente e defeitos provados ao vivo antes do merge.
+
+### Added — P1 · Apply-first (o Aplicar como caminho natural)
+- **Reparo de protocolo pós-stream**: quando o modelo mostra o código em cerca comum (` ```py `) em vez de
+  `forge-file`, o FORGE detecta o desvio e **reemite os arquivos como proposta aplicável** numa chamada
+  silenciosa (sem inferir caminho no cliente — usa o `path=` que o modelo já conhece). Detector conservador:
+  menção didática não dispara.
+- **"Salvar como arquivo" no bloco de código**: para o caso residual, um botão sintetiza uma **proposta real**
+  (mesmo gate, mesma contenção `safeWorkspacePath`) a partir de um trecho em cerca comum.
+- **Escape consciente do gate**: **"Aplicar assim mesmo, revisei"** (e "Forçar bloqueados" no Aplicar-tudo)
+  pula só o guard do gate — a contenção de caminho segue valendo — com override **auditável** (WARNING na
+  observabilidade).
+- **Few-shot vivo no histórico**: o turno anterior passa a empilhar o **próprio output** do modelo (cabeçalhos
+  `forge-file` preservados) em vez do stub "Apliquei em X", para o modelo ver seu protocolo no próximo turno.
+
+### Added — P2 · Convenções como gate duro
+- **Gate de arquitetura (regra de ouro)**: uma _fitness function_ (estilo import-linter/ArchUnit) bloqueia o
+  Aplicar quando a camada interna (domínio/entidades/model) importa a externa (adapters/infra/repository).
+  Detecção conservadora: só bloqueia quando o import resolve, sem ambiguidade, para arquivo(s) gerado(s) da
+  camada externa.
+- **Gate de definição de pronto (DoD)**: "o projeto tem o mínimo para instalar e rodar?" — manifesto de
+  dependências, ≥1 teste, e um README com "como rodar". A falta fecha o Aplicar de todos (o universo é o
+  projeto inteiro: propostas desta rodada + arquivos já aplicados).
+- **Gate de segurança (SAST/bandit)**: análise por AST do código gerado; bloqueio **conservador** (só
+  severidade **e** confiança altas, em execução de código/shell) — o resto é advisory. Fail-open sem a
+  ferramenta.
+- **Templates de scaffold determinístico**: uma skill pode declarar `templates` no frontmatter; ao ativar no
+  Modo Projeto, o FORGE **materializa o `.tmpl` como arquivo — fora do LLM (determinístico)** — em _gap-fill_
+  (nunca sobrescreve o que o modelo gerou nem um arquivo existente no disco). O arquivo herda o gate.
+
+### Added — P3 · Observabilidade local
+- **Log de diagnóstico local sempre-ligado**: um _tee_ redigido dos eventos vai para o `globalStorage` antes
+  do gate de egress remoto (o remoto segue opt-in). Comando **"FORGE: exportar diagnóstico"** gera um bundle
+  redigido. Retenção de 7 dias.
+- **Prompt de sistema montado + parâmetros efetivos** capturados no `generation.start` (reasoning effort,
+  máximo de tokens, orçamento de entrada) e **spans de fase** (montagem/RAG/stream/continuação/gate/reparo).
+  Privacidade: o prompt de sistema (que agrega perfil/RAG/anexos) só vai ao sink remoto em captura _full_;
+  masked/metadata-only omitem; o log local redige em duas camadas.
+
+### Added — P4 · Projeto que de fato roda
+- **Gate multi-linguagem**: além de Python (`compileall` + `mypy`), o gate do Modo Projeto agora cobre
+  **TypeScript** (`tsc --noEmit` — sintaxe bloqueia, tipo é advisory sem `node_modules`) e **Go** (`gofmt`
+  sintaxe bloqueia; `go build ./...` compilação/drift é advisory, offline). A **regra de arquitetura** roda
+  nas três linguagens.
+- **Smoke test advisory**: depois do gate estático verde, tenta **rodar a suíte gerada** no venv do workspace
+  (o sinal "de fato roda"). Nunca bloqueia e nunca instala nada; pulado se o gate bloqueou por segurança/
+  arquitetura.
+- **Reconciliação de dependências**: pré-entrega, acrescenta ao `requirements.txt` gerado os pacotes que o
+  código importa mas não declara — re-postando o cartão do manifesto.
+
 ## [2.2.0] — 2026-07-05
 
 Geração de projeto **auto-curável**: o Modo Projeto agora detecta, bloqueia e conserta sozinho o drift
