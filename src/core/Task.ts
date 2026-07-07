@@ -12,6 +12,7 @@ import { closedBlockPaths, parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 import { detectProseFileEdit } from "../util/proseEdits";
 import { safeWorkspacePath } from "../util/safePath";
+import { estimateTokens } from "../util/tokenEstimate";
 import { buildContinuationPrompt, buildProtocolReemitPrompt, buildTailContinuation } from "./systemPrompt";
 
 // Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
@@ -45,7 +46,7 @@ export interface TaskDeps {
   // "gerando…" → "gerado" um a um no modal, em vez de tudo em lote no fim.
   onFileClosed?: (path: string) => void;
   emit?: (e: ObsEvent) => void; // observabilidade (geração + workflow)
-  obsMeta?: { mode: "normal" | "tdd" | "review" | "project"; model: string; provider: string; sessionId: string; userId: string; org?: string };
+  obsMeta?: { mode: "normal" | "tdd" | "review" | "project"; model: string; provider: string; sessionId: string; userId: string; org?: string; reasoningEffort?: string; maxOutputTokens?: number; inputBudgetTokens?: number; ragMs?: number; assembleMs?: number };
 }
 
 const LANG_BY_EXT: Record<string, string> = {
@@ -117,11 +118,24 @@ export class Task {
       sessionId: d.obsMeta?.sessionId ?? "",
       userId: d.obsMeta?.userId ?? "",
       org: d.obsMeta?.org,
+      // P3: o prompt de sistema MONTADO (redigido no sink) + os params efetivos — evidência direta do que
+      // produziu a geração. systemPromptTokens é o tamanho REAL (o sink pode capar o texto cru).
+      systemPrompt: d.systemPrompt,
+      systemPromptTokens: estimateTokens(d.systemPrompt),
+      reasoningEffort: d.obsMeta?.reasoningEffort,
+      maxOutputTokens: d.obsMeta?.maxOutputTokens,
+      inputBudgetTokens: d.obsMeta?.inputBudgetTokens,
     });
     for (const s of d.activatedSkillNames) {
       d.post({ type: "stream/skill", taskId: d.taskId, skill: s });
       d.emit?.({ type: "skill.activated", skill: s });
     }
+    // P3: spans de rag/assemble medidos no Controller ANTES do taskId existir, emitidos AQUI (após o
+    // generation.start deste taskId) para anexarem ao trace CERTO — o Langfuse roteia phase.timing pelo
+    // último trace aberto, que agora é o desta geração (achado da revisão: emiti-los cedo os punha no trace
+    // anterior/órfão).
+    if (d.obsMeta?.ragMs !== undefined) d.emit?.({ type: "phase.timing", taskId: d.taskId, phase: "rag", durationMs: d.obsMeta.ragMs });
+    if (d.obsMeta?.assembleMs !== undefined) d.emit?.({ type: "phase.timing", taskId: d.taskId, phase: "assemble", durationMs: d.obsMeta.assembleMs });
 
     // Geração RESILIENTE: gera; se um arquivo ficou cortado (cerca de fechamento não veio), re-pede a
     // continuação e costura ao texto acumulado, até o arquivo fechar ou esgotar o teto de tentativas.
@@ -132,7 +146,21 @@ export class Task {
       inputTokens += u.inputTokens ?? 0;
       outputTokens += u.outputTokens ?? 0;
     };
-    const gen = await resilientGenerate(d.messages, (msgs) => this.streamOnce(msgs, onUsage), {
+    // P3: cada chamada ao provedor vira um span. A PRIMEIRA é a geração principal ("stream"); as seguintes
+    // são continuações ("continuation") disparadas por truncamento. durationMs por chamada — onde o tempo vai.
+    let streamCall = 0;
+    const gen = await resilientGenerate(
+      d.messages,
+      async (msgs) => {
+        const t0 = Date.now();
+        try {
+          return await this.streamOnce(msgs, onUsage);
+        } finally {
+          d.emit?.({ type: "phase.timing", taskId: d.taskId, phase: streamCall === 0 ? "stream" : "continuation", durationMs: Date.now() - t0 });
+          streamCall++;
+        }
+      },
+      {
       maxContinuations: MAX_CONTINUATIONS,
       anchorChars: CONTINUATION_ANCHOR_CHARS,
       buildContinuation: buildContinuationPrompt,
