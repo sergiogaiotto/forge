@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findLayerViolations, parseImports } from "../util/layerCheck";
+import { findLayerViolations, parseImports, parseImportsTs } from "../util/layerCheck";
 
 test("parseImports: cobre import/from/relativo/as/vírgula, devolve o MÓDULO", () => {
   const c = [
@@ -132,4 +132,97 @@ test("projeto hexagonal coerente → nenhuma violação", () => {
     { path: "src/app/main.py", content: "from adapters.db import X" },
   ];
   assert.deepEqual(findLayerViolations(files, "hexagonal"), []);
+});
+
+// ---- P4: arquitetura para TypeScript ------------------------------------------
+
+test("parseImportsTs: cobre import/from, export-from, side-effect, require, import() e SÓ relativos", () => {
+  const c = [
+    "import React from 'react'", // bare → ignorado
+    "import { Session } from './adapters/db'",
+    "import type { Repo } from '../ports/repo'",
+    "export { X } from './x'",
+    "import './styles.css'", // side-effect relativo
+    "const cfg = require('../config')",
+    "const m = await import('./lazy')",
+    "import ns from '@scope/pkg'", // @scope → ignorado
+  ].join("\n");
+  assert.deepEqual(parseImportsTs(c), ["adapters.db", "ports.repo", "x", "styles.css", "config", "lazy"]);
+});
+
+test("hexagonal TS: domínio importando adapters é VIOLAÇÃO (import relativo)", () => {
+  const files = [
+    { path: "src/domain/order.ts", content: "import { Session } from '../adapters/db';\nexport class Order {}" },
+    { path: "src/adapters/db.ts", content: "export class Session {}" },
+  ];
+  const v = findLayerViolations(files, "hexagonal", "typescript");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].path, "src/domain/order.ts");
+  assert.deepEqual(v[0].imports, ["adapters.db"]);
+});
+
+test("hexagonal TS: adapter importando domínio é PERMITIDO; use_cases idem", () => {
+  const files = [
+    { path: "src/domain/order.ts", content: "export class Order {}" },
+    { path: "src/adapters/db.ts", content: "import { Order } from '../domain/order';\nexport class Session {}" },
+    { path: "src/use_cases/create.ts", content: "import { Session } from '../adapters/db';" },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "typescript"), []);
+});
+
+test("TS: import BARE (dep de terceiros) nunca é violação", () => {
+  const files = [
+    { path: "src/domain/order.tsx", content: "import express from 'express';\nimport { z } from 'zod';\nexport const x = 1;" },
+    { path: "src/adapters/db.ts", content: "export class Session {}" },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "typescript"), []);
+});
+
+test("mvc TS: Model importando Controller é VIOLAÇÃO; View importando Model permitido", () => {
+  const bad = findLayerViolations(
+    [
+      { path: "app/model/user.ts", content: "import { login } from '../controller/auth';" },
+      { path: "app/controller/auth.ts", content: "export function login() {}" },
+    ],
+    "mvc",
+    "typescript"
+  );
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].path, "app/model/user.ts");
+});
+
+// REGRESSÃO (revisão): um MÓDULO DE RAIZ cujo NOME de arquivo coincide com um alias de camada (src/adapter.ts,
+// src/service.ts) NÃO é a camada externa — só DIRETÓRIOS decidem a camada. Importá-lo do domínio é legítimo.
+test("TS: módulo de raiz com basename de alias (adapter.ts/service.ts) NÃO falso-bloqueia", () => {
+  const hex = findLayerViolations(
+    [
+      { path: "src/domain/order.ts", content: "import { AdapterToken } from '../adapter';\nimport { A } from '../infra.js';" },
+      { path: "src/adapter.ts", content: "export const AdapterToken = Symbol('x');" },
+      { path: "src/infra.ts", content: "export const A = 1;" },
+      { path: "src/adapters/db.ts", content: "export class Db {}" }, // a camada externa REAL (diretório)
+    ],
+    "hexagonal",
+    "typescript"
+  );
+  assert.deepEqual(hex, []); // ../adapter e ../infra.js são módulos de raiz, não a camada de adapters/infra
+  // import type do módulo de raiz 'service' num projeto layered — também não é violação
+  const layered = findLayerViolations(
+    [
+      { path: "model/customer.ts", content: "import type { S } from '../service';" },
+      { path: "service.ts", content: "export type S = number;" },
+    ],
+    "layered",
+    "typescript"
+  );
+  assert.deepEqual(layered, []);
+  // mas a camada externa REAL (diretório service/) ainda é violação
+  const realViolation = findLayerViolations(
+    [
+      { path: "model/customer.ts", content: "import { load } from '../service/customer_svc';" },
+      { path: "service/customer_svc.ts", content: "export function load() {}" },
+    ],
+    "layered",
+    "typescript"
+  );
+  assert.equal(realViolation.length, 1);
 });

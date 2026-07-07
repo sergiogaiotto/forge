@@ -63,8 +63,15 @@ export function runFileCheck(
   opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv; outputCap?: number }
 ): Promise<ValidatorResult> {
   return new Promise((resolve) => {
-    execFile(file, args, { cwd: opts.cwd, timeout: opts.timeoutMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: opts.env }, (err, stdout, stderr) =>
-      resolve(classifyCheck(spec, err, stdout, stderr, opts.outputCap))
-    );
+    try {
+      execFile(file, args, { cwd: opts.cwd, timeout: opts.timeoutMs, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: opts.env }, (err, stdout, stderr) =>
+        resolve(classifyCheck(spec, err, stdout, stderr, opts.outputCap))
+      );
+    } catch (err) {
+      // execFile pode LANÇAR de forma SÍNCRONA (ex.: `spawn EINVAL` ao tentar um .cmd/.bat no Windows —
+      // endurecimento da CVE-2024-27980), o que REJEITARIA esta Promise e derrubaria o chamador. Trata como
+      // ferramenta INDISPONÍVEL (skipped, nunca reprova/rejeita) — degradação segura. Achado da revisão do gate TS.
+      resolve({ id: spec.id, label: spec.label, status: "skipped", gate: spec.gate, output: "", reason: "não pôde executar (spawn)" });
+    }
   });
 }

@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyCheck } from "../util/execCheck";
+import { classifyCheck, runFileCheck } from "../util/execCheck";
 
 const SPEC = { id: "gate:mypy", label: "mypy", gate: true };
+
+// REGRESSÃO (revisão do gate TS): o execFile pode LANÇAR de forma SÍNCRONA (`spawn EINVAL` ao tentar um .cmd
+// inexistente no Windows — CVE-2024-27980). O runFileCheck NUNCA pode rejeitar (derrubaria o gate inteiro):
+// deve resolver para "skipped". Em POSIX o mesmo nome dá ENOENT limpo → também skipped.
+test("runFileCheck: comando inexistente (.cmd) resolve para skipped, nunca REJEITA a Promise", async () => {
+  const r = await runFileCheck({ id: "probe", label: "x", gate: false }, "forge-nonexistent-tool-xyz.cmd", ["--version"], { timeoutMs: 5000 });
+  assert.equal(r.status, "skipped"); // se o await lançasse, o teste falharia (Promise rejeitada)
+});
 
 test("classifyCheck: ENOENT (ferramenta ausente) → skipped, nunca reprova", () => {
   const r = classifyCheck(SPEC, Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }), "", "");

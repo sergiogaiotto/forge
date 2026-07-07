@@ -63,7 +63,8 @@ import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/i
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
-import { GateCheckResult, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs } from "./projectGate";
+import { GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
+import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
 import { buildFewShotTurn } from "../util/fewShot";
@@ -1981,7 +1982,8 @@ export class Controller {
   // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
   private async runProjectGate(language: ProjectLanguage, architecture: ProjectArchitecture, complete: boolean): Promise<ProjectGateSummary | null> {
     const task = this.currentTask;
-    if (!task || language !== "python") return null; // Onda 1: Python-only (compileall/mypy)
+    // P4: Python (compileall/mypy) e TypeScript (tsc). Java/Go ainda não têm gate → consultivo (null).
+    if (!task || (language !== "python" && language !== "typescript")) return null;
     // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
     // reescreveria o veredito do gate de volta para true — corrida real).
     await task.settleValidations();
@@ -1990,52 +1992,65 @@ export class Controller {
     // tratamento honesto próprio (pulado no "Aplicar tudo" + aviso no cartão) — um SyntaxError por corte
     // não deve virar bloqueio de gate, e materializá-lo poluiria a resolução do conjunto.
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
-    const hasPy = props.some((e) => e.proposal.filePath.toLowerCase().endsWith(".py"));
-    if (!hasPy) return null; // nada compilável — gate não se aplica
+    const codeRe = language === "typescript" ? /\.[tj]sx?$/i : /\.py$/i;
+    const hasCode = props.some((e) => codeRe.test(e.proposal.filePath));
+    if (!hasCode) return null; // nada compilável na linguagem do projeto — gate não se aplica
 
     const gateStart = Date.now(); // P3: span do gate (compileall/mypy/arquitetura/DoD/segurança)
     let root: string | undefined;
     try {
       root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-gate-"));
-      // Materializa a árvore (cada path CONTIDO na raiz temp) + __init__.py sintéticos. Compartilhado
-      // com o smoke test (runProjectSmoke) — ver writeProjectTree.
-      await this.writeProjectTree(root, props);
+      // Materializa a árvore (cada path CONTIDO na raiz temp) + __init__.py sintéticos (só Python).
+      // Compartilhado com o smoke test (runProjectSmoke) — ver writeProjectTree.
+      await this.writeProjectTree(root, props, language);
 
-      const py = await this.resolveGatePython();
-      // Onda 1.5: garante o mypy no venv ANTES de checar — sem ele o gate só teria compileall (sintaxe) e
-      // ficaria "parcial", deixando passar o drift de contrato (o ImportError fantasma que derruba o app).
-      await this.ensureGateMypy(py);
-      // Garante o bandit no venv (best-effort, como o mypy) para o gate de segurança morder out-of-the-box.
-      const securityMode = this.config.securityGate();
-      if (securityMode !== "off") await this.ensureGateBandit(py);
       const timeoutMs = 120_000;
       const outputCap = 32_000; // teto amplo: um projeto MUITO drifado emite muitos erros; não truncar a atribuição
       const checks: GateCheckResult[] = [];
+      const securityMode = this.config.securityGate();
+      let tscTypeAdvisories: string[] = []; // avisos de TIPO do tsc (advisory) — só TypeScript
+      let py: string | undefined; // interpretador do gate Python (só no ramo Python; usado no security scan)
 
-      // compileall (stdlib, gate:true): pega erro de SINTAXE em qualquer arquivo do conjunto.
-      const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs, outputCap });
-      checks.push({ result: compile, errors: parseCompileallErrors(compile.output, root) });
+      if (language === "python") {
+        py = await this.resolveGatePython();
+        // Onda 1.5: garante o mypy no venv ANTES de checar — sem ele o gate só teria compileall (sintaxe) e
+        // ficaria "parcial", deixando passar o drift de contrato (o ImportError fantasma que derruba o app).
+        await this.ensureGateMypy(py);
+        // Garante o bandit no venv (best-effort, como o mypy) para o gate de segurança morder out-of-the-box.
+        if (securityMode !== "off") await this.ensureGateBandit(py);
 
-      // mypy (gate:true quando instalado): pega o DRIFT de contrato (import/atributo fantasma) cross-file.
-      // --ignore-missing-imports neutraliza o ruído de deps de terceiros (fastapi/jinja não instalados no
-      // temp) preservando os erros de módulos DESTE projeto. Não instalado → skipped (consultivo).
-      let mypy = await runFileCheck(
-        { id: "gate:mypy", label: "mypy", gate: true },
-        py,
-        ["-m", "mypy", "--ignore-missing-imports", "--no-error-summary", "--no-color-output", "--hide-error-context", "--no-pretty", "."],
-        { cwd: root, timeoutMs, outputCap }
-      );
-      if (mypyUnavailable(mypy)) mypy = { ...mypy, status: "skipped", reason: "mypy não instalado (gate consultivo)" };
-      const mypyErrors = mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map<string, string[]>();
-      // Defesa em profundidade: mypy que reprovou SEM nenhum erro `path:linha` atribuível não type-checou
-      // — ABORTOU (fatal/coleta, ex.: exit 2). Um type-check real sempre emite linhas atribuíveis. Tratar
-      // como consultivo (skipped) em vez de deixar passar mascarado: o resumo vira "parcial", não "verde".
-      if (mypy.status === "failed" && mypyErrors.size === 0) {
-        mypy = { ...mypy, status: "skipped", reason: "mypy não pôde analisar (abort/fatal) — gate consultivo" };
+        // compileall (stdlib, gate:true): pega erro de SINTAXE em qualquer arquivo do conjunto.
+        const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs, outputCap });
+        checks.push({ result: compile, errors: parseCompileallErrors(compile.output, root) });
+
+        // mypy (gate:true quando instalado): pega o DRIFT de contrato (import/atributo fantasma) cross-file.
+        // --ignore-missing-imports neutraliza o ruído de deps de terceiros (fastapi/jinja não instalados no
+        // temp) preservando os erros de módulos DESTE projeto. Não instalado → skipped (consultivo).
+        let mypy = await runFileCheck(
+          { id: "gate:mypy", label: "mypy", gate: true },
+          py,
+          ["-m", "mypy", "--ignore-missing-imports", "--no-error-summary", "--no-color-output", "--hide-error-context", "--no-pretty", "."],
+          { cwd: root, timeoutMs, outputCap }
+        );
+        if (mypyUnavailable(mypy)) mypy = { ...mypy, status: "skipped", reason: "mypy não instalado (gate consultivo)" };
+        const mypyErrors = mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map<string, string[]>();
+        // Defesa em profundidade: mypy que reprovou SEM nenhum erro `path:linha` atribuível não type-checou
+        // — ABORTOU (fatal/coleta, ex.: exit 2). Um type-check real sempre emite linhas atribuíveis. Tratar
+        // como consultivo (skipped) em vez de deixar passar mascarado: o resumo vira "parcial", não "verde".
+        if (mypy.status === "failed" && mypyErrors.size === 0) {
+          mypy = { ...mypy, status: "skipped", reason: "mypy não pôde analisar (abort/fatal) — gate consultivo" };
+        }
+        checks.push({ result: mypy, errors: mypyErrors });
+      } else {
+        // TypeScript (P4): tsc --noEmit sobre a árvore. Decisão (A): SINTAXE (TS1xxx) bloqueia; TIPO (TS2xxx+)
+        // é advisory — sem node_modules no temp o tsc é ruidoso (deps/tipos ausentes → cascata). tsc ausente
+        // → consultivo. A ARQUITETURA (abaixo) roda igual, agora sobre imports TS.
+        const ts = await this.runTsChecks(root, timeoutMs, outputCap);
+        checks.push(...ts.checks);
+        tscTypeAdvisories = ts.advisories;
       }
-      checks.push({ result: mypy, errors: mypyErrors });
 
-      const gate = summarizeGate(checks); // SÓ toolchain (compileall/mypy) → advisory/resumo honestos
+      const gate = summarizeGate(checks); // toolchain (compileall/mypy | tsc-sintaxe) → advisory/resumo honestos
 
       // Gate de ARQUITETURA (P2): a REGRA DE OURO — a camada interna (domínio/entidades/model) não pode
       // importar a externa (adapters/infra/repository). O mypy não pega (importar na direção errada tipa e
@@ -2045,7 +2060,8 @@ export class Controller {
       // re-violar. O dev corrige a DIREÇÃO do import (inverter a dependência / usar uma port).
       const violations = findLayerViolations(
         props.map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified })),
-        architecture
+        architecture,
+        language
       );
       const architectureErrors = violations.map((v) => ({
         path: v.path,
@@ -2075,7 +2091,8 @@ export class Controller {
       // E confiança ALTA BLOQUEIA (senha hardcoded, eval de input, cripto fraca); o resto é advisory. O bandit
       // analisa por AST (NÃO executa o código, ao contrário do smoke test). SEPARADO do toolchain (fora do
       // summarizeGate/auto-reparo), como a arquitetura. bandit ausente/sem relatório → null (fail-open).
-      const security = securityMode !== "off" ? await this.runSecurityScan(py, root, securityMode) : null;
+      // bandit é Python-only (usa o `py` resolvido). Em TypeScript a segurança não roda por ora (follow-up).
+      const security = language === "python" && securityMode !== "off" ? await this.runSecurityScan(py!, root, securityMode) : null;
       const securityErrors = security?.blocking ?? [];
       const securityAdvisories = security?.advisories ?? [];
 
@@ -2092,13 +2109,18 @@ export class Controller {
       if (gate.fileErrors.length) fileParts.push(`${gate.fileErrors.length} de compilação/contrato`);
       if (architectureErrors.length) fileParts.push(`${architectureErrors.length} de arquitetura (regra de camadas)`);
       if (securityErrors.length) fileParts.push(`${securityErrors.length} de segurança (bandit ALTO)`);
-      const summary = dodBlocksAll
-        ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
-        : totalBlocked > 0
-          ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${fileParts.length ? ` — ${fileParts.join(" · ")}` : ""}. Corrija antes de aplicar.`
-          : securityAdvisories.length
-            ? `${gate.summary} · segurança: ${securityAdvisories.length} aviso(s) do bandit (não bloqueiam).`
-            : gate.summary;
+      // Avisos de TIPO do tsc (advisory): mostra a CONTAGEM no resumo (o veredito completo exige node_modules).
+      // Os erros de SINTAXE, esses, entram em gate.fileErrors (bloqueiam) e pintam os cartões.
+      const tscSuffix = tscTypeAdvisories.length ? ` · tsc: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory — instale as deps e rode o tsc para o veredito completo)` : "";
+      const summary =
+        (dodBlocksAll
+          ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
+          : totalBlocked > 0
+            ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${fileParts.length ? ` — ${fileParts.join(" · ")}` : ""}. Corrija antes de aplicar.`
+            : securityAdvisories.length
+              ? `${gate.summary} · segurança: ${securityAdvisories.length} aviso(s) do bandit (não bloqueiam).`
+              : gate.summary) + tscSuffix;
+      if (tscTypeAdvisories.length) log.info(`Gate TS: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory) — ${tscTypeAdvisories.slice(0, 5).join(" | ")}`);
       // A UI pinta os cartões de compilação/arquitetura/segurança (por-arquivo) e mostra DoD + avisos de
       // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
       const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), `… e mais ${securityAdvisories.length - 12} aviso(s) — veja o log de diagnóstico.`] : securityAdvisories;
@@ -2119,7 +2141,7 @@ export class Controller {
   // Materializa as propostas de arquivo numa árvore temp (cada path CONTIDO na raiz via safeWorkspacePath)
   // e semeia os __init__.py sintéticos para os imports cross-file resolverem. COMPARTILHADO pelo gate
   // estático (compileall/mypy) e pelo smoke test (pytest). Retorna os caminhos relativos materializados.
-  private async writeProjectTree(root: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<string[]> {
+  private async writeProjectTree(root: string, props: { proposal: { filePath: string; modified: string } }[], language: ProjectLanguage = "python"): Promise<string[]> {
     const relPaths: string[] = [];
     for (const e of props) {
       const abs = safeWorkspacePath(root, e.proposal.filePath);
@@ -2128,7 +2150,7 @@ export class Controller {
       await fs.writeFile(abs, e.proposal.modified, "utf8");
       relPaths.push(normGatePath(e.proposal.filePath));
     }
-    for (const dir of syntheticInitDirs(relPaths)) {
+    for (const dir of syntheticInitDirs(relPaths, language)) {
       const abs = safeWorkspacePath(root, `${dir}/__init__.py`);
       if (!abs) continue;
       await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -2290,6 +2312,52 @@ export class Controller {
       if (probe.status !== "skipped") return cand; // achou (rodou; ENOENT vira skipped)
     }
     return candidates[0] ?? "python"; // nada respondeu: usa o 1º e deixa o ENOENT tornar o gate consultivo
+  }
+
+  // Resolve o tsc para o gate TypeScript (P4): o typescript do WORKSPACE (node_modules/typescript/lib/tsc.js),
+  // rodado via `node <tsc.js>` — o execFile (sem shell) não invoca um .cmd de forma confiável no Windows, e
+  // `node` é um .exe do PATH. Fallback: `tsc` do PATH (global). Nenhum → undefined (gate consultivo). Só
+  // sondagem barata; NÃO instala nada (não poluímos o projeto do dev).
+  private async resolveGateTsc(): Promise<{ cmd: string; baseArgs: string[] } | undefined> {
+    const tscJs = findWorkspaceTscJs(this.workspaceRoot(), existsSync);
+    if (tscJs) {
+      const probe = await runFileCheck({ id: "probe", label: "tsc", gate: false }, "node", [tscJs, "--version"], { timeoutMs: 15_000 });
+      if (probe.status === "ok") return { cmd: "node", baseArgs: [tscJs] };
+    }
+    const globalTsc = process.platform === "win32" ? "tsc.cmd" : "tsc";
+    const probe = await runFileCheck({ id: "probe", label: "tsc", gate: false }, globalTsc, ["--version"], { timeoutMs: 15_000 });
+    if (probe.status === "ok") return { cmd: globalTsc, baseArgs: [] };
+    return undefined;
+  }
+
+  // Gate TypeScript (P4): materializa um tsconfig mínimo na árvore temp e roda `tsc --noEmit`. Classifica: erro
+  // de SINTAXE (TS1xxx) BLOQUEIA (o arquivo nem parseia); erro de TIPO (TS2xxx+) é ADVISORY — sem node_modules
+  // no temp o tsc é ruidoso (deps/tipos ausentes → cascata), então type-drift vira aviso, não bloqueio (decisão
+  // (A)). tsc ausente/inconclusivo → check "skipped" (consultivo, como o mypy). O ruído de import BARE já é
+  // filtrado em parseTscErrors; o de import RELATIVO (drift interno) é mantido.
+  private async runTsChecks(root: string, timeoutMs: number, outputCap: number): Promise<{ checks: GateCheckResult[]; advisories: string[] }> {
+    const tsc = await this.resolveGateTsc();
+    if (!tsc) {
+      return { checks: [{ result: { id: "gate:tsc", label: "tsc", status: "skipped", gate: true, output: "", reason: "tsc não encontrado (instale typescript no workspace) — gate consultivo" }, errors: new Map() }], advisories: [] };
+    }
+    await fs.writeFile(path.join(root, "tsconfig.gate.json"), buildGateTsconfig(), "utf8");
+    const raw = await runFileCheck(
+      { id: "gate:tsc", label: "tsc", gate: true },
+      tsc.cmd,
+      [...tsc.baseArgs, "--noEmit", "--pretty", "false", "-p", "tsconfig.gate.json"],
+      { cwd: root, timeoutMs, outputCap }
+    );
+    if (tscUnavailable(raw)) {
+      return { checks: [{ result: { ...raw, status: "skipped", reason: "tsc não pôde rodar — gate consultivo" }, errors: new Map() }], advisories: [] };
+    }
+    const errors = parseTscErrors(raw.output, root);
+    const syntax = errors.filter((e) => isTscSyntaxError(e.code));
+    const types = errors.filter((e) => !isTscSyntaxError(e.code));
+    // Bloqueia SÓ em SINTAXE: sobrescreve o status para "ok" quando só há erro de tipo (advisory).
+    return {
+      checks: [{ result: { ...raw, label: "tsc (sintaxe)", status: syntax.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(syntax) }],
+      advisories: types.map((e) => `${e.path}:${e.line} — [${e.code}] ${e.message}`),
+    };
   }
 
   // Onda 1.5: garante o mypy no venv do workspace (best-effort). O gate só pega o DRIFT de contrato

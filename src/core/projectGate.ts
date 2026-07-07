@@ -6,7 +6,7 @@
 // Este módulo é PURO (materialização/parse/decisão testáveis sem spawnar processo). O I/O (mkdtemp,
 // spawn do python) fica no Controller.runProjectGate, que orquestra e alimenta `entry.gateOk`.
 import * as path from "node:path";
-import { ValidatorResult } from "../shared/protocol";
+import { ProjectLanguage, ValidatorResult } from "../shared/protocol";
 
 export const SYNTHETIC_INIT = "__init__.py";
 
@@ -44,7 +44,8 @@ function isPackageDir(dir: string): boolean {
 // ancestral de um `.py` é candidato a pacote; a RAIZ (string vazia) nunca vira pacote; diretórios que já
 // têm um `__init__.py` entre as próprias propostas são pulados (não sobrescreve o do modelo); e nomes
 // que não são identificadores Python válidos são EXCLUÍDOS (senão o mypy aborta e mascara o drift). Puro.
-export function syntheticInitDirs(relPaths: string[]): string[] {
+export function syntheticInitDirs(relPaths: string[], language: ProjectLanguage = "python"): string[] {
+  if (language !== "python") return []; // só Python precisa de __init__.py; TS/JS resolvem por caminho
   const norm = relPaths.map(normGatePath).filter(Boolean);
   const alreadyPkg = new Set(
     norm.filter((p) => p === SYNTHETIC_INIT || p.endsWith("/" + SYNTHETIC_INIT)).map((p) => dirOf(p))
@@ -116,6 +117,69 @@ export function mypyUnavailable(result: ValidatorResult): boolean {
   if (result.status === "skipped") return true;
   if (result.status !== "failed") return false;
   return /no module named ['"]?mypy|mypy: (command )?not found|is not recognized as an internal|modulenotfounderror: no module named ['"]mypy/i.test(result.output ?? "");
+}
+
+// ---- TypeScript (tsc --noEmit) — P4 gate multi-linguagem -----------------------------------------------
+
+export interface TscError {
+  path: string;
+  line: number;
+  code: string; // ex.: "TS2307", "TS1005"
+  message: string;
+}
+
+// Erros do tsc que são RUÍDO DE TERCEIROS quando o import é BARE (não-relativo): sem node_modules na árvore
+// temp, o tsc não acha 'react'/'express'/@types. Filtramos esses SÓ para imports bare — mantemos os de
+// imports RELATIVOS (./ ../), que são drift interno REAL (um arquivo do projeto que não existe/exporta).
+const TS_MISSING_MODULE_CODES = new Set(["TS2307", "TS2792", "TS7016", "TS2688", "TS2503"]);
+
+// Parseia a saída do `tsc --noEmit --pretty false`. Cobre os dois formatos: `path(l,c): error TSxxxx: msg`
+// (pretty=false) e `path:l:c - error TSxxxx: msg` (pretty). Coleta só `error`. Filtra o ruído de deps de
+// terceiros (import bare não-resolvido). Puro.
+export function parseTscErrors(output: string, root = ""): TscError[] {
+  const out: TscError[] = [];
+  for (const raw of (output ?? "").split(/\r?\n/)) {
+    const m = /^(.+?)(?:\((\d+),\d+\):|:(\d+):\d+ -)\s+error\s+(TS\d+):\s*(.*)$/.exec(raw);
+    if (!m) continue;
+    const code = m[4];
+    const message = (m[5] ?? "").trim();
+    // Import bare não-resolvido (dep de terceiros ausente) → ruído; import relativo → drift interno real.
+    if (TS_MISSING_MODULE_CODES.has(code)) {
+      const mod = /['"]([^'"]+)['"]/.exec(message);
+      if (mod && !mod[1].startsWith(".")) continue;
+    }
+    out.push({ path: relToRoot(root, m[1]), line: Number(m[2] || m[3]) || 0, code, message });
+  }
+  return out;
+}
+
+// TS1xxx = erros de SINTAXE/gramática (o arquivo nem PARSEIA) — inequívocos, bloqueiam. TS2xxx+ = semântica/
+// tipo, ruidosos sem node_modules → advisory. (Decisão (A): sintaxe bloqueia, tipo é consultivo.)
+export function isTscSyntaxError(code: string): boolean {
+  return /^TS1\d{3}$/.test(code);
+}
+
+// Agrupa erros do tsc por arquivo no formato do gate (Map<path, string[]>).
+export function tscErrorsToMap(errors: TscError[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const e of errors) push(map, e.path, `linha ${e.line}: [${e.code}] ${e.message}`);
+  return map;
+}
+
+// tsc não disponível ≠ tsc reprovou: sem o binário (ENOENT) o runner marca "skipped"; uma mensagem de
+// "command not found"/"is not recognized" ou o loader do Node não achar o pacote typescript também. Nesses
+// casos o gate TS degrada para consultivo. CRUCIAL: avalia só sobre as linhas que NÃO são diagnóstico do tsc
+// (`error TSdddd:`). Senão, um projeto legítimo que importa o pacote `typescript` faz o PRÓPRIO compilador
+// emitir `error TS2307: Cannot find module 'typescript'`, e isso desligaria o gate (incl. o bloqueio de
+// sintaxe) por engano (achado da revisão). Um relatório COM diagnósticos significa que o tsc RODOU.
+export function tscUnavailable(result: ValidatorResult): boolean {
+  if (result.status === "skipped") return true;
+  if (result.status !== "failed") return false;
+  const nonDiag = (result.output ?? "")
+    .split(/\r?\n/)
+    .filter((l) => !/error\s+TS\d+:/i.test(l))
+    .join("\n");
+  return /is not recognized as an internal|command not found|error: cannot find module ['"]typescript|no such file or directory/i.test(nonDiag);
 }
 
 // Um resultado de checagem já rodado (result) mais os erros por-arquivo extraídos da sua saída.
