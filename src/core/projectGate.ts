@@ -182,6 +182,64 @@ export function tscUnavailable(result: ValidatorResult): boolean {
   return /is not recognized as an internal|command not found|error: cannot find module ['"]typescript|no such file or directory/i.test(nonDiag);
 }
 
+// ---- Go (gofmt = sintaxe | go build/vet = advisory) — P4 gate multi-linguagem -------------------------
+
+// gofmt escreve os erros de SINTAXE em stderr no formato `arquivo.go:linha[:col]: msg`. Como o gofmt só
+// PARSEIA (não resolve imports nem tipa), TODO erro dele é sintaxe pura → bloqueia — e é IMPOSSÍVEL um dep
+// de terceiros ausente virar erro aqui (ao contrário do `go build`), o que o torna o primitivo robusto e
+// offline do gate Go. O `-l` faz o stdout listar só NOMES de arquivo (sem `:linha`), que este parser ignora.
+// A âncora `.go:` (lazy) evita confundir o `:` do drive do Windows num caminho absoluto. Puro.
+export function parseGofmtErrors(output: string, root = ""): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const raw of (output ?? "").split(/\r?\n/)) {
+    const m = /^(.+?\.go):(\d+)(?::\d+)?:\s*(.*)$/.exec(raw.trim());
+    if (!m) continue;
+    push(map, relToRoot(root, m[1]), `linha ${m[2]}: ${(m[3] ?? "").trim()}`);
+  }
+  return map;
+}
+
+export interface GoBuildError {
+  path: string;
+  line: number;
+  message: string;
+}
+
+// Ruído de RESOLUÇÃO de dependências do `go build`/`go vet` OFFLINE (GOPROXY=off, sem module cache): não é
+// defeito do código gerado, é a ausência de deps de terceiros que NÃO baixamos (egress deny-by-default).
+// É filtrado do advisory — o análogo do `cannot find module` de import BARE no gate TS. Conservador: filtrar
+// demais só REDUZ avisos (que nem bloqueiam); deixar ruído passar é que enganaria. Só resolução de terceiros.
+const GO_DEP_NOISE =
+  /no required module provides package|module lookup disabled|cannot find module|missing go\.sum|not in std\b|not in GOROOT|cannot find main module|go\.mod file not found|updates to go\.mod needed|build constraints exclude all|no Go files in|malformed (?:module|import) path|disabled by GOFLAGS|GOPROXY|GOTOOLCHAIN|to add it:|^go(?: get|:) /i;
+
+// Parseia a saída do `go build ./...` / `go vet ./...`: linhas `# pacote` são cabeçalho (contexto → pula);
+// erros são `arquivo.go:linha[:col]: msg`. Filtra o RUÍDO de deps ausentes (GO_DEP_NOISE, offline não baixa
+// terceiros), mantendo os erros REAIS do código — símbolo indefinido e import/variável não usados (em Go são
+// ERRO de compilação, não aviso), que são o drift de contrato cross-file. Advisory: a decisão de bloqueio é
+// só do gofmt (sintaxe). Puro.
+export function parseGoBuildErrors(output: string, root = ""): GoBuildError[] {
+  const out: GoBuildError[] = [];
+  for (const raw of (output ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue; // cabeçalho de pacote / linha vazia
+    if (GO_DEP_NOISE.test(line)) continue; // ruído de resolução de deps → não é defeito do código
+    const m = /^(.+?\.go):(\d+)(?::\d+)?:\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const message = (m[3] ?? "").trim();
+    if (GO_DEP_NOISE.test(message)) continue; // erro atribuído a arquivo mas de dep ausente (ex.: "no required module...")
+    out.push({ path: relToRoot(root, m[1]), line: Number(m[2]) || 0, message });
+  }
+  return out;
+}
+
+// Agrupa os erros do go build por arquivo no formato do gate (Map<path, string[]>). (Reservado — hoje o Go
+// build é advisory; se um dia virar bloqueante por-arquivo, isto os atribui como o tscErrorsToMap.)
+export function goBuildErrorsToMap(errors: GoBuildError[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const e of errors) push(map, e.path, `linha ${e.line}: ${e.message}`);
+  return map;
+}
+
 // Um resultado de checagem já rodado (result) mais os erros por-arquivo extraídos da sua saída.
 export interface GateCheckResult {
   result: ValidatorResult;

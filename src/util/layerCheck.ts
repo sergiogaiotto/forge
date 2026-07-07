@@ -125,6 +125,48 @@ export function parseImportsTs(content: string): string[] {
   return mods;
 }
 
+// Caminhos de import de um arquivo Go. Cobre `import "x"`, `import alias "x"` e o bloco `import ( ... )`
+// com aliases (`m "x"`, import em branco `_ "x"`, dot-import `. "x"`) e comentários. Retorna o caminho do
+// PACOTE cru (ex.: "example.com/mod/adapters/db"), com barras — o casamento por SUFIXO de DIRETÓRIO fica no
+// findLayerViolations (o prefixo do módulo, vindo do go.mod, é desconhecido aqui). Puro. Espelha parseImports.
+export function parseImportsGo(content: string): string[] {
+  const mods: string[] = [];
+  let inBlock = false;
+  // Captura o "caminho" com um alias OPCIONAL antes das aspas (_, ., ou identificador). O regex é ANCORADO no
+  // início da linha aparada, então captura só o PRIMEIRO literal — o texto de um comentário no fim da linha
+  // (`"fmt" // legacy; was "x"`) é IGNORADO. NÃO dividimos a linha por `;`: embora `;` seja separador de
+  // statements válido em Go (a forma `import ( "a"; "b" )` é real, mas exótica — o gofmt a reformata), dividir
+  // por `;` fazia o texto de um comentário virar um import FABRICADO → falso-bloqueio (achado da 2ª passada
+  // adversarial). Preferimos o fail-open: perder o 2º import de uma linha `;` (raríssimo) nunca fura a Regra de
+  // Ouro; fabricar um import de um comentário, sim.
+  const grab = (s: string) => {
+    const m = /^(?:[A-Za-z_.]\w*\s+)?"([^"]+)"/.exec(s.trim());
+    if (m) mods.push(m[1]);
+  };
+  for (const raw of (content ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (inBlock) {
+      if (line.startsWith(")")) {
+        inBlock = false;
+        continue;
+      }
+      grab(line);
+      continue;
+    }
+    const open = /^import\s*\(/.exec(line);
+    if (open) {
+      inBlock = true;
+      const rest = line.slice(open[0].length).trim(); // suporta `import ( "x" )` numa linha só
+      if (rest && !rest.startsWith(")")) grab(rest);
+      if (rest.endsWith(")")) inBlock = false;
+      continue;
+    }
+    const single = /^import\s+(?:[A-Za-z_.]\w*\s+)?"([^"]+)"/.exec(line);
+    if (single) mods.push(single[1]);
+  }
+  return mods;
+}
+
 export interface LayerViolation {
   path: string; // arquivo da camada interna que viola
   imports: string[]; // os módulos externos importados (para a mensagem do gate)
@@ -137,6 +179,9 @@ export interface LayerViolation {
 export function findLayerViolations(files: { path: string; content: string }[], architecture: ProjectArchitecture, language: ProjectLanguage = "python"): LayerViolation[] {
   const inner = INNER[architecture];
   const outer = OUTER[architecture];
+  // Go casa por DIRETÓRIO/pacote (um import Go aponta pro diretório, não pro arquivo) — caminho SEPARADO do
+  // Python/TS para não regredir a lógica provada (lição do #113: reusar o layerCheck expôs um bug latente).
+  if (language === "go") return findGoLayerViolations(files, inner, outer);
   const isTs = language === "typescript";
   const codeRe = isTs ? /\.[tj]sx?$/i : /\.py$/i; // Python-only ou TS/JS — outras linguagens não têm gate ainda
   const parse = isTs ? parseImportsTs : parseImports;
@@ -163,6 +208,62 @@ export function findLayerViolations(files: { path: string; content: string }[], 
     for (const mod of parse(f.content)) {
       const layers = suffixLayers.get(mod.toLowerCase());
       if (layers && layers.size === 1 && layers.has("outer")) bad.add(mod);
+    }
+    if (bad.size) out.push({ path: norm(f.path), imports: [...bad] });
+  }
+  return out;
+}
+
+// Caminho do módulo declarado no go.mod entre os arquivos (o PREFIXO dos imports internos). Prefere o go.mod
+// da RAIZ (menos segmentos). null se não houver go.mod parseável. Normaliza barras/caixa. Puro.
+function goModulePath(files: { path: string; content: string }[]): string | null {
+  const mods = files
+    .filter((f) => /(^|\/)go\.mod$/i.test(norm(f.path)))
+    .sort((a, b) => norm(a.path).split("/").length - norm(b.path).split("/").length);
+  for (const m of mods) {
+    const match = /^\s*module\s+(\S+)/m.exec(m.content ?? "");
+    if (match) return match[1].replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+  return null;
+}
+
+// Variante Go da regra de camadas. Um import Go referencia um PACOTE = um DIRETÓRIO, com o caminho ANCORADO no
+// prefixo do MÓDULO (go.mod). CHAVE (correção da revisão adversarial — Regra de Ouro): SÓ imports que começam
+// com o prefixo do módulo são DESTE projeto — o análogo Go do filtro bare/@scope do ramo TS. O resto (stdlib,
+// `github.com/…`, irmão de monorepo) é dep EXTERNA e NUNCA vira violação, mesmo que o segmento final coincida
+// com o nome de um pacote OUTER gerado (o bug que o casamento por sufixo tinha: `github.com/acme/infra` casava
+// `infra/`). O caminho relativo ao módulo é casado por IGUALDADE contra o diretório de um pacote gerado (sem
+// sufixo parcial → sem colisão). Sem go.mod → sem violações (fail-open: sem o prefixo não dá para distinguir
+// interno de terceiros). Puro/testável.
+function findGoLayerViolations(files: { path: string; content: string }[], inner: string[], outer: string[]): LayerViolation[] {
+  const code = files.filter((f) => /\.go$/i.test(f.path));
+  const modulePrefix = goModulePath(files);
+  if (!modulePrefix) return []; // sem o prefixo do módulo não dá para distinguir interno de terceiros → fail-open
+
+  // diretório do pacote gerado (relativo à raiz do módulo, dot-joined, minúsculo) → camada.
+  const pkgLayer = new Map<string, Layer>();
+  for (const f of code) {
+    const dir = norm(f.path).replace(/\.go$/i, "").split("/").filter(Boolean).slice(0, -1).join(".").toLowerCase();
+    pkgLayer.set(dir, layerOf(f.path, inner, outer));
+  }
+
+  // Import interno → caminho de pacote relativo ao módulo (dot-joined); null se NÃO for deste módulo (terceiros/
+  // stdlib/irmão de monorepo). É a guarda que fecha o falso-bloqueio.
+  const internalPkg = (imp: string): string | null => {
+    const p = imp.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    if (p === modulePrefix) return ""; // pacote raiz do módulo
+    if (!p.startsWith(modulePrefix + "/")) return null; // dep externa
+    return p.slice(modulePrefix.length + 1).split("/").filter(Boolean).join(".");
+  };
+
+  const out: LayerViolation[] = [];
+  for (const f of code) {
+    if (layerOf(f.path, inner, outer) !== "inner") continue;
+    const bad = new Set<string>();
+    for (const imp of parseImportsGo(f.content)) {
+      const rel = internalPkg(imp);
+      if (rel === null) continue; // dep externa → nunca é violação
+      if (pkgLayer.get(rel) === "outer") bad.add(imp); // importa um pacote OUTER gerado DESTE módulo
     }
     if (bad.size) out.push({ path: norm(f.path), imports: [...bad] });
   }
