@@ -2055,8 +2055,9 @@ export class Controller {
   // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
   private async runProjectGate(language: ProjectLanguage, architecture: ProjectArchitecture, complete: boolean): Promise<ProjectGateSummary | null> {
     const task = this.currentTask;
-    // P4: Python (compileall/mypy), TypeScript (tsc) e Go (gofmt + go build). Java ainda não tem gate → consultivo (null).
-    if (!task || (language !== "python" && language !== "typescript" && language !== "go")) return null;
+    // P4: Python (compileall/mypy), TypeScript (tsc) e Go (gofmt + go build). Java roda SÓ a arquitetura
+    // (o gate de compilação javac é follow-up: sem JDK validável no ambiente de dev, não se escreve às cegas).
+    if (!task || (language !== "python" && language !== "typescript" && language !== "go" && language !== "java")) return null;
     // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
     // reescreveria o veredito do gate de volta para true — corrida real).
     await task.settleValidations();
@@ -2065,7 +2066,7 @@ export class Controller {
     // tratamento honesto próprio (pulado no "Aplicar tudo" + aviso no cartão) — um SyntaxError por corte
     // não deve virar bloqueio de gate, e materializá-lo poluiria a resolução do conjunto.
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
-    const codeRe = language === "typescript" ? /\.[tj]sx?$/i : language === "go" ? /\.go$/i : /\.py$/i;
+    const codeRe = language === "typescript" ? /\.[tj]sx?$/i : language === "go" ? /\.go$/i : language === "java" ? /\.java$/i : /\.py$/i;
     const hasCode = props.some((e) => codeRe.test(e.proposal.filePath));
     if (!hasCode) return null; // nada compilável na linguagem do projeto — gate não se aplica
 
@@ -2122,7 +2123,7 @@ export class Controller {
         const ts = await this.runTsChecks(root, timeoutMs, outputCap);
         checks.push(...ts.checks);
         tscTypeAdvisories = ts.advisories;
-      } else {
+      } else if (language === "go") {
         // Go (P4): gofmt (SINTAXE) bloqueia — parse-only, offline, sem deps, ZERO risco de falso-bloqueio por
         // dep de terceiros ausente; go build/vet (compilação/drift) é advisory — sem o module cache o compilador
         // erra em toda dep de terceiros (egress deny-by-default). Decisão (A), igual ao TS. A ARQUITETURA
@@ -2130,6 +2131,11 @@ export class Controller {
         const g = await this.runGoChecks(root, timeoutMs, outputCap);
         checks.push(...g.checks);
         goBuildAdvisories = g.advisories;
+      } else {
+        // Java (P4): SÓ a ARQUITETURA (abaixo) — o gate de compilação javac é follow-up. Sem um JDK validável
+        // no ambiente de dev, não se escreve o classificador de erros do javac às cegas (o falso-bloqueio do gate
+        // Go só foi pego por repro AO VIVO). `checks` fica vazio → o toolchain é consultivo; a regra de camadas
+        // (por pacote declarado) roda igual e pode bloquear. DoD/segurança/smoke/reconcile seguem Python-only.
       }
 
       const gate = summarizeGate(checks); // toolchain (compileall/mypy | tsc-sintaxe) → advisory/resumo honestos
@@ -2207,7 +2213,10 @@ export class Controller {
           : gate.projectErrors.length > 0
             ? "Gate rodou mas não consegui localizar a falha por arquivo (veja os detalhes) — nada foi bloqueado."
             : "Gate Go: sem erro de sintaxe (gofmt); a compilação completa (go build) rodou como advisory — sem as dependências não é veredito.";
-      const baseSummary = language === "go" ? goBaseSummary : gate.summary;
+      // Java roda SÓ a arquitetura (sem toolchain → gate.advisory=true); o resumo honesto diz isso.
+      const javaBaseSummary =
+        "Gate Java: arquitetura (regra de camadas) verificada — a compilação (javac) não roda neste ambiente e fica de fora; nada bloqueado por camadas.";
+      const baseSummary = language === "go" ? goBaseSummary : language === "java" ? javaBaseSummary : gate.summary;
       const summary =
         (dodBlocksAll
           ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
