@@ -182,6 +182,9 @@ export function findLayerViolations(files: { path: string; content: string }[], 
   // Go casa por DIRETÓRIO/pacote (um import Go aponta pro diretório, não pro arquivo) — caminho SEPARADO do
   // Python/TS para não regredir a lógica provada (lição do #113: reusar o layerCheck expôs um bug latente).
   if (language === "go") return findGoLayerViolations(files, inner, outer);
+  // Java casa por PACOTE DECLARADO (`package a.b.c;`), com o prefixo comum (org base) removido antes de achar
+  // a camada — o análogo Java do prefixo de módulo do Go. Caminho SEPARADO, também.
+  if (language === "java") return findJavaLayerViolations(files, inner, outer);
   const isTs = language === "typescript";
   const codeRe = isTs ? /\.[tj]sx?$/i : /\.py$/i; // Python-only ou TS/JS — outras linguagens não têm gate ainda
   const parse = isTs ? parseImportsTs : parseImports;
@@ -264,6 +267,109 @@ function findGoLayerViolations(files: { path: string; content: string }[], inner
       const rel = internalPkg(imp);
       if (rel === null) continue; // dep externa → nunca é violação
       if (pkgLayer.get(rel) === "outer") bad.add(imp); // importa um pacote OUTER gerado DESTE módulo
+    }
+    if (bad.size) out.push({ path: norm(f.path), imports: [...bad] });
+  }
+  return out;
+}
+
+// ---- Java (por PACOTE declarado) ----------------------------------------------------------------------
+
+// Remove comentários de bloco `/* */` e de linha `//` antes de procurar `package`/`import`. CRÍTICO no Java
+// (achado da revisão): SÓ o Java deriva a CAMADA do arquivo de uma declaração no CONTEÚDO — um `package X;`
+// COMENTADO (em coluna 0 dentro de um `/* */`) reclassificaria o arquivo e falso-bloquearia. Na região de
+// package/import (antes de qualquer literal de string com `*/`) esse strip é seguro. Puro.
+function stripJavaComments(content: string): string {
+  return (content ?? "").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, "");
+}
+
+// A declaração `package a.b.c;` de um arquivo Java (ou "" no pacote default). Ignora comentários. Puro.
+export function parsePackageJava(content: string): string {
+  for (const raw of stripJavaComments(content).split(/\r?\n/)) {
+    const m = /^\s*package\s+([\w.]+)\s*;/.exec(raw);
+    if (m) return m[1];
+  }
+  return "";
+}
+
+// Pacotes referenciados pelos imports de um arquivo Java, na forma do PACOTE onde o tipo vive (para casar
+// contra os pacotes gerados). `import a.b.C;` → "a.b" (tira a classe); `import a.b.*;` → "a.b"; `import static
+// a.b.C.m;` → "a.b.C" (a classe vira "pacote" — não casa um pacote gerado, então static é conservadoramente
+// ignorado). Puro. Espelha parseImports para o gate de arquitetura em Java.
+export function parseImportsJava(content: string): string[] {
+  const out: string[] = [];
+  for (const raw of stripJavaComments(content).split(/\r?\n/)) {
+    const m = /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/.exec(raw);
+    if (!m) continue;
+    const fqn = m[1];
+    if (fqn.endsWith(".*")) out.push(fqn.slice(0, -2)); // wildcard → o próprio pacote
+    else out.push(fqn.replace(/\.[^.]+$/, "")); // tira a classe final → o pacote
+  }
+  return out.filter(Boolean);
+}
+
+// Prefixo de PACOTE comum a TODOS os pacotes declarados (o "org base", ex.: com.acme.shop) — em segmentos.
+// É removido antes de achar a camada, o análogo Java do prefixo de módulo do Go: sem isto, um segmento de
+// alias no org base (ex.: com.service.app com "service") falso-rotularia a camada. Puro.
+function commonPackagePrefix(pkgs: string[]): string[] {
+  const split = pkgs.filter(Boolean).map((p) => p.split(".").filter(Boolean));
+  if (split.length === 0) return [];
+  let prefix = split[0];
+  for (const segs of split.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < segs.length && prefix[i] === segs[i]) i++;
+    prefix = prefix.slice(0, i);
+  }
+  return prefix;
+}
+
+// Variante Java da regra de camadas. Casa por PACOTE declarado (layout-independente — não depende de o arquivo
+// estar em src/main/java/...). CHAVE (mesma lição do Go): o alvo de um import só é DESTE projeto quando o
+// pacote foi DECLARADO por um arquivo gerado — imports de stdlib/terceiros (java.util.*, org.springframework.*)
+// nunca casam → nunca viram violação. A camada de um pacote vem dos seus segmentos APÓS o org base comum
+// (removido), com o PRIMEIRO alias vencendo (assim `domain.repositories` = INNER, uma port do domínio, não
+// outer). Puro/testável.
+function findJavaLayerViolations(files: { path: string; content: string }[], inner: string[], outer: string[]): LayerViolation[] {
+  const code = files.filter((f) => /\.java$/i.test(f.path));
+  const filePkg = code.map((f) => ({ f, pkg: parsePackageJava(f.content) }));
+  const declared = filePkg.map((x) => x.pkg).filter(Boolean);
+  const base = commonPackagePrefix(declared); // org base (removido antes de achar a camada)
+  // FAIL-OPEN sem base autoritativa (achado da revisão adversarial, Regra de Ouro): o prefixo comum só separa
+  // org de camada quando NÃO colapsou. Com >=2 contextos de topo que divergem cedo (com.infra.* vs com.reports.*)
+  // ele vira [com]/[] e um segmento de ORG que COLIDE com um alias (infra/services/view/gateways como NOME de
+  // empresa) sobrevive e falso-rotula a camada → falso-bloqueio. Exige base >= 2 segmentos; senão não bloqueia
+  // nada. O Go evita ancorando no go.mod (autoritativo); o Java só adivinha, então é conservador. Multi-contexto
+  // é raro no Modo Projeto (um projeto = um org base); um falso-negativo é seguro, um falso-bloqueio não.
+  if (base.length < 2) return [];
+
+  const layerOfPkg = (pkg: string): Layer => {
+    const rel = pkg.split(".").filter(Boolean).slice(base.length); // tira o org base comum
+    // Regra de CONFLITO (defesa extra p/ base>=2): se os segmentos pós-base têm alias INNER *e* OUTER (ex.: um
+    // NOME DE CONTEXTO como "infra"/"adapters" antes do alias de camada real), a camada é AMBÍGUA → "other"
+    // (conservador, não bloqueia). Sem isto, o primeiro alias (o nome do contexto) shadowaria a camada real.
+    let hasInner = false;
+    let hasOuter = false;
+    for (const s of rel) {
+      const t = s.toLowerCase();
+      if (inner.includes(t)) hasInner = true;
+      if (outer.includes(t)) hasOuter = true;
+    }
+    if (hasInner && hasOuter) return "other";
+    if (hasInner) return "inner";
+    if (hasOuter) return "outer";
+    return "other";
+  };
+
+  // pacote gerado → camada (o alvo de um import interno)
+  const pkgLayer = new Map<string, Layer>();
+  for (const p of declared) pkgLayer.set(p, layerOfPkg(p));
+
+  const out: LayerViolation[] = [];
+  for (const { f, pkg } of filePkg) {
+    if (layerOfPkg(pkg) !== "inner") continue;
+    const bad = new Set<string>();
+    for (const impPkg of parseImportsJava(f.content)) {
+      if (pkgLayer.get(impPkg) === "outer") bad.add(impPkg); // importa um pacote OUTER gerado DESTE projeto
     }
     if (bad.size) out.push({ path: norm(f.path), imports: [...bad] });
   }

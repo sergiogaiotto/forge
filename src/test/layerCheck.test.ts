@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findLayerViolations, parseImports, parseImportsGo, parseImportsTs } from "../util/layerCheck";
+import { findLayerViolations, parseImports, parseImportsGo, parseImportsJava, parseImportsTs, parsePackageJava } from "../util/layerCheck";
 
 test("parseImports: cobre import/from/relativo/as/vírgula, devolve o MÓDULO", () => {
   const c = [
@@ -360,4 +360,145 @@ test("mvc Go: Model importando Controller é VIOLAÇÃO; View→Model permitido"
     "go"
   );
   assert.deepEqual(ok, []);
+});
+
+// ---- Java (por pacote declarado) ----------------------------------------------------------------------
+
+test("parsePackageJava / parseImportsJava: pacote, import de classe, wildcard e static", () => {
+  assert.equal(parsePackageJava("package com.acme.shop.domain;\npublic class Order {}"), "com.acme.shop.domain");
+  assert.equal(parsePackageJava("public class NoPkg {}"), ""); // pacote default
+  const src = [
+    "package com.acme.shop.domain;",
+    "import com.acme.shop.adapters.Db;", // classe → pacote com.acme.shop.adapters
+    "import com.acme.shop.util.*;", // wildcard → com.acme.shop.util
+    "import static com.acme.shop.Helpers.log;", // static → com.acme.shop.Helpers (não casa pacote → ignorado)
+    "import java.util.List;", // stdlib → java.util
+  ].join("\n");
+  assert.deepEqual(parseImportsJava(src), ["com.acme.shop.adapters", "com.acme.shop.util", "com.acme.shop.Helpers", "java.util"]);
+});
+
+// base = prefixo de pacote COMUM (org base, com.acme.shop) — removido antes de achar a camada.
+const javaPkg = (pkg: string, imports: string[] = [], cls = "C") =>
+  `package ${pkg};\n${imports.map((i) => `import ${i};`).join("\n")}\npublic class ${cls} {}`;
+
+test("hexagonal Java: domínio importando adapters é VIOLAÇÃO (por pacote declarado)", () => {
+  const files = [
+    { path: "src/main/java/com/acme/shop/domain/Order.java", content: javaPkg("com.acme.shop.domain", ["com.acme.shop.adapters.Db"], "Order") },
+    { path: "src/main/java/com/acme/shop/adapters/Db.java", content: javaPkg("com.acme.shop.adapters", [], "Db") },
+  ];
+  const v = findLayerViolations(files, "hexagonal", "java");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].path, "src/main/java/com/acme/shop/domain/Order.java");
+  assert.deepEqual(v[0].imports, ["com.acme.shop.adapters"]);
+});
+
+test("Java: adapter→domínio PERMITIDO; stdlib e terceiros nunca são violação", () => {
+  const files = [
+    { path: "d/Order.java", content: javaPkg("com.acme.shop.domain", ["java.util.List", "org.springframework.stereotype.Component"], "Order") },
+    { path: "a/Db.java", content: javaPkg("com.acme.shop.adapters", ["com.acme.shop.domain.Order"], "Db") },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "java"), []);
+});
+
+// REGRESSÃO (Regra de Ouro, mesma lição do Go): um import de TERCEIROS cujo pacote termina com um nome de
+// camada (org.example.adapters.X) NÃO pode falso-bloquear — só pacotes DECLARADOS pelos arquivos gerados casam.
+test("Java: terceiro com nome de camada (org.example.adapters) NÃO é violação", () => {
+  const files = [
+    { path: "d/Order.java", content: javaPkg("com.acme.shop.domain", ["org.example.adapters.HttpClient"], "Order") },
+    { path: "a/Db.java", content: javaPkg("com.acme.shop.adapters", [], "Db") },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "java"), []); // org.example.adapters ≠ pacote gerado
+});
+
+// REGRESSÃO: um org base que CONTÉM um alias de camada ("service" em com.service.shop) é REMOVIDO antes de
+// achar a camada (o prefixo comum). Sem isso, o "service" (alias externo) rotularia TODO arquivo como externo
+// e a violação real seria PERDIDA (falso-negativo). Com o strip, model→repository é corretamente detectada.
+test("Java: org base com alias de camada (com.service.shop) — violação ainda é detectada", () => {
+  const files = [
+    { path: "m/User.java", content: javaPkg("com.service.shop.model", ["com.service.shop.repository.Repo"], "User") },
+    { path: "r/Repo.java", content: javaPkg("com.service.shop.repository", [], "Repo") },
+  ];
+  const v = findLayerViolations(files, "layered", "java");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].path, "m/User.java");
+  assert.deepEqual(v[0].imports, ["com.service.shop.repository"]);
+});
+
+// domain.repositories (uma PORT do domínio) é INNER pelo primeiro-alias, não outer — importá-la do domínio é ok.
+test("Java: domain.repositories (port) é INNER, não falso-bloqueia", () => {
+  const files = [
+    { path: "d/Order.java", content: javaPkg("com.acme.shop.domain", ["com.acme.shop.domain.repositories.OrderRepo"], "Order") },
+    { path: "r/OrderRepo.java", content: javaPkg("com.acme.shop.domain.repositories", [], "OrderRepo") },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "java"), []);
+});
+
+test("mvc Java: Model importando Controller é VIOLAÇÃO; View→Model permitido", () => {
+  const bad = findLayerViolations(
+    [
+      { path: "m/User.java", content: javaPkg("com.acme.app.model", ["com.acme.app.controller.Auth"], "User") },
+      { path: "c/Auth.java", content: javaPkg("com.acme.app.controller", [], "Auth") },
+    ],
+    "mvc",
+    "java"
+  );
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].path, "m/User.java");
+  assert.deepEqual(bad[0].imports, ["com.acme.app.controller"]);
+  const ok = findLayerViolations(
+    [
+      { path: "m/User.java", content: javaPkg("com.acme.app.model", [], "User") },
+      { path: "v/Page.java", content: javaPkg("com.acme.app.view", ["com.acme.app.model.User"], "Page") },
+    ],
+    "mvc",
+    "java"
+  );
+  assert.deepEqual(ok, []);
+});
+
+// REGRESSÃO CRÍTICA (revisão adversarial, HIGH — Regra de Ouro): projeto MULTI-CONTEXTO cujo prefixo comum
+// colapsa para [com] e um NOME DE ORG é palavra-de-camada (com.infra.* = empresa "Infra"). O first-alias
+// rotularia domain como outer → falso-bloqueio. Fix: base < 2 segmentos → fail-open (nada bloqueado).
+test("Java: multi-contexto com org=palavra-de-camada (com.infra vs com.reports) NÃO falso-bloqueia", () => {
+  const files = [
+    { path: "r/Report.java", content: "package com.reports.domain;\nimport com.infra.billing.domain.Invoice;\npublic class Report {}" },
+    { path: "b/Invoice.java", content: "package com.infra.billing.domain;\npublic class Invoice {}" },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "java"), []); // base=[com] → fail-open
+  // idem clean/mvc com org colidente
+  assert.deepEqual(
+    findLayerViolations(
+      [
+        { path: "c/Core.java", content: "package com.reports.entities;\nimport com.gateways.core.entities.Money;\npublic class Core {}" },
+        { path: "g/Money.java", content: "package com.gateways.core.entities;\npublic class Money {}" },
+      ],
+      "clean",
+      "java"
+    ),
+    []
+  );
+});
+
+// Regra de CONFLITO (base>=2): um NOME DE CONTEXTO que é alias (com.acme.infra.* = contexto "infra") não pode
+// shadowar a camada real. domain de um contexto importando domain de outro contexto é legítimo.
+test("Java: contexto com nome de alias (com.acme.infra) NÃO falso-bloqueia (regra de conflito)", () => {
+  const files = [
+    { path: "b/Order.java", content: "package com.acme.billing.domain;\nimport com.acme.infra.billing.domain.Money;\npublic class Order {}" },
+    { path: "i/Money.java", content: "package com.acme.infra.billing.domain;\npublic class Money {}" }, // base=[com,acme]; [infra,billing,domain] → infra+domain conflito → other
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "java"), []);
+});
+
+// REGRESSÃO (revisão adversarial, LOW — Regra de Ouro): um `package X;` COMENTADO (dentro de /* */) antes do
+// package real reclassificaria o arquivo → falso-bloqueio. parsePackageJava agora ignora comentários.
+test("Java: package comentado (/* */ ou //) NÃO reclassifica nem falso-bloqueia", () => {
+  assert.equal(parsePackageJava("/*\npackage com.fake.domain;\n*/\npackage com.real.adapters;\nclass X{}"), "com.real.adapters");
+  assert.equal(parsePackageJava("// package com.fake.domain;\npackage com.real.adapters;\nclass X{}"), "com.real.adapters");
+  const files = [
+    { path: "a/Db.java", content: "/*\npackage com.acme.shop.domain;\n*/\npackage com.acme.shop.adapters;\nimport com.acme.shop.adapters.support.Helper;\nclass Db{}" },
+    { path: "s/Helper.java", content: "package com.acme.shop.adapters.support;\nclass Helper{}" },
+    { path: "d/Order.java", content: "package com.acme.shop.domain;\nclass Order{}" },
+  ];
+  // Db é adapter (não domain): importar adapters.support é legítimo → sem violação
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "java"), []);
 });
