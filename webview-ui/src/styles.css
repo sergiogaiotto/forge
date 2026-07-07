@@ -869,6 +869,20 @@ h6.md-h {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Menção "@": o basename (label) trunca se longo; o caminho (hint) ocupa o resto e vai pra direita. */
+.mention-pop .slash-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-pop .slash-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  text-align: right;
+}
 /* Cartão pós-seleção do papel (acima do composer, dispensável). */
 .role-card {
   background: var(--surface);

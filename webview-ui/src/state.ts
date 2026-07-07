@@ -16,6 +16,7 @@ import type {
   RoleCard,
   SkillInspectView,
   ValidatorResult,
+  WorkspaceEntry,
 } from "../../src/shared/protocol";
 
 // Pedido de projeto em curso (o brief), retido para o "Tentar de novo" após uma falha do blueprint.
@@ -92,6 +93,7 @@ export interface UIState {
   lastFileRun: RunResultData | null;
   lastTestRun: RunResultData | null;
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
+  workspaceFiles: WorkspaceEntry[]; // catálogo do workspace para a menção "@" (cacheado; carregado sob demanda)
   profile: ProfileView | null;
   // notes: aviso/erro ancorado POR SEÇÃO, renderizado dentro do modal do wizard — um toast ficaria
   // atrás do backdrop (z-index) e sumiria em 5s sem ser visto (ex.: seção truncada por limite de tokens).
@@ -138,6 +140,7 @@ export const initialState: UIState = {
   lastFileRun: null,
   lastTestRun: null,
   attachments: [],
+  workspaceFiles: [],
   profile: null,
   charter: null,
   project: null,
@@ -318,6 +321,8 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
       return { ...state, reviewed: true };
     case "context/attachments":
       return { ...state, attachments: msg.items };
+    case "context/workspaceFiles":
+      return { ...state, workspaceFiles: msg.items };
     case "profile/state":
       return { ...state, profile: msg.profile };
     case "project/blueprint":

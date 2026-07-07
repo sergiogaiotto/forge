@@ -153,6 +153,7 @@ const PATHS: Record<string, React.ReactNode> = {
       <path d="M14 3v4h4" />
     </>
   ),
+  folder: <path d="M5 4h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />,
 };
 
 export type IconName = keyof typeof PATHS;

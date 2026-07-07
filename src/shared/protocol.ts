@@ -269,6 +269,13 @@ export interface DiffProposal {
   partial?: boolean;
 }
 
+// Uma entrada do catálogo do workspace para o picker de menção "@" (arquivo ou pasta). `path` é relativo à
+// raiz do workspace, com barras pra frente (estável entre plataformas).
+export interface WorkspaceEntry {
+  path: string;
+  kind: "file" | "folder";
+}
+
 // ---- Host da extensão → Webview ------------------------------------------------
 
 export type ExtToWebview =
@@ -292,6 +299,9 @@ export type ExtToWebview =
   // balão do assistente — diferente do `notice`, que é um toast efêmero (some em segundos).
   | { type: "stream/notice"; taskId: string; level: "warn" | "info"; message: string }
   | { type: "context/attachments"; items: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[] }
+  // Menção "@": o catálogo de arquivos/pastas do workspace para o picker inline (enviado uma vez, cacheado
+  // e filtrado no webview). `path` é relativo ao workspace, com barras pra frente.
+  | { type: "context/workspaceFiles"; items: WorkspaceEntry[] }
   | { type: "validation/result"; proposalId: string; results: ValidatorResult[]; gateOk: boolean; running: boolean }
   | { type: "proposal/applied"; proposalId: string }
   | { type: "proposal/discarded"; proposalId: string }
@@ -437,6 +447,10 @@ export type WebviewToExt =
   | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }
   | { type: "context/pickWorkspaceFile" }
+  // Menção "@": pede o catálogo do workspace (host responde com context/workspaceFiles). Idempotente/cacheado.
+  | { type: "context/listWorkspaceFiles" }
+  // Menção "@": anexa um arquivo (conteúdo) ou uma PASTA (listagem dos arquivos) do workspace por caminho.
+  | { type: "context/addWorkspaceFile"; path: string; kind: "file" | "folder" }
   | { type: "context/pickLocalFile" }
   | { type: "context/addSelection" }
   | { type: "context/addTerminalSelection" }

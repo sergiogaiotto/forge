@@ -1429,6 +1429,12 @@ export class Controller {
       case "context/pickWorkspaceFile":
         await this.pickWorkspaceFile();
         break;
+      case "context/listWorkspaceFiles":
+        await this.listWorkspaceFiles();
+        break;
+      case "context/addWorkspaceFile":
+        await this.addWorkspaceFileAttachment(msg.path, msg.kind);
+        break;
       case "context/pickLocalFile":
         await this.pickLocalFile();
         break;
@@ -2846,6 +2852,56 @@ export class Controller {
       this.addAttachment(pick, "workspace", await fs.readFile(chosen.uri.fsPath, "utf8"));
     } catch {
       this.post({ type: "notice", level: "error", message: `Não foi possível ler ${pick} (binário?).` });
+    }
+  }
+
+  // Menção "@": envia o catálogo do workspace (arquivos + pastas derivadas dos diretórios) UMA vez; o webview
+  // cacheia e filtra localmente (sem round-trip por tecla). Mesmos excludes do pickWorkspaceFile. Sem
+  // workspace → catálogo vazio (o picker fica inerte).
+  async listWorkspaceFiles(): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) {
+      this.post({ type: "context/workspaceFiles", items: [] });
+      return;
+    }
+    const uris = await vscode.workspace.findFiles("**/*", "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 5000);
+    const files = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/")).filter(Boolean);
+    const folders = new Set<string>();
+    for (const f of files) {
+      const parts = f.split("/");
+      for (let i = 1; i < parts.length; i++) folders.add(parts.slice(0, i).join("/"));
+    }
+    const items = [
+      ...[...folders].sort().map((p) => ({ path: p, kind: "folder" as const })),
+      ...files.sort().map((p) => ({ path: p, kind: "file" as const })),
+    ];
+    this.post({ type: "context/workspaceFiles", items });
+  }
+
+  // Menção "@": anexa por caminho. Arquivo → o CONTEÚDO (como o pickWorkspaceFile). Pasta → uma LISTAGEM leve
+  // dos arquivos dela (paths, não o conteúdo de todos — evita estourar a janela). safeWorkspacePath contém o
+  // caminho na raiz (defesa contra `..`); binário/erro → aviso, sem anexar.
+  async addWorkspaceFileAttachment(rel: string, kind: "file" | "folder"): Promise<void> {
+    const ws = this.workspaceRoot();
+    if (!ws) return;
+    const abs = safeWorkspacePath(ws, rel);
+    if (!abs) {
+      this.post({ type: "notice", level: "error", message: `Caminho inválido ou fora do workspace: ${rel}` });
+      return;
+    }
+    try {
+      if (kind === "folder") {
+        // A base do RelativePattern é o caminho ABSOLUTO da pasta (literal), não `${rel}` interpolado num glob:
+        // uma pasta com metacaractere de glob no nome (ex.: rota dinâmica Next.js `app/[id]`) seria mal-globada
+        // (`[id]` vira classe de caracteres) e listaria VAZIO — achado da revisão. Só o `**/*` é glob agora.
+        const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(abs), "**/*"), "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 500);
+        const list = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/")).sort();
+        this.addAttachment(`${rel}/ (${list.length} arquivo${list.length === 1 ? "" : "s"})`, "workspace", `Arquivos da pasta ${rel}/:\n${list.join("\n") || "(vazia)"}`);
+      } else {
+        this.addAttachment(rel, "workspace", await fs.readFile(abs, "utf8"));
+      }
+    } catch {
+      this.post({ type: "notice", level: "error", message: `Não foi possível ler ${rel} (binário?).` });
     }
   }
 
