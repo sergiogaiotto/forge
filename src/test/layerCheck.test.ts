@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findLayerViolations, parseImports, parseImportsTs } from "../util/layerCheck";
+import { findLayerViolations, parseImports, parseImportsGo, parseImportsTs } from "../util/layerCheck";
 
 test("parseImports: cobre import/from/relativo/as/vírgula, devolve o MÓDULO", () => {
   const c = [
@@ -225,4 +225,139 @@ test("TS: módulo de raiz com basename de alias (adapter.ts/service.ts) NÃO fal
     "typescript"
   );
   assert.equal(realViolation.length, 1);
+});
+
+// ---- Go -----------------------------------------------------------------------------------------------
+
+test("parseImportsGo: import único, com alias, e bloco com _/./alias e comentários", () => {
+  const single = 'package domain\nimport "fmt"\nimport m "example.com/mod/adapters/db"';
+  assert.deepEqual(parseImportsGo(single), ["fmt", "example.com/mod/adapters/db"]);
+  const block = [
+    "package x",
+    "import (",
+    '\t"fmt" // stdlib',
+    '\t"os"',
+    '\t_ "github.com/lib/pq"', // import em branco (efeito colateral)
+    '\t. "example.com/mod/util"', // dot-import
+    '\talias "example.com/mod/domain/order"',
+    ")",
+    'func main() { _ = "import not-a-real-import" }', // ruído fora de bloco → ignorado
+  ].join("\n");
+  assert.deepEqual(parseImportsGo(block), ["fmt", "os", "github.com/lib/pq", "example.com/mod/util", "example.com/mod/domain/order"]);
+});
+
+test("parseImportsGo: bloco de uma linha `import ( \"x\" )`", () => {
+  assert.deepEqual(parseImportsGo('import ( "fmt" )'), ["fmt"]);
+  assert.deepEqual(parseImportsGo("import ()"), []); // bloco vazio
+});
+
+// REGRESSÃO CRÍTICA (2ª passada adversarial): o texto de um COMENTÁRIO com `;` e um caminho entre aspas NÃO
+// pode virar import fabricado (era um falso-bloqueio da Regra de Ouro). O regex é ancorado no início da linha,
+// então só o 1º literal conta. Custo aceito: a forma exótica `import ( "a"; "b" )` capta só o 1º (fail-open).
+test("parseImportsGo: comentário com `;`+aspas NÃO fabrica import; `;`-multi capta só o 1º (fail-open)", () => {
+  assert.deepEqual(parseImportsGo('import (\n\t"fmt" // legacy; was "example.com/shop/adapters/db"\n)'), ["fmt"]);
+  assert.deepEqual(parseImportsGo('import (\n\t"fmt" /* x; "example.com/shop/adapters/db" */\n)'), ["fmt"]);
+  assert.deepEqual(parseImportsGo('import (\n\t"fmt"; "os"\n)'), ["fmt"]); // `;`-multi: só o 1º (miss conservador)
+});
+
+// go.mod dá o PREFIXO do módulo — é o que distingue import interno de dep de terceiros (análogo Go do
+// bare/@scope do TS). Sem ele o gate Go de arquitetura degrada para conservador (sem violações).
+const goMod = (module = "example.com/shop") => ({ path: "go.mod", content: `module ${module}\n\ngo 1.21` });
+
+test("hexagonal Go: domínio importando adapters é VIOLAÇÃO (caminho ancorado no prefixo do módulo)", () => {
+  const files = [
+    goMod(),
+    { path: "internal/domain/order.go", content: 'package domain\nimport "example.com/shop/internal/adapters/db"\ntype Order struct{}' },
+    { path: "internal/adapters/db/store.go", content: "package db\ntype Store struct{}" },
+  ];
+  const v = findLayerViolations(files, "hexagonal", "go");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].path, "internal/domain/order.go");
+  assert.deepEqual(v[0].imports, ["example.com/shop/internal/adapters/db"]);
+});
+
+test("Go: adapter importando domínio é PERMITIDO; stdlib e terceiros nunca são violação", () => {
+  const files = [
+    goMod(),
+    { path: "domain/order.go", content: 'package domain\nimport (\n\t"fmt"\n\t"github.com/google/uuid"\n)\ntype Order struct{}' },
+    { path: "adapters/db/store.go", content: 'package db\nimport "example.com/shop/domain"\ntype Store struct{}' },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "go"), []);
+});
+
+// REGRESSÃO CRÍTICA (revisão adversarial, provado ao vivo): um import de TERCEIROS cujo segmento final coincide
+// com o nome de um pacote OUTER gerado NÃO pode falso-bloquear (viola a Regra de Ouro). O prefixo do módulo é
+// o que fecha isso — `github.com/acme/infra` não começa com `example.com/shop/` → dep externa → ignorado.
+test("Go: import de TERCEIROS que colide com nome de pacote OUTER gerado NÃO é violação", () => {
+  const infra = { path: "infra/config.go", content: "package infra" }; // pacote OUTER gerado chamado 'infra'
+  // segmento final único
+  assert.deepEqual(
+    findLayerViolations([goMod(), { path: "domain/order.go", content: 'package domain\nimport "github.com/acme/infra"' }, infra], "hexagonal", "go"),
+    []
+  );
+  // multi-segmento (…/adapters/db vs adapters/db/ gerado)
+  assert.deepEqual(
+    findLayerViolations(
+      [goMod(), { path: "domain/order.go", content: 'package domain\nimport "github.com/company/platform/adapters/db"' }, { path: "adapters/db/store.go", content: "package db" }],
+      "hexagonal",
+      "go"
+    ),
+    []
+  );
+  // irmão de monorepo: mesmo host/org, prefixo de MÓDULO diferente → externo
+  assert.deepEqual(
+    findLayerViolations(
+      [goMod("github.com/myco/shop"), { path: "domain/order.go", content: 'package domain\nimport "github.com/myco/platform/infrastructure"' }, { path: "infrastructure/x.go", content: "package infrastructure" }],
+      "hexagonal",
+      "go"
+    ),
+    []
+  );
+});
+
+// FAIL-OPEN: sem go.mod (prefixo do módulo desconhecido) não dá para distinguir interno de terceiros → não
+// bloqueia NADA, mesmo o cenário que SERIA violação com o go.mod presente.
+test("Go: sem go.mod → nenhuma violação (fail-open)", () => {
+  const files = [
+    { path: "internal/domain/order.go", content: 'package domain\nimport "example.com/shop/internal/adapters/db"' },
+    { path: "internal/adapters/db/store.go", content: "package db" },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "go"), []);
+});
+
+// REGRESSÃO (Regra de Ouro, 2ª passada): um arquivo de domínio cujo COMENTÁRIO menciona um import de adapters
+// (com `;`) importa só stdlib de fato — NÃO pode ser bloqueado (o `go list` confirmaria imports=[fmt]).
+test("Go: comentário mencionando import de adapters NÃO falso-bloqueia", () => {
+  const files = [
+    goMod(),
+    { path: "domain/order.go", content: 'package domain\nimport (\n\t"fmt" // legacy; was "example.com/shop/adapters/db"\n)\ntype Order struct{}' },
+    { path: "adapters/db/store.go", content: "package db" },
+  ];
+  assert.deepEqual(findLayerViolations(files, "hexagonal", "go"), []);
+});
+
+// module = "app"; um pacote no diretório controller/ (relativo à raiz do módulo) é importado como "app/controller".
+test("mvc Go: Model importando Controller é VIOLAÇÃO; View→Model permitido", () => {
+  const bad = findLayerViolations(
+    [
+      goMod("app"),
+      { path: "model/user.go", content: 'package model\nimport "app/controller"\ntype U struct{}' },
+      { path: "controller/auth.go", content: "package controller" },
+    ],
+    "mvc",
+    "go"
+  );
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].path, "model/user.go");
+  assert.deepEqual(bad[0].imports, ["app/controller"]);
+  const ok = findLayerViolations(
+    [
+      goMod("app"),
+      { path: "model/user.go", content: "package model\ntype U struct{}" },
+      { path: "view/page.go", content: 'package view\nimport "app/model"' },
+    ],
+    "mvc",
+    "go"
+  );
+  assert.deepEqual(ok, []);
 });

@@ -7,6 +7,8 @@ import {
   mypyUnavailable,
   normGatePath,
   parseCompileallErrors,
+  parseGoBuildErrors,
+  parseGofmtErrors,
   parseMypyErrors,
   parseTscErrors,
   summarizeGate,
@@ -240,4 +242,56 @@ test("syntheticInitDirs: SÓ semeia __init__.py para Python; TypeScript não pre
   // Python: semeia os diretórios-pacote
   const py = syntheticInitDirs(["src/domain/order.py", "src/adapters/db.py"], "python");
   assert.ok(py.includes("src/domain") && py.includes("src/adapters") && py.includes("src"));
+});
+
+test("syntheticInitDirs: Go não precisa de __init__.py (retorna [])", () => {
+  assert.deepEqual(syntheticInitDirs(["domain/order.go", "adapters/db/store.go"], "go"), []);
+});
+
+// ---- P4: gate Go (parseGofmtErrors / parseGoBuildErrors) --------
+
+test("parseGofmtErrors: erro de sintaxe `arquivo.go:linha:col: msg` atribui e captura a mensagem", () => {
+  const out = [
+    "domain/order.go", // linha do `-l` (só nome) → ignorada (sem :linha)
+    "domain/order.go:8:2: expected ';', found '}'",
+    "adapters/db/store.go:3:1: expected declaration, found 'func'",
+  ].join("\n");
+  const map = parseGofmtErrors(out);
+  assert.deepEqual([...map.keys()].sort(), ["adapters/db/store.go", "domain/order.go"]);
+  assert.match(map.get("domain/order.go")!.join("\n"), /linha 8: expected ';', found '}'/);
+  assert.match(map.get("adapters/db/store.go")!.join("\n"), /linha 3: expected declaration/);
+});
+
+test("parseGofmtErrors: sem `:linha` (só a lista do -l) → nenhum erro; caminho relativo à raiz", () => {
+  assert.equal(parseGofmtErrors("domain/order.go\nadapters/db.go").size, 0); // lista do -l, sem erro
+  // caminho absoluto (drive do Windows) é relativizado à raiz e a âncora `.go:` não confunde o `:` do drive
+  const map = parseGofmtErrors("C:/tmp/forge-gate-x/domain/order.go:5:1: expected 'package'", "C:/tmp/forge-gate-x");
+  assert.deepEqual([...map.keys()], ["domain/order.go"]);
+});
+
+test("parseGoBuildErrors: cabeçalho `# pacote` ignorado; drift REAL (undefined/não usado) mantido", () => {
+  const out = [
+    "# forgegate/domain",
+    "domain/order.go:10:6: undefined: OrderStatus",
+    "domain/order.go:3:8: \"fmt\" imported and not used",
+    "./main.go:5:2: declared and not used: x",
+  ].join("\n");
+  const e = parseGoBuildErrors(out);
+  assert.equal(e.length, 3);
+  assert.deepEqual(e[0], { path: "domain/order.go", line: 10, message: "undefined: OrderStatus" });
+  assert.match(e[1].message, /imported and not used/);
+  assert.equal(e[2].path, "main.go"); // ./ normalizado
+});
+
+test("parseGoBuildErrors: FILTRA o ruído de deps de terceiros ausentes (offline), atribuído ou não a arquivo", () => {
+  const out = [
+    "main.go:5:2: no required module provides package github.com/gin-gonic/gin; to add it:",
+    "\tgo get github.com/gin-gonic/gin",
+    "go: github.com/gin-gonic/gin@latest: module lookup disabled by GOPROXY=off",
+    "go: updates to go.mod needed; to update it:",
+    "domain/order.go:9:6: undefined: RealDrift", // ESTE é defeito real → mantém
+  ].join("\n");
+  const e = parseGoBuildErrors(out);
+  assert.equal(e.length, 1);
+  assert.deepEqual(e[0], { path: "domain/order.go", line: 9, message: "undefined: RealDrift" });
 });

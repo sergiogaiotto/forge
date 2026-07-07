@@ -63,7 +63,7 @@ import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/i
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
-import { GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
+import { GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
@@ -1982,8 +1982,8 @@ export class Controller {
   // Degradação segura: se as ferramentas não rodam (sem python/mypy), o gate é CONSULTIVO — não bloqueia.
   private async runProjectGate(language: ProjectLanguage, architecture: ProjectArchitecture, complete: boolean): Promise<ProjectGateSummary | null> {
     const task = this.currentTask;
-    // P4: Python (compileall/mypy) e TypeScript (tsc). Java/Go ainda não têm gate → consultivo (null).
-    if (!task || (language !== "python" && language !== "typescript")) return null;
+    // P4: Python (compileall/mypy), TypeScript (tsc) e Go (gofmt + go build). Java ainda não tem gate → consultivo (null).
+    if (!task || (language !== "python" && language !== "typescript" && language !== "go")) return null;
     // Espera as validações por-arquivo em voo antes de tocar em gateOk (senão uma advisory tardia
     // reescreveria o veredito do gate de volta para true — corrida real).
     await task.settleValidations();
@@ -1992,7 +1992,7 @@ export class Controller {
     // tratamento honesto próprio (pulado no "Aplicar tudo" + aviso no cartão) — um SyntaxError por corte
     // não deve virar bloqueio de gate, e materializá-lo poluiria a resolução do conjunto.
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
-    const codeRe = language === "typescript" ? /\.[tj]sx?$/i : /\.py$/i;
+    const codeRe = language === "typescript" ? /\.[tj]sx?$/i : language === "go" ? /\.go$/i : /\.py$/i;
     const hasCode = props.some((e) => codeRe.test(e.proposal.filePath));
     if (!hasCode) return null; // nada compilável na linguagem do projeto — gate não se aplica
 
@@ -2009,6 +2009,7 @@ export class Controller {
       const checks: GateCheckResult[] = [];
       const securityMode = this.config.securityGate();
       let tscTypeAdvisories: string[] = []; // avisos de TIPO do tsc (advisory) — só TypeScript
+      let goBuildAdvisories: string[] = []; // avisos do go build/vet (advisory) — só Go
       let py: string | undefined; // interpretador do gate Python (só no ramo Python; usado no security scan)
 
       if (language === "python") {
@@ -2041,13 +2042,21 @@ export class Controller {
           mypy = { ...mypy, status: "skipped", reason: "mypy não pôde analisar (abort/fatal) — gate consultivo" };
         }
         checks.push({ result: mypy, errors: mypyErrors });
-      } else {
+      } else if (language === "typescript") {
         // TypeScript (P4): tsc --noEmit sobre a árvore. Decisão (A): SINTAXE (TS1xxx) bloqueia; TIPO (TS2xxx+)
         // é advisory — sem node_modules no temp o tsc é ruidoso (deps/tipos ausentes → cascata). tsc ausente
         // → consultivo. A ARQUITETURA (abaixo) roda igual, agora sobre imports TS.
         const ts = await this.runTsChecks(root, timeoutMs, outputCap);
         checks.push(...ts.checks);
         tscTypeAdvisories = ts.advisories;
+      } else {
+        // Go (P4): gofmt (SINTAXE) bloqueia — parse-only, offline, sem deps, ZERO risco de falso-bloqueio por
+        // dep de terceiros ausente; go build/vet (compilação/drift) é advisory — sem o module cache o compilador
+        // erra em toda dep de terceiros (egress deny-by-default). Decisão (A), igual ao TS. A ARQUITETURA
+        // (abaixo) roda igual, agora sobre imports Go (casamento por diretório/pacote).
+        const g = await this.runGoChecks(root, timeoutMs, outputCap);
+        checks.push(...g.checks);
+        goBuildAdvisories = g.advisories;
       }
 
       const gate = summarizeGate(checks); // toolchain (compileall/mypy | tsc-sintaxe) → advisory/resumo honestos
@@ -2106,21 +2115,36 @@ export class Controller {
 
       const totalBlocked = gate.fileErrors.length + architectureErrors.length + securityErrors.length;
       const fileParts: string[] = [];
-      if (gate.fileErrors.length) fileParts.push(`${gate.fileErrors.length} de compilação/contrato`);
+      if (gate.fileErrors.length) fileParts.push(`${gate.fileErrors.length} ${language === "go" ? "de sintaxe (gofmt)" : "de compilação/contrato"}`);
       if (architectureErrors.length) fileParts.push(`${architectureErrors.length} de arquitetura (regra de camadas)`);
       if (securityErrors.length) fileParts.push(`${securityErrors.length} de segurança (bandit ALTO)`);
-      // Avisos de TIPO do tsc (advisory): mostra a CONTAGEM no resumo (o veredito completo exige node_modules).
-      // Os erros de SINTAXE, esses, entram em gate.fileErrors (bloqueiam) e pintam os cartões.
+      // Avisos de TIPO do tsc / do go build (advisory): mostram a CONTAGEM no resumo (o veredito completo exige
+      // as deps). Os erros de SINTAXE (TS1xxx / gofmt), esses, entram em gate.fileErrors (bloqueiam) e pintam
+      // os cartões. Só um dos sufixos é não-vazio (a linguagem é uma só).
       const tscSuffix = tscTypeAdvisories.length ? ` · tsc: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory — instale as deps e rode o tsc para o veredito completo)` : "";
+      const goSuffix = goBuildAdvisories.length ? ` · go build: ${goBuildAdvisories.length} aviso(s) (advisory — rode go build ./... com as dependências para o veredito completo)` : "";
+      const langSuffix = tscSuffix + goSuffix;
+      // O resumo-base do summarizeGate é redigido para o toolchain Python (compileall/mypy). Em Go, reescreve
+      // com os nomes das ferramentas certas (gofmt/go build) para os casos SEM bloqueio (advisory/parcial/verde);
+      // os casos COM bloqueio já têm texto próprio abaixo.
+      const goBaseSummary = gate.advisory
+        ? "Gate consultivo: go/gofmt indisponíveis no ambiente — nada foi bloqueado (o projeto pode não compilar)."
+        : gate.fileErrors.length > 0
+          ? `Gate reprovou: ${gate.fileErrors.length} arquivo(s) com erro de sintaxe (gofmt). O "Aplicar" deles está bloqueado até corrigir.`
+          : gate.projectErrors.length > 0
+            ? "Gate rodou mas não consegui localizar a falha por arquivo (veja os detalhes) — nada foi bloqueado."
+            : "Gate Go: sem erro de sintaxe (gofmt); a compilação completa (go build) rodou como advisory — sem as dependências não é veredito.";
+      const baseSummary = language === "go" ? goBaseSummary : gate.summary;
       const summary =
         (dodBlocksAll
           ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
           : totalBlocked > 0
             ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${fileParts.length ? ` — ${fileParts.join(" · ")}` : ""}. Corrija antes de aplicar.`
             : securityAdvisories.length
-              ? `${gate.summary} · segurança: ${securityAdvisories.length} aviso(s) do bandit (não bloqueiam).`
-              : gate.summary) + tscSuffix;
+              ? `${baseSummary} · segurança: ${securityAdvisories.length} aviso(s) do bandit (não bloqueiam).`
+              : baseSummary) + langSuffix;
       if (tscTypeAdvisories.length) log.info(`Gate TS: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory) — ${tscTypeAdvisories.slice(0, 5).join(" | ")}`);
+      if (goBuildAdvisories.length) log.info(`Gate Go: ${goBuildAdvisories.length} aviso(s) do go build (advisory) — ${goBuildAdvisories.slice(0, 5).join(" | ")}`);
       // A UI pinta os cartões de compilação/arquitetura/segurança (por-arquivo) e mostra DoD + avisos de
       // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
       const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), `… e mais ${securityAdvisories.length - 12} aviso(s) — veja o log de diagnóstico.`] : securityAdvisories;
@@ -2358,6 +2382,71 @@ export class Controller {
       checks: [{ result: { ...raw, label: "tsc (sintaxe)", status: syntax.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(syntax) }],
       advisories: types.map((e) => `${e.path}:${e.line} — [${e.code}] ${e.message}`),
     };
+  }
+
+  // Resolve o ferramental Go para o gate (P4): sonda `go version` e `gofmt`. `go`/`gofmt` são .exe REAIS no
+  // Windows (sem a armadilha do .cmd/EINVAL que derrubava o gate TS). undefined → nenhum go (gate consultivo);
+  // gofmt ausente (raríssimo — vem junto do go) → sem o gate de sintaxe, só o advisory. Só sondagem barata.
+  private async resolveGateGo(): Promise<{ go: string; gofmt?: string } | undefined> {
+    const goProbe = await runFileCheck({ id: "probe", label: "go", gate: false }, "go", ["version"], { timeoutMs: 15_000 });
+    if (goProbe.status !== "ok") return undefined; // ENOENT/timeout → sem go
+    // `gofmt -h` imprime o uso e sai != 0 (→ "failed"); ENOENT (não instalado) → "skipped". Presente iff != skipped.
+    const gofmtProbe = await runFileCheck({ id: "probe", label: "gofmt", gate: false }, "gofmt", ["-h"], { timeoutMs: 15_000 });
+    return { go: "go", gofmt: gofmtProbe.status === "skipped" ? undefined : "gofmt" };
+  }
+
+  // Gate Go (P4): gofmt (SINTAXE, bloqueia) + go build (compilação/drift, advisory). O gofmt só PARSEIA — todo
+  // erro dele é sintaxe pura e NUNCA falso-bloqueia por dep ausente (offline, dep-free). O go build roda OFFLINE
+  // (GOPROXY=off), com o ruído de deps de terceiros filtrado (parseGoBuildErrors), e NUNCA bloqueia (decisão
+  // (A), como o tipo no tsc). go ausente → check skipped (consultivo, como o mypy/tsc).
+  private async runGoChecks(root: string, timeoutMs: number, outputCap: number): Promise<{ checks: GateCheckResult[]; advisories: string[] }> {
+    const go = await this.resolveGateGo();
+    if (!go) {
+      return { checks: [{ result: { id: "gate:gofmt", label: "gofmt", status: "skipped", gate: true, output: "", reason: "go/gofmt não encontrado (instale o Go) — gate consultivo" }, errors: new Map() }], advisories: [] };
+    }
+    // 1) SINTAXE (bloqueia): gofmt -l -e . — parse-only, offline, dep-free. `-l` faz o stdout listar só NOMES
+    // de arquivo (ignorados pelo parser); os erros de sintaxe saem no stderr. Sem gofmt → só o advisory roda.
+    let fmtCheck: GateCheckResult;
+    if (go.gofmt) {
+      const fmt = await runFileCheck({ id: "gate:gofmt", label: "gofmt (sintaxe)", gate: true }, go.gofmt, ["-l", "-e", "."], { cwd: root, timeoutMs, outputCap });
+      const fmtErrors = fmt.status === "failed" ? parseGofmtErrors(fmt.output, root) : new Map<string, string[]>();
+      // gofmt que "reprovou" SEM erro atribuível é anomalia de ambiente (I/O), não sintaxe → consultivo em vez
+      // de bloqueio amplo (mesmo espírito do mypy-abort). Um erro de sintaxe REAL sempre traz `arquivo:linha`.
+      fmtCheck =
+        fmt.status === "failed" && fmtErrors.size === 0
+          ? { result: { ...fmt, status: "skipped", reason: "gofmt não pôde analisar (I/O) — gate consultivo" }, errors: new Map() }
+          : { result: { ...fmt, status: fmtErrors.size > 0 ? "failed" : "ok" }, errors: fmtErrors };
+    } else {
+      fmtCheck = { result: { id: "gate:gofmt", label: "gofmt", status: "skipped", gate: true, output: "", reason: "gofmt não encontrado — gate de sintaxe consultivo" }, errors: new Map() };
+    }
+    // 2) COMPILAÇÃO/DRIFT (advisory): go build ./... offline; o ruído de deps de terceiros é filtrado.
+    const advisories = await this.runGoBuildAdvisory(go.go, root, timeoutMs, outputCap);
+    return { checks: [fmtCheck], advisories };
+  }
+
+  // Advisory de compilação/drift do Go: `go build ./...` OFFLINE (GOPROXY=off — nunca baixa deps; respeita o
+  // egress deny-by-default), com um go.mod garantido na raiz (o GERADO, se houver; senão um mínimo sintético).
+  // O ruído de deps de terceiros ausentes é filtrado; o que sobra (símbolo indefinido, import/var não usados —
+  // em Go são ERRO de compilação) é drift REAL, mostrado como aviso. NUNCA bloqueia. Falha → advisory vazio.
+  private async runGoBuildAdvisory(go: string, root: string, timeoutMs: number, outputCap: number): Promise<string[]> {
+    try {
+      // go build ./... exige um módulo: usa o go.mod GERADO se veio na árvore; senão sintetiza um mínimo (o
+      // módulo sintético não resolve os imports internos com prefixo do módulo real, mas o advisory tolera).
+      if (!existsSync(path.join(root, "go.mod"))) {
+        await fs.writeFile(path.join(root, "go.mod"), "module forgegate\n\ngo 1.21\n", "utf8");
+      }
+      // OFFLINE e determinístico: GOPROXY=off (sem rede), GOFLAGS=-mod=mod (não exige go.sum), GOWORK=off (ignora
+      // um go.work ancestral), GOTOOLCHAIN=local (não baixa uma toolchain se o go.mod pedir versão maior),
+      // CGO_ENABLED=0 (nunca invoca o compilador C: fecha o vetor de exec por cgo/#cgo em código gerado e evita
+      // o ruído "gcc not found" no Windows). O go build NÃO executa o código (só compila — distinto do smoke).
+      const env = { ...process.env, GOPROXY: "off", GOFLAGS: "-mod=mod", GOWORK: "off", GOTOOLCHAIN: "local", GO111MODULE: "on", CGO_ENABLED: "0" };
+      const build = await runFileCheck({ id: "gate:gobuild", label: "go build", gate: false }, go, ["build", "./..."], { cwd: root, timeoutMs, outputCap, env });
+      if (build.status !== "failed") return []; // ok (compilou) ou skipped (inconclusivo) → sem advisory
+      return parseGoBuildErrors(build.output, root).map((e) => `${e.path}:${e.line} — ${e.message}`);
+    } catch (e) {
+      log.warn("Gate Go: advisory do go build falhou — seguindo sem aviso", e);
+      return [];
+    }
   }
 
   // Onda 1.5: garante o mypy no venv do workspace (best-effort). O gate só pega o DRIFT de contrato
