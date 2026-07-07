@@ -3,6 +3,9 @@
 // mudanças de perfil — que NUNCA chegam ao gateway (acontecem só no cliente). O sink (direto ou
 // gateway-relay) decide o destino; o Admin governa pelo modo escolhido.
 
+// Fases da geração cronometradas (P3): do montar-prompt ao gate/reparo. Alinha OTel GenAI (spans).
+export type ObsPhase = "assemble" | "rag" | "stream" | "continuation" | "gate" | "repair";
+
 export type ObsEvent =
   | {
       type: "generation.start";
@@ -14,7 +17,17 @@ export type ObsEvent =
       sessionId: string;
       userId: string;
       org?: string;
+      // P3 (evidência nº1 do sintoma do print): o prompt de sistema MONTADO + os params EFETIVOS da geração.
+      // Opcionais (chamadores/testes antigos não os fornecem). O systemPrompt é REDIGIDO no sink (mask) e
+      // respeita o capture mode; systemPromptTokens é a contagem do prompt COMPLETO (o valor cru pode ser
+      // capado no sink, mas o tamanho real fica visível).
+      systemPrompt?: string;
+      systemPromptTokens?: number;
+      reasoningEffort?: string;
+      maxOutputTokens?: number;
+      inputBudgetTokens?: number;
     }
+  | { type: "phase.timing"; taskId: string; phase: ObsPhase; durationMs: number }
   | {
       type: "generation.end";
       taskId: string;

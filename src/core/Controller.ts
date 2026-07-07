@@ -1782,6 +1782,7 @@ export class Controller {
       toActivate.map(async (meta) => ({ meta, body: await this.loader.loadBody(meta) }))
     );
 
+    const ragStart = Date.now();
     let retrievedContext = await this.gatherContext(text);
     if (this.pendingAttachments.length > 0) {
       const att = this.pendingAttachments.map((a) => `### Anexo: ${a.label}\n\`\`\`\n${a.content}\n\`\`\``).join("\n\n");
@@ -1789,9 +1790,11 @@ export class Controller {
       this.pendingAttachments = [];
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
+    const ragMs = Date.now() - ragStart; // P3: span da recuperação de contexto (RAG + anexos)
     // Contexto do projeto (charter + deps fixadas) reforçado no prompt de GERAÇÃO, junto da lista de
     // arquivos — mesmo já indo via projectProfile, hammerar propósito/deps aqui reduz o drift (a auditoria
     // mostrou o modelo ignorando o charter). Só no Modo Projeto (evita I/O extra em chat/tdd).
+    const asmStart = Date.now(); // P3: span da MONTAGEM do prompt (perfil/stack + orçamento + assemble)
     const projectCtx = mode === "project" ? await this.projectPromptContext() : undefined;
     const basePrompt =
       mode === "project" && project
@@ -1827,6 +1830,7 @@ export class Controller {
       query: text,
       inputBudgetTokens: budget.inputBudget,
     });
+    const asmMs = Date.now() - asmStart;
 
     // Convenções-como-validators: as ferramentas detectadas (ruff/mypy/eslint/…) viram validadores
     // advisory do quality gate, checando o código gerado contra o ferramental real do projeto.
@@ -1860,6 +1864,14 @@ export class Controller {
         sessionId: this.sessionId,
         userId: this.resolveIdentity().email ?? "",
         org: this.context.globalState.get<{ org?: string }>(GS_LICENSE_META)?.org,
+        // P3: params EFETIVOS da geração, capturados no generation.start (evidência do que produziu a saída).
+        reasoningEffort: runtime.reasoningEffort,
+        maxOutputTokens: runtime.maxTokens,
+        inputBudgetTokens: budget.inputBudget,
+        // Tempos de rag/assemble medidos ANTES do taskId; o Task os emite como phase.timing APÓS o
+        // generation.start (para anexarem ao trace certo no Langfuse — ver Task.run).
+        ragMs,
+        assembleMs: asmMs,
       },
       post: (m) => this.post(m),
       // Modo Projeto: à medida que cada bloco de arquivo FECHA no streaming, marca "gerado" um a um,
@@ -1908,7 +1920,9 @@ export class Controller {
         const MAX_PROJECT_REPAIRS = 2;
         for (let round = 1; gate && gate.fileErrors.length > 0 && round <= MAX_PROJECT_REPAIRS; round++) {
           this.post({ type: "notice", level: "info", message: `Auto-reparo do projeto: ${gate.fileErrors.length} arquivo(s) com erro de contrato — regenerando (rodada ${round}/${MAX_PROJECT_REPAIRS})…` });
+          const repairStart = Date.now(); // P3: span de cada rodada de auto-reparo (nova chamada ao provedor)
           const n = await this.repairProjectFromGate(gate, project, runtime);
+          this.obs.record({ type: "phase.timing", taskId: this.currentTask?.taskId ?? "", phase: "repair", durationMs: Date.now() - repairStart });
           if (n === 0) break; // nada regenerado (falha do provedor / sem alvo casável) — insistir não ajuda
           gate = await this.runProjectGate(project.language, project.architecture, done === total);
         }
@@ -1972,6 +1986,7 @@ export class Controller {
     const hasPy = props.some((e) => e.proposal.filePath.toLowerCase().endsWith(".py"));
     if (!hasPy) return null; // nada compilável — gate não se aplica
 
+    const gateStart = Date.now(); // P3: span do gate (compileall/mypy/arquitetura/DoD/segurança)
     let root: string | undefined;
     try {
       root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-gate-"));
@@ -2090,6 +2105,7 @@ export class Controller {
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+      this.obs.record({ type: "phase.timing", taskId: task.taskId, phase: "gate", durationMs: Date.now() - gateStart });
     }
   }
 
@@ -3271,6 +3287,9 @@ export class Controller {
         sessionId: this.sessionId,
         userId: this.resolveIdentity().email ?? "",
         org: this.context.globalState.get<{ org?: string }>(GS_LICENSE_META)?.org,
+        // P3: params efetivos (o review não deriva inputBudget — fica omitido).
+        reasoningEffort: runtime.reasoningEffort,
+        maxOutputTokens: runtime.maxTokens,
       },
       post: (m) => this.post(m),
     });

@@ -59,6 +59,51 @@ test("buildIngestion: generation.start abre o trace com userId", () => {
   assert.equal((ev.body as any).name, "forge.generation");
 });
 
+// PRIVACIDADE (P3): o systemPrompt agrega perfil/RAG/anexos (onde vivem segredos). Para o sink REMOTO, o
+// prompt SÓ vai em capture 'full' (opt-in do admin); em 'masked' (default) e 'metadata-only' é OMITIDO — só
+// tokens/params (não-sensíveis) sobem. O prompt REDIGIDO para diagnóstico fica no log LOCAL.
+test("buildIngestion: generation.start em 'masked' (default) OMITE o prompt do remoto, mas mantém tokens/params", () => {
+  const [ev] = buildIngestion(
+    { type: "generation.start", taskId: "t1", mode: "project", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u@x.com", systemPrompt: "prompt com AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIexampleKEY dentro", systemPromptTokens: 1234, reasoningEffort: "high", maxOutputTokens: 16000, inputBudgetTokens: 80000 },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked", environment: "test" }
+  );
+  const meta = (ev.body as any).metadata;
+  assert.equal(meta.systemPrompt, undefined); // prompt NÃO vai ao remoto em masked
+  assert.equal(meta.systemPromptTokens, 1234); // tamanho segue (métrica)
+  assert.equal(meta.reasoningEffort, "high");
+  assert.equal(meta.maxOutputTokens, 16000);
+  assert.equal(meta.inputBudgetTokens, 80000);
+});
+
+test("buildIngestion: generation.start em 'full' (opt-in explícito) leva o prompt cru ao remoto", () => {
+  const [ev] = buildIngestion(
+    { type: "generation.start", taskId: "t1", mode: "project", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u", systemPrompt: "prompt inteiro", systemPromptTokens: 3 },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "full", environment: "test" }
+  );
+  assert.match(String((ev.body as any).metadata.systemPrompt), /prompt inteiro/);
+});
+
+test("buildIngestion: generation.start em metadata-only OMITE o prompt (params seguem)", () => {
+  const [ev] = buildIngestion(
+    { type: "generation.start", taskId: "t1", mode: "normal", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u", systemPrompt: "segredo", reasoningEffort: "low" },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "metadata-only", environment: "test" }
+  );
+  const meta = (ev.body as any).metadata;
+  assert.equal(meta.systemPrompt, undefined);
+  assert.equal(meta.reasoningEffort, "low");
+});
+
+test("buildIngestion: phase.timing (P3) vira event-create com fase e duração", () => {
+  const [ev] = buildIngestion(
+    { type: "phase.timing", taskId: "t1", phase: "gate", durationMs: 850 },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked", environment: "test" }
+  );
+  assert.equal(ev.type, "event-create");
+  assert.equal((ev.body as any).name, "phase.timing");
+  assert.equal((ev.body as any).metadata.phase, "gate");
+  assert.equal((ev.body as any).metadata.durationMs, 850);
+});
+
 test("buildIngestion: generation.end vira generation-create com usage e máscara", () => {
   const [ev] = buildIngestion(
     { type: "generation.end", taskId: "t1", durationMs: 1000, model: "m", input: "in a@b.com", output: "out", usage: { inputTokens: 10, outputTokens: 20 }, proposals: 2 },

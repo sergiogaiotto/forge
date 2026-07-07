@@ -81,3 +81,71 @@ test("renderDiagnosticsBundle: bundle vazio não quebra e zera os contadores", (
   assert.match(md, /Eventos capturados: 0/);
   assert.match(md, /Gerações: 0/);
 });
+
+// ---- P3: captura do prompt + params + spans de fase ----------------------------
+
+test("toDiagnosticRecord: generation.start captura params e MASCARA o systemPrompt (evidência nº1)", () => {
+  const e: ObsEvent = {
+    type: "generation.start",
+    taskId: "t1",
+    mode: "project",
+    model: "gpt-oss-120b",
+    provider: "openai",
+    skills: [],
+    sessionId: "s1",
+    userId: "dev@claro.com.br",
+    // Dois estilos de segredo: sk-ant… (mask pega) e AWS_SECRET_ACCESS_KEY=… (só redactSecrets pega).
+    systemPrompt: "Você é o FORGE. sk-ant-abc123def456ghi789 e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI7K7bPxRfiCY0KEY.",
+    systemPromptTokens: 4321,
+    reasoningEffort: "high",
+    maxOutputTokens: 32000,
+    inputBudgetTokens: 90000,
+  };
+  const r = toDiagnosticRecord(e, TS, "masked");
+  assert.equal(r.reasoningEffort, "high");
+  assert.equal(r.maxOutputTokens, 32000);
+  assert.equal(r.inputBudgetTokens, 90000);
+  assert.equal(r.systemPromptTokens, 4321);
+  // o prompt é capturado, mas segredos colados nele são redigidos em DUAS camadas (redactSecrets + mask)
+  assert.match(String(r.systemPrompt), /Você é o FORGE/);
+  assert.doesNotMatch(String(r.systemPrompt), /sk-ant-abc123def456ghi789/); // mask
+  assert.doesNotMatch(String(r.systemPrompt), /wJalrXUtnFEMI7K7bPxRfiCY0KEY/); // redactSecrets (mask sozinho perderia)
+});
+
+test("toDiagnosticRecord: generation.start em metadata-only OMITE o systemPrompt", () => {
+  const e: ObsEvent = { type: "generation.start", taskId: "t1", mode: "normal", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u", systemPrompt: "segredo do prompt", reasoningEffort: "low" };
+  const r = toDiagnosticRecord(e, TS, "metadata-only");
+  assert.equal(r.systemPrompt, undefined); // conteúdo omitido
+  assert.equal(r.reasoningEffort, "low"); // params seguem (não são conteúdo)
+});
+
+test("toDiagnosticRecord: phase.timing mapeia fase e duração", () => {
+  const r = toDiagnosticRecord({ type: "phase.timing", taskId: "t1", phase: "stream", durationMs: 4200 }, TS, "masked");
+  assert.equal(r.type, "phase.timing");
+  assert.equal(r.phase, "stream");
+  assert.equal(r.durationMs, 4200);
+});
+
+test("renderDiagnosticsBundle: resumo de fases agrega por fase (total/média) e params da última geração", () => {
+  const records = [
+    toDiagnosticRecord({ type: "generation.start", taskId: "t1", mode: "project", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u", reasoningEffort: "high", maxOutputTokens: 16000, inputBudgetTokens: 80000, systemPromptTokens: 5000 }, TS, "masked"),
+    toDiagnosticRecord({ type: "phase.timing", taskId: "t1", phase: "assemble", durationMs: 100 }, TS, "masked"),
+    toDiagnosticRecord({ type: "phase.timing", taskId: "t1", phase: "stream", durationMs: 3000 }, TS, "masked"),
+    toDiagnosticRecord({ type: "phase.timing", taskId: "t1", phase: "stream", durationMs: 1000 }, TS, "masked"), // 2 streams → média 2000
+    toDiagnosticRecord({ type: "phase.timing", taskId: "t1", phase: "gate", durationMs: 500 }, TS, "masked"),
+  ];
+  const md = renderDiagnosticsBundle(records, { forgeVersion: "2.3.0" });
+  assert.match(md, /## Fases \(timings\)/);
+  assert.match(md, /stream: 2× · total 4000ms · média 2000ms/);
+  assert.match(md, /gate: 1× · total 500ms · média 500ms/);
+  // params efetivos da última geração no resumo
+  assert.match(md, /reasoningEffort=high/);
+  assert.match(md, /maxOutputTokens=16000/);
+  assert.match(md, /systemPromptTokens=5000/);
+});
+
+test("renderDiagnosticsBundle: sem spans de fase → seção informa ausência (não quebra)", () => {
+  const md = renderDiagnosticsBundle([toDiagnosticRecord({ type: "proposal.applied", filePath: "a.py" }, TS, "masked")], { forgeVersion: "2.3.0" });
+  assert.match(md, /## Fases \(timings\)/);
+  assert.match(md, /sem spans de fase capturados/);
+});

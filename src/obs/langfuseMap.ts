@@ -15,7 +15,9 @@ const MASK_PATTERNS = [
 
 export function mask(value: unknown, capture: CaptureMode): string | undefined {
   if (capture === "metadata-only") return undefined;
+  if (value === undefined || value === null) return undefined; // campo ausente (ex.: systemPrompt opcional)
   let s = typeof value === "string" ? value : JSON.stringify(value);
+  if (typeof s !== "string") return undefined; // JSON.stringify pode devolver undefined (função/símbolo)
   if (capture === "full") return cap(s);
   for (const re of MASK_PATTERNS) s = s.replace(re, "‹redacted›");
   return cap(s);
@@ -58,7 +60,25 @@ export function buildIngestion(e: ObsEvent, o: BuildOpts): IngestionEvent[] {
             name: "forge.generation",
             userId: maskUserId(e.userId, o.capture),
             environment: o.environment,
-            metadata: { mode: e.mode, model: e.model, provider: e.provider, skills: e.skills, sessionId: e.sessionId, org: e.org },
+            metadata: {
+              mode: e.mode,
+              model: e.model,
+              provider: e.provider,
+              skills: e.skills,
+              sessionId: e.sessionId,
+              org: e.org,
+              // P3 + PRIVACIDADE: o systemPrompt agrega perfil/RAG/anexos — onde vivem segredos (.env, chaves
+              // de nuvem, connection strings) que o mask() por-padrão NÃO cobre bem. Para o sink REMOTO
+              // (governado/compartilhado) o prompt só vai em capture 'full' (opt-in explícito do admin, cru);
+              // em 'masked'/'metadata-only' é OMITIDO. O prompt REDIGIDO para diagnóstico fica no log LOCAL
+              // (obs/diagnostics.ts, redactSecrets+mask), no disco do dev. Os tokens/params seguem (não são
+              // conteúdo sensível) e bastam para a análise de trace.
+              systemPrompt: o.capture === "full" ? mask(e.systemPrompt, o.capture) : undefined,
+              systemPromptTokens: e.systemPromptTokens,
+              reasoningEffort: e.reasoningEffort,
+              maxOutputTokens: e.maxOutputTokens,
+              inputBudgetTokens: e.inputBudgetTokens,
+            },
           },
         },
       ];
@@ -116,6 +136,8 @@ function eventObservation(e: ObsEvent, o: BuildOpts): IngestionEvent {
 
 function eventMeta(e: ObsEvent): Record<string, unknown> {
   switch (e.type) {
+    case "phase.timing":
+      return { phase: e.phase, durationMs: e.durationMs, taskId: e.taskId };
     case "skill.activated":
       return { skill: e.skill };
     case "proposal.created":
