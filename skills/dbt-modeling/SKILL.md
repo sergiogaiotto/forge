@@ -8,6 +8,11 @@ license: Apache-2.0
 metadata:
   author: claro-data-platform
   version: "1.0"
+templates:
+  - src: templates/dbt_project.yml.tmpl
+    dest: dbt_project.yml
+  - src: templates/gitignore.tmpl
+    dest: .gitignore
 ---
 
 # dbt-modeling

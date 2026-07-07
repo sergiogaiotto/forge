@@ -55,6 +55,7 @@ export class SkillLoader {
         source: root.source,
         enabled: true,
         validators: result.parsed.frontmatter.validators ?? [],
+        templates: result.parsed.frontmatter.templates ?? [],
       });
     }
     return out;

@@ -4,7 +4,7 @@ import { ContextAssembler } from "../skills/ContextAssembler";
 import { SkillMeta } from "../skills/types";
 
 function skill(name: string, description: string): SkillMeta {
-  return { name, description, path: `/skills/${name}`, source: "managed", enabled: true, validators: [] };
+  return { name, description, path: `/skills/${name}`, source: "managed", enabled: true, validators: [], templates: [] };
 }
 
 test("assembles system prompt in the specified order (RF-040)", () => {

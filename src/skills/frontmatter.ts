@@ -1,5 +1,5 @@
 import * as yaml from "js-yaml";
-import { FrontmatterError, SkillFrontmatter, SkillValidatorSpec } from "./types";
+import { FrontmatterError, SkillFrontmatter, SkillTemplateSpec, SkillValidatorSpec } from "./types";
 
 const FM_RE = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/;
 const NAME_RE = /^[a-z0-9-]{1,64}$/;
@@ -57,6 +57,7 @@ export function parseSkill(content: string, dirName?: string): ParseResult {
   }
 
   const validators = parseValidators(doc.validators, errors);
+  const templates = parseTemplates(doc.templates, errors);
 
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -71,10 +72,47 @@ export function parseSkill(content: string, dirName?: string): ParseResult {
         license: typeof doc.license === "string" ? doc.license : undefined,
         metadata: isRecord(doc.metadata) ? doc.metadata : undefined,
         validators,
+        templates,
       },
       body: body ?? "",
     },
   };
+}
+
+// Um caminho de template (src DENTRO da skill / dest no workspace) só é aceito se for RELATIVO e SEGURO:
+// não-vazio, sem ser absoluto (sem `/`/`\` inicial nem drive `C:`), e sem NENHUM segmento `..` (traversal).
+// Isto é defesa em profundidade — o loadAsset ainda confina o src ao dir da skill e o safeWorkspacePath ainda
+// contém o dest no apply — mas rejeitar cedo dá erro claro e evita materializar caminho perigoso. Puro.
+export function isSafeRelPath(p: string): boolean {
+  const s = (p ?? "").trim();
+  if (!s) return false;
+  if (/^([a-zA-Z]:[\\/]|[\\/])/.test(s)) return false; // absoluto (drive ou raiz)
+  const segs = s.replace(/\\/g, "/").split("/");
+  if (segs.some((seg) => seg === "..")) return false; // traversal
+  return true;
+}
+
+// P2 (templates): parseia `templates: [{ src, dest }]`. Cada item exige `src`/`dest` string e ambos SEGUROS
+// (isSafeRelPath) — senão vira erro de frontmatter (a skill é rejeitada, como um validador malformado).
+function parseTemplates(raw: unknown, errors: FrontmatterError[]): SkillTemplateSpec[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    errors.push({ field: "templates", message: "templates deve ser uma lista." });
+    return [];
+  }
+  const out: SkillTemplateSpec[] = [];
+  raw.forEach((item, i) => {
+    if (!isRecord(item) || typeof item.src !== "string" || typeof item.dest !== "string") {
+      errors.push({ field: `templates[${i}]`, message: "cada template exige src e dest (strings)." });
+      return;
+    }
+    if (!isSafeRelPath(item.src) || !isSafeRelPath(item.dest)) {
+      errors.push({ field: `templates[${i}]`, message: "src e dest devem ser caminhos relativos seguros (sem '..' nem absoluto)." });
+      return;
+    }
+    out.push({ src: item.src.trim(), dest: item.dest.trim() });
+  });
+  return out;
 }
 
 function parseValidators(raw: unknown, errors: FrontmatterError[]): SkillValidatorSpec[] {

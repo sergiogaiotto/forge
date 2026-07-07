@@ -1,0 +1,33 @@
+# Gerado pelo FORGE (scaffold determinístico da skill dbt-modeling).
+# dbt_project.yml — a configuração raiz do projeto dbt. Sintaxe exata; edite os nomes de schema/perfil
+# conforme o seu ambiente, mas mantenha o layout de camadas (staging → intermediate → marts).
+# O nome é um IDENTIFICADOR dbt (derivado do nome do projeto): minúsculas, só [a-z0-9_].
+name: '{{projectSlug}}'
+version: '1.0.0'
+config-version: 2
+
+# O perfil (em ~/.dbt/profiles.yml) que resolve a conexão com o warehouse.
+profile: '{{projectSlug}}'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Materializações por camada — a regra de ouro do dbt-modeling: staging/intermediate como view (baratas,
+# recomputadas), marts como table (consultadas com frequência). Ajuste incremental nos marts grandes.
+models:
+  {{projectSlug}}:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table

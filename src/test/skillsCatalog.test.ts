@@ -21,5 +21,16 @@ test("every bundled skill in skills/ parses and name matches its directory", () 
     assert.ok(result.ok, `skill ${dir} inválida: ${result.errors.map((e) => e.field + ":" + e.message).join("; ")}`);
     assert.equal(result.parsed?.frontmatter.name, dir);
     assert.ok((result.parsed?.frontmatter.description.length ?? 0) > 0);
+    // P2: todo template DECLARADO deve ter o arquivo `src` no disco (senão o loadAsset falharia em runtime).
+    for (const t of result.parsed?.frontmatter.templates ?? []) {
+      assert.ok(fs.existsSync(path.join(SKILLS_DIR, dir, t.src)), `template src ausente: ${dir}/${t.src}`);
+    }
   }
+});
+
+test("dbt-modeling declara os templates de scaffold (dbt_project.yml + .gitignore)", () => {
+  const r = parseSkill(fs.readFileSync(path.join(SKILLS_DIR, "dbt-modeling", "SKILL.md"), "utf8"), "dbt-modeling");
+  assert.ok(r.ok);
+  const dests = (r.parsed?.frontmatter.templates ?? []).map((t) => t.dest);
+  assert.deepEqual(dests.sort(), [".gitignore", "dbt_project.yml"]);
 });

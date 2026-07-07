@@ -22,6 +22,7 @@ import { SecretsStore } from "../secrets/SecretsStore";
 import { ContextAssembler } from "../skills/ContextAssembler";
 import { SkillLoader, SkillRoot } from "../skills/SkillLoader";
 import { DEFAULT_SELECTOR_CONFIG, SkillSelector } from "../skills/SkillSelector";
+import { planTemplateFiles, toIdentifierSlug } from "../skills/templates";
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, reconcileRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
@@ -1918,6 +1919,15 @@ export class Controller {
         // modal com o erro + a lista (vermelha) + "Aprovar e gerar" habilitado — o dev vê e regenera.
         this.post({ type: "project/blueprintError", message: 'Não consegui gerar nenhum arquivo (falha do provedor ou limite de tokens). Ajuste e clique em "Aprovar e gerar" para tentar de novo.' });
       } else {
+        // P2 (templates/nível 3): materializa o scaffold DETERMINÍSTICO das skills ativadas (os .tmpl
+        // declarados no frontmatter) como forge-file — ANTES do gate, para que herdem a checagem, e em
+        // GAP-FILL (nunca sobrescreve o que o LLM gerou). Fora do LLM (determinístico). Ver materializeSkillTemplates.
+        await this.materializeSkillTemplates(activated, {
+          projectName: this.workspaceName(),
+          projectSlug: toIdentifierSlug(this.workspaceName()), // identificador seguro p/ chaves/nomes (YAML/dbt)
+          language: project.language,
+          architecture: project.architecture,
+        });
         // Gate WORKSPACE-WIDE antes do "Pronto": compila/importa o CONJUNTO gerado e bloqueia o Aplicar
         // dos arquivos que não passam (drift de contrato cross-file). Alimenta entry.gateOk. Roda ANTES
         // do project/done para o modal já abrir com os cartões reprovados pintados.
@@ -1973,6 +1983,69 @@ export class Controller {
     }
     // Mantém o histórico limitado.
     if (this.history.length > 20) this.history = this.history.slice(-20);
+  }
+
+  // P2 (nível 3 / templates): materializa como forge-file o SCAFFOLD determinístico declarado no frontmatter
+  // das skills ATIVADAS (`templates: [{src, dest}]`) — fora do LLM. loadAsset confina o `src` ao dir da skill;
+  // planTemplateFiles interpola ({{projectName|language|architecture}}) e decide GAP-FILL (nunca sobrescreve o
+  // que o LLM propôs, comparando os dests normalizados). Cada proposta materializada herda o gate (via
+  // registerManualProposal, gateOk otimista + validação enfileirada). Fail-open: um asset ausente/erro só pula
+  // aquele template, nunca derruba a geração. Respeita forge.skills.templates.
+  private async materializeSkillTemplates(activated: { meta: SkillMeta; body: string }[], vars: Record<string, string>): Promise<void> {
+    if (!this.config.skillTemplates()) return;
+    const task = this.currentTask;
+    if (!task) return;
+    const specs = activated.flatMap((a) => a.meta.templates.map((spec) => ({ skill: a.meta.name, meta: a.meta, spec })));
+    if (specs.length === 0) return;
+
+    // TODO o corpo é fail-open: qualquer erro (I/O, proposta) só loga e segue — um scaffold nunca derruba a
+    // geração (mesma filosofia do runProjectGate). O único efeito é não materializar o(s) template(s).
+    try {
+      const ws = this.workspaceRoot();
+      // Dests JÁ propostos (LLM) — normalizados como no gate; base do gap-fill (vs. propostas em memória).
+      const existingDests = new Set([...task.proposals.values()].map((e) => normGatePath(e.proposal.filePath)));
+
+      // Carrega o conteúdo cru de cada template (I/O confinado pelo loadAsset). Um asset que falha é pulado.
+      const loaded: { spec: (typeof specs)[number]["spec"]; raw: string }[] = [];
+      for (const s of specs) {
+        try {
+          const buf = await this.loader.loadAsset(s.meta, s.spec.src);
+          loaded.push({ spec: s.spec, raw: buf.toString("utf8") });
+        } catch (e) {
+          log.warn(`Templates: não consegui carregar o asset "${s.spec.src}" da skill "${s.skill}" — pulando`, e);
+        }
+      }
+
+      // Colisão ciente do FS: case-insensitive em Windows/macOS (casa o existsSync do gap-fill de disco), case-
+      // sensitive no Linux (Foo.yml ≠ foo.yml são arquivos distintos).
+      const caseFold = process.platform === "win32" || process.platform === "darwin";
+      const plan = planTemplateFiles(loaded, vars, existingDests, normGatePath, caseFold);
+      const materialized: string[] = [];
+      for (const p of plan) {
+        if (p.status !== "materialize") {
+          log.info(`Templates: "${p.dest}" já existe entre as propostas — pulado (gap-fill, não sobrescreve o LLM)`);
+          continue;
+        }
+        // GAP-FILL vs. DISCO: nunca sobrescreve um arquivo que JÁ existe no workspace (ex.: o .gitignore do
+        // usuário, com regras de segredos). O gap-fill em memória só vê as propostas do LLM; sem esta checagem,
+        // um dest ausente das propostas mas presente no disco viraria proposta de SUBSTITUIÇÃO. Materializa só o
+        // que está de fato AUSENTE. (Achado da revisão adversarial — perda silenciosa de arquivo do usuário.)
+        const abs = ws ? safeWorkspacePath(ws, p.dest) : null;
+        if (abs && existsSync(abs)) {
+          log.info(`Templates: "${p.dest}" já existe no disco — não sobrescrevo (gap-fill)`);
+          continue;
+        }
+        const proposal = await task.registerManualProposal(p.dest, p.content);
+        this.post({ type: "stream/proposal", taskId: task.taskId, proposal });
+        materialized.push(p.dest);
+      }
+      if (materialized.length > 0) {
+        this.post({ type: "notice", level: "info", message: `Scaffold determinístico: ${materialized.length} arquivo(s) NOVOS materializados de skills ativadas — ${materialized.join(", ")}. Herdaram o gate.` });
+        log.info(`Templates: materializados ${materialized.length} de skills ativadas — ${materialized.join(", ")}`);
+      }
+    } catch (e) {
+      log.warn("Templates: materialização falhou — seguindo sem scaffold (fail-open)", e);
+    }
   }
 
   // Gate workspace-wide do Modo Projeto (Onda 1). Materializa TODAS as propostas juntas numa árvore temp
