@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
+import { atMentionToken, filterMentions, replaceMention } from "../mentions";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
+import type { WorkspaceEntry } from "../../../src/shared/protocol";
 import {
   CharterKey,
   isRenderablePath,
@@ -226,9 +228,51 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     setSlashDismissed(false); // digitou → o popover volta (o dismiss vale só para o estado atual)
   }, [input]);
 
+  // Menção "@": picker inline de arquivos/pastas do workspace (molde da paleta "/", mas CIENTE do caret — o
+  // "@" pode estar no meio da mensagem). O catálogo é pedido ao host na 1ª menção e cacheado no estado; o
+  // filtro roda localmente (sem round-trip por tecla). Selecionar ANEXA o arquivo (chip) e limpa o @token.
+  const [caret, setCaret] = useState(0);
+  const [atSel, setAtSel] = useState(0);
+  const [atDismissed, setAtDismissed] = useState(false);
+  const wsRequested = useRef(false);
+  const mentionTok = atMentionToken(input, caret);
+  const mentionItems = mentionTok ? filterMentions(state.workspaceFiles, mentionTok.query, 12) : [];
+  const atOpen = !!mentionTok && !state.busy && !atDismissed && mentionItems.length > 0;
+  useEffect(() => {
+    if (mentionTok && state.workspaceFiles.length === 0 && !wsRequested.current) {
+      wsRequested.current = true;
+      post({ type: "context/listWorkspaceFiles" });
+    }
+  }, [mentionTok?.query, state.workspaceFiles.length]);
+  useEffect(() => {
+    setAtSel(0);
+    setAtDismissed(false); // digitou/moveu o caret → o popover volta
+  }, [input, caret]);
+
+  const chooseMention = (entry: WorkspaceEntry) => {
+    post({ type: "context/addWorkspaceFile", path: entry.path, kind: entry.kind });
+    if (mentionTok) {
+      const { text, caret: nc } = replaceMention(input, mentionTok, ""); // limpa o @token — o chip carrega o conteúdo
+      setInput(text);
+      requestAnimationFrame(() => {
+        const ta = taRef.current;
+        if (ta) {
+          ta.selectionStart = ta.selectionEnd = nc;
+          ta.focus();
+        }
+        setCaret(nc);
+      });
+    }
+    setAtDismissed(true);
+  };
+
   // Submissão unificada: Enter e o botão Enviar fazem O MESMO — com popover aberto, executa o item
   // selecionado; senão, send(). Divergir os dois confundia (Enter rodava /limpar, botão dava "typo").
   const submit = () => {
+    if (atOpen) {
+      chooseMention(mentionItems[Math.min(atSel, mentionItems.length - 1)]);
+      return;
+    }
     if (slashOpen) {
       runSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]);
       return;
@@ -237,6 +281,29 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   };
 
   const onKey = (e: React.KeyboardEvent) => {
+    // A menção "@" tem PRECEDÊNCIA sobre a paleta "/" (mutuamente exclusivas na prática, mas por garantia).
+    if (atOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtSel((i) => (i + 1) % mentionItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtSel((i) => (i - 1 + mentionItems.length) % mentionItems.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        chooseMention(mentionItems[Math.min(atSel, mentionItems.length - 1)]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtDismissed(true); // fecha SÓ o popover — o rascunho fica intacto
+        return;
+      }
+    }
     if (slashOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -427,6 +494,26 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           />
         )}
         <div className="composer-box">
+          {atOpen && (
+            // Menção "@": popover de arquivos/pastas do workspace (↑↓ navega, Enter/Tab anexa, Esc fecha).
+            <div className="slash-pop mention-pop">
+              {mentionItems.map((entry, i) => (
+                <div
+                  key={entry.path}
+                  className={`slash-item${i === atSel ? " sel" : ""}`}
+                  onMouseEnter={() => setAtSel(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // não rouba o foco do textarea
+                    chooseMention(entry);
+                  }}
+                >
+                  <Icon name={entry.kind === "folder" ? "folder" : "file"} size={13} />
+                  <span className="slash-label">{entry.path.split("/").pop()}</span>
+                  <span className="slash-hint">{entry.path}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {slashOpen && (
             // Paleta "/": popover ancorado acima do composer (↑↓ navega, Enter/Tab executa, Esc fecha).
             <div className="slash-pop">
@@ -468,17 +555,26 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           )}
           <textarea
             ref={taRef}
-            placeholder="Pergunte ou descreva a tarefa…"
+            placeholder="Pergunte ou descreva a tarefa… (@ para arquivos, / para comandos)"
             value={input}
             onChange={(e) => {
               setInput(e.target.value);
+              setCaret(e.target.selectionStart ?? 0); // rastreia o caret p/ a menção "@" (ciente da posição)
               e.target.style.height = "auto";
               e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px";
             }}
+            onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)} // setas/navegação movem o caret
+            onClick={(e) => setCaret(e.currentTarget.selectionStart ?? 0)} // clique reposiciona o caret
             onKeyDown={onKey}
             onPaste={onPaste}
-            onBlur={() => setSlashDismissed(true)} // clique fora fecha o popover (itens usam
-            onFocus={() => setSlashDismissed(false)} // mouseDown+preventDefault e não disparam blur)
+            onBlur={() => {
+              setSlashDismissed(true);
+              setAtDismissed(true);
+            }} // clique fora fecha os popovers (itens usam mouseDown+preventDefault e não disparam blur)
+            onFocus={() => {
+              setSlashDismissed(false);
+              setAtDismissed(false);
+            }}
             rows={1}
           />
           <div className="composer-tools">
