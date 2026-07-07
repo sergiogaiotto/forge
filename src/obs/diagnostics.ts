@@ -49,6 +49,7 @@ export function toDiagnosticRecord(e: ObsEvent, nowIso: string, capture: Capture
     case "proposal.created":
       return { ...base, filePath: e.filePath, change: e.change, language: e.language };
     case "proposal.applied":
+      return { ...base, filePath: e.filePath, forced: e.forced };
     case "proposal.discarded":
       return { ...base, filePath: e.filePath };
     case "validation.result":

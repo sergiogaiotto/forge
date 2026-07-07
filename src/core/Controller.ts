@@ -66,6 +66,7 @@ import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryReques
 import { GateCheckResult, mypyUnavailable, normGatePath, parseCompileallErrors, parseMypyErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs } from "./projectGate";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
+import { buildFewShotTurn } from "../util/fewShot";
 import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
 import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
@@ -1069,7 +1070,7 @@ export class Controller {
   // Passo 3: aplica TODAS as propostas, na ordem topológica do blueprint quando houver. NÃO aplica em
   // lote os arquivos PARCIAIS (truncados) — gravá-los silenciosamente seria perigoso; o dev aplica pelo
   // cartão individual (que avisa). Ao final, resumo honesto (aplicados/bloqueados/parciais pulados).
-  async applyAllProposals(): Promise<void> {
+  async applyAllProposals(opts?: { forceBlocked?: boolean }): Promise<void> {
     if (!this.currentTask) return;
     const norm = (p: string) => p.replace(/^[./\\]+/, ""); // casa './x' com 'x' do blueprint
     const order = this.projectSession ? this.projectSession.files.map((f) => norm(f.path)) : [];
@@ -1084,7 +1085,7 @@ export class Controller {
     let applied = 0;
     let blocked = 0;
     for (const p of sorted) {
-      const ok = await this.applyProposal(p.id);
+      const ok = await this.applyProposal(p.id, { force: opts?.forceBlocked });
       if (ok) {
         applied++;
         if (this.projectSession) {
@@ -1103,7 +1104,7 @@ export class Controller {
       }
     }
     const parts = [`${applied} aplicado(s)`];
-    if (blocked) parts.push(`${blocked} bloqueado(s) pelo quality gate`);
+    if (blocked) parts.push(`${blocked} bloqueado(s) pelo quality gate${opts?.forceBlocked ? "" : ' — use "Forçar bloqueados" se revisou'}`);
     if (partial.length) parts.push(`${partial.length} parcial(is) pulado(s) — revise e aplique pelo cartão`);
     this.post({ type: "notice", level: partial.length || blocked ? "warn" : "info", message: `Aplicar tudo: ${parts.join(" · ")}.` });
   }
@@ -1369,7 +1370,7 @@ export class Controller {
         this.cancelProject();
         break;
       case "proposal/applyAll":
-        await this.applyAllProposals();
+        await this.applyAllProposals({ forceBlocked: msg.forceBlocked });
         break;
       case "tests/run":
         await this.runTests();
@@ -1381,16 +1382,16 @@ export class Controller {
         this.currentTask?.abort();
         break;
       case "proposal/apply":
-        await this.applyProposal(msg.proposalId);
+        await this.applyProposal(msg.proposalId, { force: msg.force });
         break;
       case "codeBlock/save":
         await this.saveCodeBlock(msg.filePath, msg.content);
         break;
       case "proposal/applyAndRun":
-        await this.applyAndRun(msg.proposalId);
+        await this.applyAndRun(msg.proposalId, { force: msg.force });
         break;
       case "proposal/applyAndPreview":
-        await this.applyAndPreview(msg.proposalId);
+        await this.applyAndPreview(msg.proposalId, { force: msg.force });
         break;
       case "proposal/discard": {
         const fp = this.currentTask?.getProposal(msg.proposalId)?.proposal.filePath ?? "";
@@ -1884,6 +1885,12 @@ export class Controller {
     // Registra o turno do usuário; o turno do assistente é anexado após a conclusão.
     this.history.push({ role: "user", content: text });
     await task.run();
+    // P1 few-shot vivo: empilha um turno COMPACTO do que o modelo GEROU (cabeçalhos forge-file preservados).
+    // Sem isto o histórico só teria o stub "Apliquei em X" e, no turno seguinte, o modelo não veria seu
+    // próprio output no protocolo — revertendo para cerca comum (o sintoma copiar/colar). null (sem
+    // forge-file) → nada a empilhar. History é host-only (não vai à webview). O cap de 20 abaixo o limita.
+    const fewShot = buildFewShotTurn(task.getGenerated());
+    if (fewShot) this.history.push({ role: "assistant", content: fewShot });
     // Fase F: reconcilia o status do FileTree — arquivo do blueprint que virou proposta = "complete";
     // o que o modelo NÃO gerou = "failed" (não "pending", que se confundiria com o estado inicial).
     if (mode === "project" && project?.files && project.files.length > 0 && this.projectSession) {
@@ -2762,20 +2769,24 @@ export class Controller {
 
   // ---- propostas -------------------------------------------------------------
 
-  async applyProposal(proposalId: string): Promise<boolean> {
+  async applyProposal(proposalId: string, opts?: { force?: boolean }): Promise<boolean> {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry) {
       this.post({ type: "notice", level: "warn", message: "Proposta não encontrada (expirada)." });
       return false;
     }
-    if (this.config.gateBlocksApply() && !entry.gateOk) {
+    // Escape CONSCIENTE do gate: "Aplicar assim mesmo, revisei" (opts.force) pula a recusa, mas o override é
+    // registrado (obs proposal.applied {forced} + aviso). Sem force, comportamento idêntico ao anterior.
+    const gateBlocked = this.config.gateBlocksApply() && !entry.gateOk;
+    if (gateBlocked && !opts?.force) {
       this.post({
         type: "notice",
         level: "error",
-        message: "Quality gate reprovado: corrija os problemas apontados pelos validadores antes de aplicar.",
+        message: "Quality gate reprovado: corrija os problemas apontados pelos validadores — ou use \"Aplicar assim mesmo, revisei\" para aplicar sob sua responsabilidade.",
       });
       return false;
     }
+    const forcedOverride = gateBlocked && opts?.force === true;
     const ws = this.workspaceRoot();
     if (!ws) {
       this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para aplicar mudanças." });
@@ -2787,7 +2798,8 @@ export class Controller {
       const ok = await this.applyCellProposal(proposalId, entry);
       if (ok) {
         this.post({ type: "proposal/applied", proposalId });
-        this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath });
+        this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath, forced: forcedOverride });
+        if (forcedOverride) this.post({ type: "notice", level: "warn", message: `Aplicado por cima do gate reprovado (sob sua revisão): ${entry.proposal.filePath} — registrado no diagnóstico.` });
       }
       return ok;
     }
@@ -2802,7 +2814,8 @@ export class Controller {
     await fs.writeFile(abs, entry.proposal.modified, "utf8");
     this.history.push({ role: "assistant", content: `Apliquei a alteração em ${entry.proposal.filePath}.` });
     this.post({ type: "proposal/applied", proposalId });
-    this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath });
+    this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath, forced: forcedOverride });
+    if (forcedOverride) this.post({ type: "notice", level: "warn", message: `Aplicado por cima do gate reprovado (sob sua revisão): ${entry.proposal.filePath} — registrado no diagnóstico.` });
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
     return true;
@@ -2959,9 +2972,9 @@ export class Controller {
 
   // Aplica a proposta e, se aplicada (e não for célula), executa o arquivo logo em seguida — do diff
   // ao "rodando" em um clique. A execução transmite o ciclo de vida (start/output/result) pela webview.
-  async applyAndRun(proposalId: string): Promise<void> {
+  async applyAndRun(proposalId: string, opts?: { force?: boolean }): Promise<void> {
     const entry = this.currentTask?.getProposal(proposalId);
-    const applied = await this.applyProposal(proposalId);
+    const applied = await this.applyProposal(proposalId, opts);
     if (applied && entry && !entry.proposal.cell) {
       await this.runService.runFile(entry.proposal.filePath, proposalId);
     }
@@ -2969,9 +2982,9 @@ export class Controller {
 
   // Grava o arquivo E abre o preview — num único handler, garantindo a ordem (o preview lê o arquivo
   // só depois de gravado), diferente de postar apply + preview/open como mensagens concorrentes.
-  async applyAndPreview(proposalId: string): Promise<void> {
+  async applyAndPreview(proposalId: string, opts?: { force?: boolean }): Promise<void> {
     const entry = this.currentTask?.getProposal(proposalId);
-    const applied = await this.applyProposal(proposalId);
+    const applied = await this.applyProposal(proposalId, opts);
     if (applied && entry && !entry.proposal.cell) {
       await this.previewService.openPreview(entry.proposal.filePath);
       this.obs.record({ type: "run.result", filePath: entry.proposal.filePath, label: "preview", ok: true, exitCode: 0, durationMs: 0 });

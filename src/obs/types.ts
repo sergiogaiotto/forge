@@ -41,7 +41,7 @@ export type ObsEvent =
     }
   | { type: "skill.activated"; skill: string }
   | { type: "proposal.created"; filePath: string; change: "novo" | "edição" | "célula"; language: string }
-  | { type: "proposal.applied"; filePath: string }
+  | { type: "proposal.applied"; filePath: string; forced?: boolean }
   | { type: "proposal.discarded"; filePath: string }
   | { type: "validation.result"; filePath: string; gateOk: boolean; validators: { id: string; status: string }[] }
   | { type: "run.result"; filePath: string; label?: string; ok: boolean; exitCode: number | null; durationMs: number }

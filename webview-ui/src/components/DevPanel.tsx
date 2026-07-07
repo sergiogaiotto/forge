@@ -874,6 +874,18 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                   <button className="btn" onClick={close}>
                     Fechar
                   </button>
+                  {gate && (gate.files.length > 0 || gate.dod.length > 0) && (
+                    // Escape consciente do gate no lote: aplica TAMBÉM os arquivos reprovados (revisados pelo
+                    // dev). Auditável (cada um vira proposal.applied {forced}). Só aparece se há bloqueados.
+                    <button
+                      className="btn"
+                      style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
+                      title="Aplicar também os arquivos que o gate reprovou — você revisou e assume. Fica registrado no diagnóstico."
+                      onClick={() => post({ type: "proposal/applyAll", forceBlocked: true })}
+                    >
+                      <Icon name="alert-triangle" size={13} /> Forçar bloqueados
+                    </button>
+                  )}
                   <button className="btn p" disabled={!anyComplete} title="Aplicar todos os arquivos gerados, na ordem de dependência" onClick={() => post({ type: "proposal/applyAll" })}>
                     <Icon name="check" size={13} /> Aplicar tudo
                   </button>
@@ -1470,6 +1482,18 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
           >
             <Icon name="check" size={13} /> {applyLabel}
           </button>
+          {gateFailed && (
+            // Escape CONSCIENTE do gate reprovado (arquitetura/DoD/segurança/lint): o dev revisou e assume. O
+            // override é auditável (obs proposal.applied {forced} + aviso). Só aparece quando o gate reprovou.
+            <button
+              className="btn"
+              style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
+              title="Aplicar por cima do gate reprovado — você revisou e assume a responsabilidade. Fica registrado no diagnóstico."
+              onClick={() => post({ type: "proposal/apply", proposalId: p.proposal.id, force: true })}
+            >
+              <Icon name="alert-triangle" size={13} /> Aplicar assim mesmo, revisei
+            </button>
+          )}
           {!cell && (
             <button
               className="btn"

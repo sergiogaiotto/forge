@@ -399,11 +399,13 @@ export type WebviewToExt =
   | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/generate" }
   | { type: "project/cancel" }
-  | { type: "proposal/applyAll" }
+  // forceBlocked: aplica também os que o quality gate reprovou (override consciente do "forçar bloqueados").
+  | { type: "proposal/applyAll"; forceBlocked?: boolean }
   | { type: "tests/run" }
   | { type: "env/prepare" }
   | { type: "chat/abort"; taskId: string }
-  | { type: "proposal/apply"; proposalId: string }
+  // force: "Aplicar assim mesmo, revisei" — pula o quality gate reprovado (override consciente e auditável).
+  | { type: "proposal/apply"; proposalId: string; force?: boolean }
   | { type: "proposal/discard"; proposalId: string }
   | { type: "proposal/viewDiff"; proposalId: string }
   | { type: "proposal/copy"; proposalId: string }
@@ -428,8 +430,8 @@ export type WebviewToExt =
   | { type: "rag/file"; relPath: string }
   | { type: "run/file"; filePath: string; proposalId?: string }
   | { type: "preview/open"; filePath: string; proposalId?: string }
-  | { type: "proposal/applyAndRun"; proposalId: string }
-  | { type: "proposal/applyAndPreview"; proposalId: string }
+  | { type: "proposal/applyAndRun"; proposalId: string; force?: boolean }
+  | { type: "proposal/applyAndPreview"; proposalId: string; force?: boolean }
   | { type: "run/cancel"; runId: string }
   | { type: "run/focusTerminal"; runId: string }
   | { type: "cell/run"; proposalId: string }
