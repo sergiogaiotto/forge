@@ -1,11 +1,16 @@
 import { ChildProcess, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ExtToWebview } from "../shared/protocol";
 import { resolvePythonRunCommand } from "../util/pythonEnv";
+import { buildServerCommand, detectFastApiServer, extractServerUrl, fallbackUrl, ServerRunPlan } from "../util/serverRun";
 import { buildCommand, chooseRunMode, makeAnsiFilter, resolveRunCommand } from "./Runner";
 
 const TERMINAL_NAME = "FORGE · Run";
+const SERVER_TERMINAL_NAME = "FORGE · Server"; // terminal DEDICADO a servidores (vive servindo, separado do Run)
+const SERVER_STARTUP_MS = 30_000; // sem URL nem crash em 30s -> assume que subiu e abre o fallback
+const SERVER_OPEN_DELAY_MS = 2500; // respiro antes de abrir o navegador no caminho sem shell integration
 const ETX = String.fromCharCode(3); // Ctrl+C — interrompe a execucao no terminal
 const SI_WAIT_MS = 3000; // espera a shell integration ativar antes de cair no spawn neste run
 const SI_MAX_MISSES = 3; // apos N misses seguidos, desiste do terminal de vez (shell sem SI)
@@ -44,6 +49,7 @@ interface FinishData {
 // (o botao nunca fica preso em "Executando...").
 export class RunService implements vscode.Disposable {
   private terminal: vscode.Terminal | undefined;
+  private serverTerminal: vscode.Terminal | undefined; // terminal do servidor (uvicorn) — persiste servindo
   private siUnavailable = false; // shell integration nao ativa neste shell — vai direto ao spawn
   private siMisses = 0;
   private busy = false; // ha uma execucao em andamento (serializa o terminal compartilhado)
@@ -56,12 +62,14 @@ export class RunService implements vscode.Disposable {
     this.subs.push(
       vscode.window.onDidCloseTerminal((t) => {
         if (t === this.terminal) this.terminal = undefined;
+        if (t === this.serverTerminal) this.serverTerminal = undefined;
       })
     );
   }
 
   dispose(): void {
     this.terminal?.dispose();
+    this.serverTerminal?.dispose();
     this.subs.forEach((d) => d.dispose());
   }
 
@@ -102,6 +110,14 @@ export class RunService implements vscode.Disposable {
         return;
       }
       const abs = path.join(ws, relPath);
+      // App-servidor FastAPI/ASGI: `python arquivo.py` só instancia o app e sai (exit 0) sem servir —
+      // nada abriria no navegador. Sobe o servidor de verdade (uvicorn <modulo>:app) num terminal
+      // dedicado e abre o browser. Detecção pelo CONTEÚDO (`app = FastAPI(`), independe do Modo Projeto.
+      const serverPlan = this.detectServer(relPath, abs);
+      if (serverPlan) {
+        await this.runServer(runId, proposalId, relPath, abs, serverPlan, ws);
+        return;
+      }
       // Reescreve `python {file}` para o interpretador do venv (ambiente preparado). Se o caminho
       // precisou de aspas (espaços), força o spawn: no terminal integrado o shell pode ser PowerShell,
       // que não invoca executável por string entre aspas sem `&` — cmd.exe/sh (spawn) aceitam.
@@ -125,6 +141,114 @@ export class RunService implements vscode.Disposable {
       this.busy = false;
       this.activeRunId = undefined;
       this.activeCancel = undefined;
+    }
+  }
+
+  // Lê o arquivo e deteta se é um app-servidor FastAPI (para subir com uvicorn em vez de `python arquivo`).
+  // Falha de leitura -> null (segue o caminho normal de script). Só I/O de leitura; a decisão é pura.
+  private detectServer(relPath: string, absFile: string): ServerRunPlan | null {
+    try {
+      return detectFastApiServer(relPath, readFileSync(absFile, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  // Sobe um servidor ASGI (FastAPI) num terminal DEDICADO ("FORGE · Server"), separado do "FORGE · Run"
+  // de scripts — o servidor fica vivo servindo. SEM timeout de kill; detecta a URL na saída (shell
+  // integration) para abrir o navegador no endereço certo, ou abre o fallback após um respiro. O `busy`
+  // é liberado assim que o servidor arranca (runFile retorna): o card é finalizado por settle() de forma
+  // assíncrona (URL detectada / startup vencido / o processo encerrou). O usuário para com Ctrl+C.
+  private async runServer(runId: string, proposalId: string | undefined, relPath: string, absFile: string, plan: ServerRunPlan, ws: string): Promise<void> {
+    const python = this.deps.venvPython?.() ?? (process.platform === "win32" ? "python" : "python3");
+    const command = buildServerCommand(python, plan, absFile);
+    const fallback = fallbackUrl(plan.port);
+    const started = Date.now();
+    this.deps.post({ type: "run/start", runId, proposalId, filePath: relPath, command, where: "terminal" });
+
+    let reused = false;
+    if (!this.serverTerminal || this.serverTerminal.exitStatus !== undefined) {
+      this.serverTerminal = vscode.window.createTerminal({
+        name: SERVER_TERMINAL_NAME,
+        cwd: ws,
+        env: { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+        iconPath: new vscode.ThemeIcon("server"),
+      });
+    } else {
+      reused = true;
+    }
+    const term = this.serverTerminal;
+    term.show(true);
+    if (reused) term.sendText(ETX); // interrompe um servidor anterior antes de subir de novo (libera a porta)
+
+    let settled = false;
+    const settle = (ok: boolean, note: string): void => {
+      if (settled) return;
+      settled = true;
+      const durationMs = Date.now() - started;
+      this.deps.post({ type: "run/result", runId, proposalId, filePath: relPath, command, ok, exitCode: ok ? 0 : 1, output: note, durationMs });
+      this.deps.onResult?.({ filePath: relPath, ok, exitCode: ok ? 0 : 1, durationMs });
+    };
+
+    const si = term.shellIntegration;
+    if (!si) {
+      // Sem shell integration: dispara e abre o fallback após um respiro (não capturamos URL nem erro).
+      term.sendText(command);
+      setTimeout(() => void this.openBrowser(fallback), SERVER_OPEN_DELAY_MS);
+      settle(true, `Servidor iniciado no terminal "${SERVER_TERMINAL_NAME}". Abrindo ${fallback} — pare com Ctrl+C no terminal.`);
+      return;
+    }
+
+    const execution = si.executeCommand(command);
+    const ansi = makeAnsiFilter();
+    let opened = false;
+    const openOnce = (url: string): void => {
+      if (opened) return;
+      opened = true;
+      void this.openBrowser(url);
+    };
+    const startupTimer = setTimeout(() => {
+      openOnce(fallback);
+      settle(true, `Servidor iniciado (sem linha de URL na saída). Abrindo ${fallback} — pare com Ctrl+C no terminal "${SERVER_TERMINAL_NAME}".`);
+    }, SERVER_STARTUP_MS);
+
+    const endSub = vscode.window.onDidEndTerminalShellExecution((e) => {
+      if (e.execution !== execution) return;
+      endSub.dispose();
+      clearTimeout(startupTimer);
+      // O processo encerrou. Se já abrimos o navegador, foi o usuário parando (Ctrl+C) — ok. Senão foi um
+      // CRASH de startup: reporta falha (o card fica vermelho e alimenta o loop de correção do projeto).
+      if (opened) settle(true, "Servidor encerrado.");
+      else settle(false, `O servidor encerrou antes de servir (código ${e.exitCode ?? "?"}). Veja o terminal "${SERVER_TERMINAL_NAME}".`);
+    });
+
+    void (async () => {
+      try {
+        for await (const chunk of execution.read()) {
+          const clean = ansi(chunk);
+          if (!clean) continue;
+          if (!settled) this.deps.post({ type: "run/output", runId, delta: clean });
+          if (!opened) {
+            const url = extractServerUrl(clean);
+            if (url) {
+              clearTimeout(startupTimer);
+              openOnce(url);
+              settle(true, `Servidor rodando em ${url} — aberto no navegador. Pare com Ctrl+C no terminal "${SERVER_TERMINAL_NAME}".`);
+            }
+          }
+        }
+      } catch {
+        /* leitura interrompida */
+      }
+    })();
+    // NÃO await: o servidor segue vivo no terminal; runFile libera o `busy` ao retornar.
+  }
+
+  private async openBrowser(url: string): Promise<void> {
+    try {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    } catch {
+      /* best-effort: abrir o navegador não é crítico */
     }
   }
 
