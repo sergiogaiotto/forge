@@ -58,6 +58,9 @@ export class Task {
   private readonly controller = new AbortController();
   // Caminhos já notificados como "bloco fechado" (Modo Projeto), para não repetir o evento por arquivo.
   private readonly closedNotified = new Set<string>();
+  // Texto COMPLETO gerado nesta run (P1 few-shot vivo): o Controller o lê após run() para empilhar um turno
+  // compacto no histórico, preservando o formato forge-file para o próximo turno.
+  private lastGenerated = "";
   // Propostas geradas nesta task, mantidas para que o Controller possa aplicá-las/validá-las.
   // `cellIndex` é resolvido na aplicação de uma proposta de célula (para executá-la depois).
   readonly proposals = new Map<
@@ -89,6 +92,11 @@ export class Task {
   // (usa o último balão do assistente), mas o tipo da mensagem stream/proposal o exige.
   get taskId(): string {
     return this.deps.taskId;
+  }
+
+  // P1 few-shot vivo: o texto COMPLETO gerado nesta run (para o Controller montar o turno de histórico).
+  getGenerated(): string {
+    return this.lastGenerated;
   }
 
   // Botão "Salvar como arquivo" (Onda 3): o dev decidiu aplicar um trecho que o modelo mostrou em cerca
@@ -178,6 +186,7 @@ export class Task {
       return;
     }
     const full = gen.full;
+    this.lastGenerated = full; // P1 few-shot vivo: o Controller empilha um turno compacto disto no histórico.
     const completeness: CompletenessResult = gen.completeness;
 
     // `truncated` cobre tanto o arquivo com cerca aberta quanto o corte ENTRE arquivos (provider sinalizou

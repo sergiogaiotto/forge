@@ -119,7 +119,8 @@ export function orphanTrace(id: string, traceId: string, nowIso: string, environ
 }
 
 function eventObservation(e: ObsEvent, o: BuildOpts): IngestionEvent {
-  const gateFail = e.type === "validation.result" && !e.gateOk;
+  // WARNING: gate reprovado, OU um Aplicar FORÇADO por cima do gate (override consciente — auditável).
+  const gateFail = (e.type === "validation.result" && !e.gateOk) || (e.type === "proposal.applied" && e.forced === true);
   return {
     id: o.id(),
     type: "event-create",
@@ -143,6 +144,9 @@ function eventMeta(e: ObsEvent): Record<string, unknown> {
     case "proposal.created":
       return { filePath: e.filePath, change: e.change, language: e.language };
     case "proposal.applied":
+      // forced = o dev aplicou por cima de um gate reprovado ("Aplicar assim mesmo, revisei") — override
+      // consciente e AUDITÁVEL. WARNING no trace para o override saltar aos olhos na análise.
+      return { filePath: e.filePath, forced: e.forced };
     case "proposal.discarded":
       return { filePath: e.filePath };
     case "validation.result":

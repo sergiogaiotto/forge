@@ -126,6 +126,22 @@ test("buildIngestion: eventos de workflow viram event-create no mesmo trace", ()
   assert.equal((ev.body as any).level, "WARNING"); // gate reprovado
 });
 
+test("buildIngestion: proposal.applied FORÇADO (override do gate) vira event-create WARNING com forced", () => {
+  const [forced] = buildIngestion(
+    { type: "proposal.applied", filePath: "a.py", forced: true },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked", environment: "test" }
+  );
+  assert.equal(forced.type, "event-create");
+  assert.equal((forced.body as any).level, "WARNING"); // override salta na análise
+  assert.equal((forced.body as any).metadata.forced, true);
+  // aplicar NORMAL (não forçado) segue DEFAULT
+  const [normal] = buildIngestion(
+    { type: "proposal.applied", filePath: "a.py" },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked", environment: "test" }
+  );
+  assert.equal((normal.body as any).level, "DEFAULT");
+});
+
 function harness(c: ObsConfig, rand = 0) {
   const captured: IngestionEvent[] = [];
   const sink: ObsSink = { enqueue: (es) => captured.push(...es), flush: async () => {} };
