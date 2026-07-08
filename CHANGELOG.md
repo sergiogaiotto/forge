@@ -3,6 +3,39 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.5.0] — 2026-07-08
+
+**Modo Projeto que roda de fato — do gerar ao browser.** Uma sessão de uso end-to-end (gerar um projeto pelo
+motor real gpt-oss-120b/HubGPU, aplicar e subir a aplicação no navegador) expôs e corrigiu as causas-raiz que
+faziam o FORGE selar como "pronto" um projeto que não roda. Mais o gate de arquitetura Java (P4) e o picker de
+menção "@". Cada PR (#117–#121) com revisão adversarial multi-lente — que pegou um bug crítico em vários deles
+(comando não-invocável no PowerShell; corrupção silenciosa de código harmony-domain) antes do merge.
+
+### Added
+- **Java · gate de arquitetura por pacote (P4)** (#117): a regra de camadas (o domínio não importa a infra)
+  roda sobre os imports Java por pacote declarado; o gate de compilação `javac` fica de follow-up (sem JDK
+  validável no host, não se escreve o classificador de erros às cegas).
+- **Menção "@" no chat** (#118): picker inline de arquivos/pastas do workspace direto no composer.
+- **"Aplicar e executar" sobe servidores FastAPI** (#119): o RunService detecta um app ASGI (FastAPI) pelo
+  conteúdo e sobe `uvicorn <módulo>:app` num terminal dedicado, abrindo o navegador na URL real — em vez de
+  `python arquivo.py`, que só instancia o app e sai (exit 0) sem servir. Interpretador resolvido RELATIVO ao
+  cwd para invocar no PowerShell (shell padrão no Windows).
+- **Confirmação de contrato não verificado** (#121): num projeto Python que compilou mas cujo mypy NÃO rodou
+  (sem venv/mypy), o "Aplicar tudo" passa a exigir confirmação explícita ("Aplicar sem verificar contrato") em
+  vez de gravar em silêncio como se estivesse verde — a coerência cross-file (import/atributo fantasma) não foi
+  checada. Só Python (em Go/Java o compilador de contrato é advisory de propósito); escape auditável de 1 clique.
+
+### Fixed
+- **Modo Projeto Python roda de fato** (#119): o manifesto de dependências passa a ser `requirements.txt` (não
+  `pyproject.toml`) — é ele que ativa a reconciliação anti-drift que confere se o código importa o que o
+  manifesto declara; os `__init__.py` reais são materializados no Aplicar (o gate só criava sintéticos numa
+  árvore temp); e o prompt exige um entrypoint executável (`uvicorn.run` em `__main__`), Pydantic v2, `Form(...)`
+  para formulários HTML e o diretório de templates resolvido por `__file__` (robusto ao CWD).
+- **Vazamento harmony do gpt-oss na geração** (#120): o preâmbulo de análise que o streaming às vezes vaza no
+  `content` (antes do 1º bloco `forge-file`) é saneado; o CONTEÚDO dos arquivos fica verbatim — um `.py` que
+  contém `assistantfinal`/`<|channel|>…` como literal (o domínio do FORGE é parsear gpt-oss) não é mais
+  corrompido em silêncio.
+
 ## [2.4.0] — 2026-07-07
 
 **Auditoria da geração de código — os 4 pilares.** Uma auditoria multi-agente da geração no Modo Projeto
