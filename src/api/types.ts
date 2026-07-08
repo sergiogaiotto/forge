@@ -68,6 +68,11 @@ export interface ProviderRuntimeConfig {
   // Temperatura de amostragem. Ausente = default do servidor. As tarefas ESTRUTURADAS one-shot
   // (blueprint/charter) fixam 0: variância de amostragem é inimiga de JSON/formato estrito.
   temperature?: number;
+  // Janela de contexto EFETIVA reconciliada com o que o gateway realmente serve (config
+  // forge.provider.maxContextWindow, ou auto-detectada via GET /v1/models quando a config é 0). 0/ausente
+  // = usar o nominal do catálogo. Alimenta deriveBudget/clampOutputToServed — evita HTTP 400 se o vLLM
+  // servir --max-model-len menor que a capacidade do modelo. Ver util/servedWindow.ts.
+  servedContextWindow?: number;
 }
 
 export function buildAuthHeaders(cfg: ProviderRuntimeConfig): Record<string, string> {
