@@ -64,7 +64,7 @@ import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/i
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
-import { GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
+import { GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, requiresContractConfirmation, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
@@ -132,6 +132,9 @@ export class Controller {
   private sessionToken: SessionToken | undefined;
   // Fase F: sessão do Modo Projeto — o blueprint aprovado e o status por arquivo (orquestração).
   private projectSession: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework; brief: string; files: BlueprintFileView[] } | null = null;
+  // Última geração fechou o gate como PARCIAL num projeto Python (compilou, mas o mypy não verificou o
+  // contrato cross-file) → "Aplicar tudo" exige confirmação explícita (forceBlocked). Ver runProjectGate.
+  private gateContractUnverified = false;
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
   private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
@@ -1023,6 +1026,7 @@ export class Controller {
       this.post({ type: "notice", level: "warn", message: "Nenhum blueprint aprovado. Planeje o projeto primeiro." });
       return;
     }
+    this.gateContractUnverified = false; // nova geração: zera o estado; o gate repõe o valor correto ao rodar
     // Pré-checagens (as mesmas do startTask) ANTES de marcar "gerando" — senão uma falha precoce (licença/
     // e-mail/provedor) deixaria o modal preso em "gerando…" (o project/done só é postado após o run).
     if (!(await this.ensureSession())) {
@@ -1074,6 +1078,14 @@ export class Controller {
   // cartão individual (que avisa). Ao final, resumo honesto (aplicados/bloqueados/parciais pulados).
   async applyAllProposals(opts?: { forceBlocked?: boolean }): Promise<void> {
     if (!this.currentTask) return;
+    // Contrato cross-file NÃO verificado (Python compilou mas o mypy não rodou): exige confirmação explícita
+    // antes de gravar tudo — evita selar como "pronto" um projeto que pode ter drift de contrato (import/
+    // atributo fantasma) e não rodar. `forceBlocked` = o dev confirmou ("Aplicar sem verificar contrato").
+    if (this.gateContractUnverified && !opts?.forceBlocked) {
+      this.post({ type: "notice", level: "warn", message: 'O contrato cross-file NÃO foi verificado (o mypy não rodou — sem venv/mypy). Rode "Preparar ambiente" para verificar de fato, ou clique "Aplicar sem verificar contrato" se revisou e assume.' });
+      return;
+    }
+    this.gateContractUnverified = false; // seguimos para aplicar (verificado, ou confirmado) → limpa o estado
     const norm = (p: string) => p.replace(/^[./\\]+/, ""); // casa './x' com 'x' do blueprint
     const order = this.projectSession ? this.projectSession.files.map((f) => norm(f.path)) : [];
     const rank = (fp: string) => {
@@ -2269,13 +2281,17 @@ export class Controller {
       // A UI pinta os cartões de compilação/arquitetura/segurança (por-arquivo) e mostra DoD + avisos de
       // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
       const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), `… e mais ${securityAdvisories.length - 12} aviso(s) — veja o log de diagnóstico.`] : securityAdvisories;
-      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView });
+      // Contrato cross-file NÃO verificado (Python compilou mas o mypy não rodou): "Aplicar tudo" passa a
+      // exigir confirmação. NÃO conta se já há bloqueio duro (o dev corrige/força esse primeiro).
+      this.gateContractUnverified = requiresContractConfirmation(language, gate.partial) && totalBlocked === 0 && !dodBlocksAll;
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: this.gateContractUnverified, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView });
       log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
       return { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories };
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
-      this.post({ type: "project/gate", advisory: true, partial: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [], security: [] });
+      this.gateContractUnverified = false; // gate não rodou (advisory) → não trava o Aplicar por confirmação
+      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [], security: [] });
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);

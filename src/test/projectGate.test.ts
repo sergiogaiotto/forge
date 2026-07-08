@@ -11,11 +11,21 @@ import {
   parseGofmtErrors,
   parseMypyErrors,
   parseTscErrors,
+  requiresContractConfirmation,
   summarizeGate,
   syntheticInitDirs,
   tscErrorsToMap,
   tscUnavailable,
 } from "../core/projectGate";
+
+test("requiresContractConfirmation: só Python + partial exige confirmação (Go/Java/TS e não-partial, não)", () => {
+  assert.equal(requiresContractConfirmation("python", true), true); // compilou mas mypy não verificou → confirma
+  assert.equal(requiresContractConfirmation("python", false), false); // verde ou já bloqueado
+  // Go/Java: o compilador de contrato (go build/javac) é advisory de propósito (offline/sem JDK) → sem atrito falso
+  assert.equal(requiresContractConfirmation("go", true), false);
+  assert.equal(requiresContractConfirmation("java", true), false);
+  assert.equal(requiresContractConfirmation("typescript", true), false);
+});
 
 test("normGatePath: separadores pra frente, sem ./ inicial nem / final", () => {
   assert.equal(normGatePath("src\\domain\\models.py"), "src/domain/models.py");

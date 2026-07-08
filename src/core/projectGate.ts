@@ -270,6 +270,15 @@ export interface ProjectGateSummary {
   summary: string;
 }
 
+// O "Aplicar tudo" deve exigir CONFIRMAÇÃO explícita? Sim quando o conjunto compilou mas a coerência
+// cross-file NÃO foi verificada (gate `partial`) num projeto PYTHON — onde o mypy é o único checador de
+// contrato (import/atributo fantasma) e sua ausência esconde o drift que faz "instala e não roda". SÓ
+// Python: em Go/Java o compilador-de-contrato (go build/javac) é advisory de propósito (offline/sem JDK),
+// não uma verificação que se espera existir — exigir confirmação lá seria atrito falso. Puro/testável.
+export function requiresContractConfirmation(language: ProjectLanguage, partial: boolean): boolean {
+  return language === "python" && partial;
+}
+
 // Consolida os resultados das checagens numa decisão de gate. Só uma checagem de GATE (gate:true) que
 // REALMENTE rodou e reprovou (status "failed") contribui bloqueio — skipped nunca bloqueia (degradação
 // segura). Uma reprovação sem erro atribuível a arquivo vira `projectErrors` (bloqueio amplo). Puro.
