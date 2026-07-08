@@ -3,6 +3,20 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.6.0] — 2026-07-08
+
+**Auto-detecção da janela de contexto servida pelo gateway.** Fecha o último gap da auditoria de campo
+(Q1). Cada PR com revisão adversarial multi-lente.
+
+### Added
+- **Janela servida auto-detectada** (#123): o catálogo tem a capacidade do *modelo* (128k do gpt-oss-120b),
+  mas o vLLM/HubGPU pode servir com `--max-model-len` menor — e o orçamento de contexto, confiando nos 128k,
+  estouraria (**HTTP 400** em toda geração). Agora o FORGE consulta o `GET /v1/models` (o vLLM expõe
+  `max_model_len`) **uma vez por provedor** e reconcilia o orçamento com o que o gateway realmente serve,
+  quando o admin não fixou `forge.provider.maxContextWindow`. **Drop-in seguro**: sem detecção (falha /
+  provedor não-vLLM / override manual) o comportamento é idêntico ao anterior (usa o catálogo); a janela
+  detectada nunca sobe acima do catálogo (`Math.min`). Fail-open em qualquer erro de rede.
+
 ## [2.5.0] — 2026-07-08
 
 **Modo Projeto que roda de fato — do gerar ao browser.** Uma sessão de uso end-to-end (gerar um projeto pelo
