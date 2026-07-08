@@ -193,7 +193,11 @@ const ARCH_LABEL: Record<ProjectArchitecture, string> = {
   mvc: "MVC",
 };
 const MANIFEST: Record<ProjectLanguage, string> = {
-  python: "pyproject.toml (ou requirements.txt)",
+  // No Modo Projeto o manifesto de dependências Python é requirements.txt (NÃO pyproject.toml): é o
+  // requirements.txt que ativa a reconciliação automática de dependências do FORGE (confere que o
+  // manifesto declara o que o código importa). Liste TODAS as dependências, inclusive as de execução
+  // que não são importadas no código (ex.: uvicorn), com uma por linha.
+  python: "requirements.txt (liste TODAS as dependências, inclusive as de execução como uvicorn; NÃO use pyproject.toml como manifesto de dependências no Modo Projeto)",
   typescript: "package.json e tsconfig.json",
   java: "pom.xml (ou build.gradle)",
   go: "go.mod",
@@ -240,7 +244,15 @@ export function uiLayerInstruction(language: ProjectLanguage, ui: ProjectUI | un
     case "none":
       return "CAMADA DE UI: NÃO inclua interface — entregue somente API/CLI e testes.";
     case "template-engine":
-      return `CAMADA DE UI: inclua uma interface web SERVER-SIDE com template engine — ${TEMPLATE_ENGINE[language]} — como adapter de entrada da arquitetura.`;
+      return (
+        `CAMADA DE UI: inclua uma interface web SERVER-SIDE com template engine — ${TEMPLATE_ENGINE[language]} — ` +
+        "como adapter de entrada da arquitetura. Emita DE FATO os arquivos de template (ex.: .html), não só o " +
+        "código que os renderiza, e resolva o diretório de templates por caminho ABSOLUTO derivado do arquivo " +
+        "(em Python: `Path(__file__).resolve().parent / \"templates\"`), nunca relativo ao CWD." +
+        (language === "python"
+          ? " Em FastAPI, os campos de um formulário HTML (POST) são lidos com `Form(...)` (requer python-multipart), NÃO como parâmetros de query — declará-los como `str`/`int` puros faz o corpo do formulário ser ignorado."
+          : "")
+      );
     case "spa-react":
       return "CAMADA DE UI: inclua um frontend SPA em React (diretório frontend/ com Vite, package.json próprio) consumindo a API via HTTP; documente os dois lados no README.";
     case "streamlit":
@@ -258,7 +270,15 @@ export function frameworkInstruction(language: ProjectLanguage, framework: Proje
   if (language !== "python") return "";
   switch (framework) {
     case "fastapi":
-      return "FRAMEWORK WEB: use FastAPI (APIRouter, modelos Pydantic, injeção de dependências) como adapter de entrada HTTP.";
+      return (
+        "FRAMEWORK WEB: use FastAPI (APIRouter, modelos Pydantic v2 — field_validator/ConfigDict, NÃO a " +
+        "API v1 validator/orm_mode/min_items — e injeção de dependências) como adapter de entrada HTTP. " +
+        "EXPONHA a instância `app = FastAPI(...)` em um módulo de nível superior (ex.: main.py ou " +
+        "composition_root.py) e inclua nele um bloco `if __name__ == \"__main__\": import uvicorn; " +
+        "uvicorn.run(app, host=\"127.0.0.1\", port=8000)` para o app subir com `python <modulo>.py`. " +
+        "Documente no README o comando exato `uvicorn <caminho.pontilhado.do.modulo>:app --reload`. " +
+        "Não registre a MESMA rota (método + caminho) em dois lugares — evite routers duplicados."
+      );
     case "flask":
       return "FRAMEWORK WEB: use Flask (app factory + blueprints) como adapter de entrada HTTP.";
     case "litestar":
