@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { ExtToWebview } from "../shared/protocol";
 import { resolvePythonRunCommand } from "../util/pythonEnv";
-import { buildServerCommand, detectFastApiServer, extractServerUrl, fallbackUrl, ServerRunPlan } from "../util/serverRun";
+import { buildServerCommand, detectFastApiServer, extractServerUrl, fallbackUrl, ServerRunPlan, shellSafePython } from "../util/serverRun";
 import { buildCommand, chooseRunMode, makeAnsiFilter, resolveRunCommand } from "./Runner";
 
 const TERMINAL_NAME = "FORGE · Run";
@@ -160,7 +160,10 @@ export class RunService implements vscode.Disposable {
   // é liberado assim que o servidor arranca (runFile retorna): o card é finalizado por settle() de forma
   // assíncrona (URL detectada / startup vencido / o processo encerrou). O usuário para com Ctrl+C.
   private async runServer(runId: string, proposalId: string | undefined, relPath: string, absFile: string, plan: ServerRunPlan, ws: string): Promise<void> {
-    const python = this.deps.venvPython?.() ?? (process.platform === "win32" ? "python" : "python3");
+    // Interpretador SEGURO como 1º token (relativo ao cwd do terminal quando dá): um path citado como
+    // primeiro token não invoca no PowerShell (shell padrão no Windows) — o servidor nunca subiria.
+    const pythonRaw = this.deps.venvPython?.() ?? (process.platform === "win32" ? "python" : "python3");
+    const python = shellSafePython(pythonRaw, ws);
     const command = buildServerCommand(python, plan, absFile);
     const fallback = fallbackUrl(plan.port);
     const started = Date.now();

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import * as path from "node:path";
 import {
   buildServerCommand,
   detectFastApiServer,
@@ -7,6 +8,7 @@ import {
   extractServerUrl,
   fallbackUrl,
   pythonModulePath,
+  shellSafePython,
 } from "../util/serverRun";
 
 test("pythonModulePath: rel .py -> módulo pontilhado (barra e contra-barra, sem ./ inicial)", () => {
@@ -54,6 +56,27 @@ test("detectFastApiServer: módulo que DEFINE o app (uvicorn modulo:app) vs entr
   assert.equal(detectFastApiServer("domain.py", "class Order:\n    pass\n"), null);
   // não-.py NÃO casa mesmo com FastAPI no texto
   assert.equal(detectFastApiServer("README.md", "app = FastAPI()"), null);
+
+  // RESSALVA #2 da revisão: `uvicorn.run(` em DOCSTRING sem `import uvicorn` NÃO vira servidor (falso-positivo)
+  assert.equal(detectFastApiServer("helper.py", '"""Rode com uvicorn.run(app) em produção."""\ndef f():\n    pass\n'), null);
+  // RESSALVA #3: `app = FastAPI()` INDENTADO (app-factory) não é servível por uvicorn modulo:app -> não detecta o app
+  assert.equal(detectFastApiServer("factory.py", "def make():\n    app = FastAPI()\n    return app\n"), null);
+});
+
+test("shellSafePython: relativo (sem aspas) quando sob o ws; absoluto quando externo; bare intacto", () => {
+  // cross-platform: constrói caminhos absolutos reais e testa os INVARIANTES (não strings fixas de SO).
+  const ws = path.resolve("forge-safepy-ws");
+  const venv = path.join(ws, ".venv", "Scripts", "python.exe");
+  const safe = shellSafePython(venv, ws);
+  assert.ok(!path.isAbsolute(safe), "venv sob o ws -> caminho RELATIVO (não precisa de aspas)");
+  assert.ok(!safe.includes("\\"), "normaliza separador para barra");
+  assert.ok(/python/.test(safe));
+  // interpretador "pelado" (sem separador) já é seguro em qualquer shell
+  assert.equal(shellSafePython("python", ws), "python");
+  assert.equal(shellSafePython("python3", ws), "python3");
+  // venv FORA do ws (o relativo começaria com ..) -> mantém o absoluto (o chamador cita)
+  const outside = path.resolve("forge-safepy-other", "env", "python.exe");
+  assert.equal(shellSafePython(outside, ws), outside);
 });
 
 test("buildServerCommand: uvicorn quando define o app; roda o arquivo quando é entrypoint; cita espaços", () => {

@@ -2,6 +2,7 @@
 // (`uvicorn <modulo>:<app>`) em vez de `python arquivo.py` — que só instancia o app e sai (exit 0) sem
 // servir, então nada abre no browser. Funções PURAS/testáveis; o RunService faz o glue com o terminal
 // integrado e o vscode.env.openExternal.
+import * as path from "node:path";
 
 export interface ServerRunPlan {
   module: string; // módulo Python pontilhado a partir da raiz do workspace (ex.: "src.composition_root")
@@ -37,10 +38,31 @@ export function extractPort(content: string): number | null {
 // Comentários não casam (a linha não pode ter `#` antes do gatilho). Retorna null se não for servidor. Puro.
 export function detectFastApiServer(relPath: string, content: string, defaultPort = DEFAULT_SERVER_PORT): ServerRunPlan | null {
   if (!/\.py$/i.test(relPath)) return null;
-  const app = content.match(/(?:^|\n)[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*FastAPI[ \t]*\(/);
-  const selfRun = /(?:^|\n)[ \t]*[^#\n]*\buvicorn\.run[ \t]*\(/.test(content);
+  // app em NÍVEL DE MÓDULO (coluna 0): um `app = FastAPI()` INDENTADO (app-factory dentro de def) não é
+  // servível por `uvicorn <modulo>:app` sem --factory, então não conta como módulo-que-define-o-app.
+  const app = content.match(/(?:^|\n)([A-Za-z_]\w*)[ \t]*=[ \t]*FastAPI[ \t]*\(/);
+  // "roda sozinho": chama `uvicorn.run(` (fora de comentário) E importa uvicorn — o `import` evita casar
+  // um `uvicorn.run(app)` que aparece só em docstring/string de um arquivo que não é entrypoint.
+  const callsRun = /(?:^|\n)[ \t]*[^#\n]*\buvicorn\.run[ \t]*\(/.test(content);
+  const importsUvicorn = /(?:^|\n)[ \t]*(?:import[ \t]+uvicorn\b|from[ \t]+uvicorn\b)/.test(content);
+  const selfRun = callsRun && importsUvicorn;
   if (!app && !selfRun) return null;
   return { module: pythonModulePath(relPath), appVar: app ? app[1] : "app", selfRun, port: extractPort(content) ?? defaultPort };
+}
+
+// Torna o caminho do interpretador SEGURO como PRIMEIRO token do comando no terminal, em QUALQUER shell:
+// prefere o caminho RELATIVO ao cwd do terminal (a raiz do workspace) quando ele não tem espaço e tem
+// separador — assim NÃO precisa de aspas. Uma linha começando por `"..."` no PowerShell (shell padrão do
+// VS Code no Windows) é uma STRING literal, não invocação: o servidor nunca subiria. O ws pode ter espaço
+// (ex.: C:\Users\João Silva\proj); o relativo (.venv/Scripts/python.exe) não. Só cai no absoluto (que o
+// chamador cita) quando o relativo escaparia o ws, mudaria de drive ou teria espaço (venv externo, raro).
+export function shellSafePython(python: string, ws: string): string {
+  if (!python || !ws || !/[\\/]/.test(python)) return python; // "python"/"python3" sem path já são seguros
+  const rel = path.relative(ws, python);
+  if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && !/\s/.test(rel) && /[\\/]/.test(rel)) {
+    return rel.split(path.sep).join("/"); // barra normal serve em cmd e PowerShell no Windows
+  }
+  return python;
 }
 
 // Monta o comando para SUBIR o servidor. Se o arquivo roda o servidor sozinho (uvicorn.run), executa o
