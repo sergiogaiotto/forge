@@ -52,6 +52,23 @@ function dropHarmonyPreamble(text: string): string {
   return lines.slice(i).join("\n");
 }
 
+// Saneia uma região de PREÂMBULO (prosa vazada do canal de análise do gpt-oss, ANTES do conteúdo real):
+// corta no marcador do canal final, remove os tokens de controle e dropa o preâmbulo de análise. SEM trim
+// (preserva o whitespace do fim, de que a costura de continuação depende).
+//
+// ATENÇÃO — SÓ para PROSA (o texto ANTES do 1º bloco forge-file/forge-cell). NUNCA rode sobre o conteúdo
+// de um arquivo gerado: como o DOMÍNIO do FORGE é parsear gpt-oss/harmony, um .py legítimo pode conter
+// `assistantfinal` ou `<|channel|>…` como LITERAL — cortar no marcador ou remover o token ali corromperia
+// o código em silêncio (achado crítico da revisão adversarial). O chamador delimita o preâmbulo. Puro.
+export function sanitizeHarmonyPreamble(text: string): string {
+  if (!text) return text;
+  const re = new RegExp(FINAL_CHANNEL_RE.source, "gi");
+  let last: RegExpExecArray | null = null;
+  for (let m = re.exec(text); m; m = re.exec(text)) last = m;
+  const body = (last ? text.slice(last.index + last[0].length) : text).replace(HARMONY_TOKEN_RE, "");
+  return dropHarmonyPreamble(body);
+}
+
 export function stripHarmony(text: string): string {
   if (!text) return text;
   // Se houver o marcador do canal final, o conteúdo real é o que vem DEPOIS do ÚLTIMO marcador (todo o

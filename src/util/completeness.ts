@@ -2,7 +2,10 @@
 // truncado). Reaproveita o parser de cercas existente (parsePartialFileBlocks): um bloco forge-file
 // cuja cerca de FECHAMENTO ainda não chegou é o sintoma direto de truncamento por limite de tokens.
 import { ChatMessage } from "../api/types";
+import { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
+import { findOpeningFence } from "./fences";
 import { parsePartialFileBlocks } from "./fileBlocks";
+import { sanitizeHarmonyPreamble } from "./harmony";
 
 // Omissões/elipses proibidas (espelham o NO_ELLIPSIS_RULE do systemPrompt): sinais fortes de que o
 // modelo RESUMIU o arquivo em vez de emiti-lo inteiro. Conservador: exige a estrutura de PLACEHOLDER
@@ -90,6 +93,10 @@ const CHAT_PREAMBLE: RegExp[] = [
   /^(add(ing)?|inserting|adicion(ando|o)?|inserindo)\b[^\n]*\b(new ?line|newline|nova linha|quebra de linha|fence|cerca)\b[^\n]*$/i,
   /^(closing|fechando|reopening|reabrindo)\b[^\n]*\b(fence|cerca|block|bloco)\b[^\n]*$/i,
   /^continuation\s*:?\s*$/i,
+  // Marcador de canal harmony COLAPSADO (o gateway removeu os <|...|>) vazado como LINHA ISOLADA no
+  // início de uma continuação do gpt-oss — ex.: "assistantfinal", "assistantanalysis". Não é código;
+  // removido como preâmbulo. Os tokens delimitados (<|...|>) são tirados a montante por stripHarmonyTokens.
+  /^assistant(final|analysis|commentary)$/i,
 ];
 
 // Guarda de segurança: uma linha que "parece código" NUNCA é tratada como preâmbulo, mesmo que
@@ -143,6 +150,27 @@ export function stitchContinuation(prev: string, cont: string): string {
   return prev + cont;
 }
 
+// Índice de início da 1ª cerca de bloco forge-file OU forge-cell no texto; -1 se não houver. Delimita o
+// PREÂMBULO (prosa antes do 1º bloco, onde o vazamento de análise do gpt-oss aparece) do PAYLOAD (o
+// conteúdo dos arquivos, que fica VERBATIM — pode conter literais harmony no domínio do FORGE).
+function firstBlockFence(text: string): number {
+  const f = findOpeningFence(text, FORGE_FILE_BLOCK_LANG, 0);
+  const c = findOpeningFence(text, FORGE_CELL_BLOCK_LANG, 0);
+  const starts = [f?.start, c?.start].filter((n): n is number => typeof n === "number");
+  return starts.length ? Math.min(...starts) : -1;
+}
+
+// Saneia SÓ o preâmbulo (antes do 1º bloco); o payload fica intocado. `cleanWholeIfNoBlock`: numa 1ª
+// passagem sem bloco o texto é PROSA (saneia tudo); numa CONTINUAÇÃO sem bloco o texto é a retomada de um
+// arquivo aberto — CÓDIGO PURO — e NÃO pode ser tocado (senão um `<|…|>`/`assistantfinal` literal do
+// código seria destruído — achado crítico da revisão). Cerca no char 0 = sem preâmbulo → intocado.
+function sanitizeLead(text: string, cleanWholeIfNoBlock: boolean): string {
+  const b = firstBlockFence(text);
+  if (b < 0) return cleanWholeIfNoBlock ? sanitizeHarmonyPreamble(text) : text;
+  if (b === 0) return text;
+  return sanitizeHarmonyPreamble(text.slice(0, b)) + text.slice(b);
+}
+
 export interface ResilientOptions {
   maxContinuations: number;
   anchorChars: number; // quanto da CAUDA do texto reenviar como âncora na continuação (não o todo)
@@ -179,9 +207,13 @@ export async function resilientGenerate(
     const res = await streamFn(convo);
     if (res.error !== undefined) return { full, completeness, attempts: attempt, truncated: false, error: res.error };
     const before = full.length;
-    // Continuações (attempt > 0) passam pelo higienizador: removem prosa conversacional que o modelo
-    // às vezes emite antes de retomar o código, evitando que ela seja costurada DENTRO do arquivo.
-    full = attempt === 0 ? res.text : stitchContinuation(full, sanitizeContinuation(res.text));
+    // Saneamento harmony do PREÂMBULO (rede de segurança do gpt-oss em STREAMING — o canal de análise às
+    // vezes vaza no content antes do conteúdo; o blueprint roda em não-streaming e já é imune, a geração de
+    // código é streaming pela UX arquivo-a-arquivo). Só a prosa ANTES do 1º bloco é saneada; o CONTEÚDO dos
+    // arquivos fica VERBATIM (pode conter `assistantfinal`/`<|…|>` como literal — domínio do FORGE). Round 0
+    // sem bloco = prosa (saneia); continuação sem bloco = retomada de código (intocada). Per-PARTE.
+    const part = sanitizeLead(res.text, attempt === 0);
+    full = attempt === 0 ? part : stitchContinuation(full, sanitizeContinuation(part));
     completeness = checkCompleteness(full);
     const openFence = !completeness.complete && completeness.reason === "cerca-aberta";
     const incomplete = openFence || res.truncated === true; // provider cortou (mesmo entre blocos fechados)

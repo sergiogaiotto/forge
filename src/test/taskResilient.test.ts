@@ -69,6 +69,59 @@ test("resilientGenerate: erro numa passagem é propagado sem continuar", async (
   assert.equal(r.attempts, 0);
 });
 
+// ---- Saneamento harmony na geração (streaming): SÓ o preâmbulo (fora dos blocos); payload verbatim ----
+test("resilientGenerate: vazamento harmony NO PREÂMBULO (antes do 1º bloco) é saneado na 1ª passagem", async () => {
+  const s = scripted([
+    { text: "We need to output the code.\n<|channel|>final<|message|>Segue:\n" + FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n" },
+  ]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.ok(!/We need to output/i.test(r.full), "análise antes do marcador foi cortada");
+  assert.ok(!/<\|channel\|>/.test(r.full), "token de controle do preâmbulo removido");
+  assert.match(r.full, /path=a\.py/);
+  assert.match(r.full, /x = 1/);
+});
+
+test("resilientGenerate: preâmbulo de análise SEM marcador (antes do 1º bloco) é dropado na 1ª passagem", async () => {
+  const s = scripted([
+    { text: "We need to produce the file.\nProceed.\n" + FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n" },
+  ]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.ok(!/We need to produce|Proceed/i.test(r.full), "linhas de análise iniciais dropadas");
+  assert.match(r.full, /path=a\.py/);
+});
+
+// REGRESSÃO (achado crítico da revisão adversarial): o CONTEÚDO de um arquivo pode conter literais harmony
+// (o domínio do FORGE é parsear gpt-oss) — o saneamento NUNCA pode tocar dentro do bloco.
+test("resilientGenerate: arquivo com literal harmony NÃO é corrompido na 1ª passagem [regressão]", async () => {
+  const code = 'FINAL = "assistantfinal"\nTOK = "<|channel|>final<|message|>"\ndef strip(t):\n    return t\n';
+  const s = scripted([{ text: "Segue:\n" + FENCE + "forge-file path=harmony_parser.py\n" + code + FENCE + "\n" }]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.match(r.full, /path=harmony_parser\.py/);
+  assert.match(r.full, /"assistantfinal"/, "literal assistantfinal preservado no conteúdo do arquivo");
+  assert.ok(r.full.includes("<|channel|>final<|message|>"), "token literal preservado no conteúdo do arquivo");
+});
+
+test("resilientGenerate: continuação que RETOMA código com literal harmony NÃO é corrompida [regressão]", async () => {
+  const s = scripted([
+    { text: "Segue:\n" + FENCE + 'forge-file path=p.py\nMARK = "assist', truncated: true }, // cortado no meio da string
+    { text: 'antfinal"\ndef f():\n    return MARK\n' + FENCE + "\n" }, // continua "…assistantfinal"
+  ]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.ok(/assistantfinal/.test(r.full), "a string costurada da continuação sobrevive (não é tratada como marcador)");
+  assert.match(r.full, /def f\(\)/);
+});
+
+test("resilientGenerate: marcador vazado no PREÂMBULO de uma continuação-entre-arquivos é removido", async () => {
+  const s = scripted([
+    { text: FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n", truncated: true },
+    { text: "assistantfinal\n" + FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" },
+  ]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.ok(!/assistantfinal/i.test(r.full), "marcador colapsado do preâmbulo da continuação removido");
+  assert.match(r.full, /path=a\.py/);
+  assert.match(r.full, /path=b\.py/);
+});
+
 test("resilientGenerate: fluxo normal (já completo, sem truncar) NÃO continua", async () => {
   const s = scripted([{ text: "ok, sem código.\n" }]);
   const r = await resilientGenerate(base, s.fn, opts);
