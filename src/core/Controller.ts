@@ -6,8 +6,9 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { createProvider } from "../api/ProviderFactory";
 import { DEFAULT_TIMEOUT_SECONDS, PROVIDER_PRESETS } from "../api/presets";
-import { ProviderRuntimeConfig } from "../api/types";
+import { buildAuthHeaders, ProviderRuntimeConfig } from "../api/types";
 import { ChatMessage } from "../api/types";
+import { probeServedContextWindow } from "../util/servedWindow";
 import { ManagedConfig } from "../config/ManagedConfig";
 import { LicenseClient } from "../license/LicenseClient";
 import { LicenseVerifier } from "../license/LicenseVerifier";
@@ -135,6 +136,10 @@ export class Controller {
   // Última geração fechou o gate como PARCIAL num projeto Python (compilou, mas o mypy não verificou o
   // contrato cross-file) → "Aplicar tudo" exige confirmação explícita (forceBlocked). Ver runProjectGate.
   private gateContractUnverified = false;
+  // Cache da janela de contexto SERVIDA pelo gateway, por (type::baseUrl::modelId). Auto-detectada uma vez
+  // via GET /v1/models quando a config maxContextWindow é 0. Presença = já probado (valor 0 = sem detecção;
+  // não re-proba). Ver util/servedWindow.ts e ensureServedWindow.
+  private servedWindowCache = new Map<string, number>();
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
   private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
@@ -1694,30 +1699,66 @@ export class Controller {
   // `sessionMaxOutput`: o teto por-sessão do PROVIDER EM QUESTÃO (0 = sem escolha). Recebido explícito,
   // não lido do globalState — no "Testar conexão" o setup pode ser um provider/modelo DIFERENTE do
   // persistido, e herdar a sessão do provider antigo testaria um teto que o modelo em teste nunca usaria.
-  private resolveOutputTokens(type: ProviderRuntimeConfig["type"], modelId: string, sessionMaxOutput: number): number {
+  private resolveOutputTokens(type: ProviderRuntimeConfig["type"], baseUrl: string | undefined, modelId: string, sessionMaxOutput: number): number {
     const meta = getModelMeta(type, modelId);
     const cfg = this.config.provider();
     const requested = sessionMaxOutput > 0 ? sessionMaxOutput : cfg.maxOutput; // sessão vence a config do admin
-    return clampOutputToServed(resolveMaxOutput(requested, meta), meta, cfg.maxContextWindow, OUTPUT_INPUT_RESERVE);
+    return clampOutputToServed(resolveMaxOutput(requested, meta), meta, this.effectiveContextWindow(type, baseUrl, modelId), OUTPUT_INPUT_RESERVE);
+  }
+
+  // Chave de cache da janela servida — por (type::baseUrl::modelId): gateways diferentes servem janelas diferentes.
+  private servedWindowKey(type: string, baseUrl: string | undefined, modelId: string): string {
+    return `${type}::${baseUrl ?? ""}::${modelId}`;
+  }
+
+  // Janela de contexto EFETIVA para o orçamento (deriveBudget/clampOutputToServed): a config do admin
+  // (forge.provider.maxContextWindow) VENCE quando > 0; senão a auto-detectada do gateway (cache); senão 0
+  // = usar o nominal do catálogo (comportamento atual — drop-in seguro quando não há detecção).
+  private effectiveContextWindow(type: string, baseUrl: string | undefined, modelId: string): number {
+    const configured = this.config.provider().maxContextWindow;
+    if (configured > 0) return configured;
+    return this.servedWindowCache.get(this.servedWindowKey(type, baseUrl, modelId)) ?? 0;
+  }
+
+  // Auto-detecta a janela SERVIDA pelo gateway (uma vez, cacheada por config). Só openai-compatible (o
+  // vLLM/HubGPU expõe max_model_len em /v1/models; OpenAI/Anthropic não reduzem a janela) e só quando o
+  // admin NÃO fixou maxContextWindow. Fail-open: falha → cacheia 0 (não re-proba) → o catálogo é usado.
+  // Reconcilia p/ NÃO estourar (HTTP 400) se o servidor servir --max-model-len menor que a capacidade do modelo.
+  private async ensureServedWindow(cfg: { type: ProviderRuntimeConfig["type"]; baseUrl?: string; modelId: string; apiKey?: string; authHeader?: string }): Promise<void> {
+    if (cfg.type !== "openai-compatible") return;
+    if (this.config.provider().maxContextWindow > 0) return; // admin fixou → não precisa detectar
+    const key = this.servedWindowKey(cfg.type, cfg.baseUrl, cfg.modelId);
+    if (this.servedWindowCache.has(key)) return; // já probado (sucesso ou falha)
+    const headers = buildAuthHeaders({ type: cfg.type, modelId: cfg.modelId, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, authHeader: cfg.authHeader, timeoutSeconds: 0 });
+    const served = await probeServedContextWindow(cfg.baseUrl, cfg.modelId, headers, this.egress, 4000 /* ms: probe curto, cacheado */);
+    this.servedWindowCache.set(key, served ?? 0);
+    const nominal = getModelMeta(cfg.type, cfg.modelId).contextWindow;
+    if (served && served > 0 && served < nominal) {
+      log.info(`Janela servida detectada: ${served} tokens (catálogo ${nominal}) — reconciliando o orçamento para evitar HTTP 400.`);
+    }
   }
 
   private async runtimeProviderConfig(): Promise<ProviderRuntimeConfig | undefined> {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     if (!p) return undefined;
     const apiKey = (await this.secrets.get(SecretsStore.providerApiKey("default"))) ?? "not-needed";
+    // Auto-detecta a janela realmente servida pelo gateway (uma vez, cacheada) — reconcilia o orçamento
+    // com o --max-model-len do servidor, evitando HTTP 400 quando ele serve menos que a capacidade do modelo.
+    await this.ensureServedWindow({ type: p.type, baseUrl: p.baseUrl, modelId: p.modelId, apiKey, authHeader: p.authHeader });
+    const servedContextWindow = this.effectiveContextWindow(p.type, p.baseUrl, p.modelId);
     // Teto de saída REAL do modelo (catálogo), sobrescrevível por config. Sem isto, toda geração caía
     // no DEFAULT_MAX_TOKENS fixo (16384), ignorando a janela de 128k do gpt-oss-120b.
     const meta = getModelMeta(p.type, p.modelId);
-    const maxTokens = this.resolveOutputTokens(p.type, p.modelId, p.maxOutput ?? 0);
+    const maxTokens = this.resolveOutputTokens(p.type, p.baseUrl, p.modelId, p.maxOutput ?? 0);
     if (!meta.supportsReasoningEffort) {
       // Provedores sem esforço (Anthropic/OpenAI/Llama): preserva o timeout do onboarding e não
       // envia reasoning_effort.
-      return { ...p, apiKey, maxTokens, reasoningEffort: undefined };
+      return { ...p, apiKey, maxTokens, servedContextWindow, reasoningEffort: undefined };
     }
     const reasoningEffort = p.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
     // gpt-oss: o esforço eleva o piso de timeout (esforços maiores levam mais tempo), mas um override
     // maior do onboarding é respeitado — evita cortar respostas longas (arquivo completo) no meio.
-    return { ...p, apiKey, maxTokens, reasoningEffort, timeoutSeconds: Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(reasoningEffort)) };
+    return { ...p, apiKey, maxTokens, servedContextWindow, reasoningEffort, timeoutSeconds: Math.max(p.timeoutSeconds, effectiveTimeoutSeconds(reasoningEffort)) };
   }
 
   // Tarefas ESTRUTURADAS one-shot (blueprint, charter): rebaixa o esforço de raciocínio para "low"
@@ -1735,6 +1776,9 @@ export class Controller {
   }
 
   async testProvider(setup: ProviderSetup): Promise<void> {
+    // Detecta a janela servida do provider EM TESTE antes de montar o teto (o "Testar conexão" reflete
+    // fielmente o que a geração real usaria — incl. o clamp contra o --max-model-len servido).
+    await this.ensureServedWindow({ type: setup.type, baseUrl: setup.baseUrl, modelId: setup.modelId, apiKey: setup.apiKey, authHeader: setup.authHeader });
     const cfg: ProviderRuntimeConfig = {
       type: setup.type,
       modelId: setup.modelId,
@@ -1745,7 +1789,7 @@ export class Controller {
       // Envia o teto EFETIVO com clamp (config + janela servida). Passa sessão=0: o teto por-sessão é do
       // provider já configurado, não do que está sendo TESTADO (que pode ser outro modelo/janela). Assim
       // um 400 por max_tokens excedendo o --max-model-len aparece já no "Testar conexão", fielmente.
-      maxTokens: this.resolveOutputTokens(setup.type, setup.modelId, 0),
+      maxTokens: this.resolveOutputTokens(setup.type, setup.baseUrl, setup.modelId, 0),
       // Exercita o MESMO corpo da geração real: se o gateway recusar reasoning_effort, o erro aparece
       // já no "Testar conexão", não silenciosamente na primeira geração.
       reasoningEffort: supportsReasoningEffort(setup.type, setup.modelId)
@@ -1872,7 +1916,7 @@ export class Controller {
     const budget = deriveBudget(
       getModelMeta(runtime.type, runtime.modelId),
       runtime.maxTokens ?? 0,
-      this.config.provider().maxContextWindow
+      runtime.servedContextWindow ?? 0 // janela EFETIVA (config do admin OU auto-detectada do gateway)
     );
     const assembled = this.assembler.assemble({
       basePrompt,
@@ -2762,7 +2806,7 @@ export class Controller {
       [renderStackBlock(stack), roleGuidance(resolveRole(sources)), body].filter((s) => s.trim()).join("\n\n")
     );
     const basePrompt = buildBasePrompt(this.workspaceName());
-    const budget = deriveBudget(getModelMeta(runtime.type, runtime.modelId), runtime.maxTokens ?? 0, this.config.provider().maxContextWindow);
+    const budget = deriveBudget(getModelMeta(runtime.type, runtime.modelId), runtime.maxTokens ?? 0, runtime.servedContextWindow ?? 0);
     const rag = this.rag.status();
     this.post({
       type: "context/report",
