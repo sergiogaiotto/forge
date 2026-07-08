@@ -982,6 +982,18 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                       <Icon name="alert-triangle" size={13} /> Forçar bloqueados
                     </button>
                   )}
+                  {gate && gate.requiresContractConfirm && !(gate.files.length > 0 || gate.dod.length > 0) && (
+                    // Contrato cross-file NÃO verificado (o mypy não rodou): o "Aplicar tudo" pede confirmação.
+                    // Este é o "sim, gravar sem verificação" — o dev revisou e assume. forceBlocked = confirmo.
+                    <button
+                      className="btn"
+                      style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
+                      title="O mypy não verificou o contrato cross-file (import/atributo fantasma). Aplicar assim mesmo — você revisou e assume. Fica registrado no diagnóstico."
+                      onClick={() => post({ type: "proposal/applyAll", forceBlocked: true })}
+                    >
+                      <Icon name="alert-triangle" size={13} /> Aplicar sem verificar contrato
+                    </button>
+                  )}
                   <button className="btn p" disabled={!anyComplete} title="Aplicar todos os arquivos gerados, na ordem de dependência" onClick={() => post({ type: "proposal/applyAll" })}>
                     <Icon name="check" size={13} /> Aplicar tudo
                   </button>
