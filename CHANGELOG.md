@@ -3,6 +3,54 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.7.0] — 2026-07-09
+
+**FORGE Dados — o salto para engenharia de dados.** Quatro ondas que dão ao FORGE uma *camada
+determinística* de dados: o LLM raciocina, motores compilados validam. Inspirado no estudo do
+altimate-code/ADE-bench (harness > modelo), mas 100% aberto e embutível — sem driver nativo no `.vsix`.
+Puramente aditivo e fail-open: sem projeto dbt / sem conexão configurada, o comportamento é idêntico ao
+anterior. Cada onda com revisão adversarial multi-agente (PRs #125, #127) — que confirmou e corrigiu
+38 defeitos antes do merge, incluindo um RCE e dois bypasses de governança.
+
+### Added
+- **Motor SQL determinístico** (#125): módulo `src/sql/` puro-TS (sem dependências novas) — léxico
+  robusto (escapes `''`/`\'`, dollar-quoting, identificadores quotados), pré-processador **Jinja/dbt**
+  (`{{ ref() }}`/`{{ source() }}` viram os identificadores reais — analisa modelo dbt cru, o calcanhar
+  declarado do altimate), classificador de statements e **16 regras anti-padrão** com confiança
+  declarada. Novo gate `forge.gate.sql` (`conservative` padrão): só achados de **segurança**
+  (DELETE/UPDATE sem WHERE, DROP/TRUNCATE, produto cartesiano) bloqueiam o Aplicar; o resto é advisory.
+  Roda **in-process** em toda proposta `.sql` (chat, TDD, Modo Projeto), no mesmo canal de card/gate/Langfuse.
+- **Grounding dbt** (#125): índice de `target/manifest.json` (+`catalog.json`) com recarga por mtime; o
+  **schema real entra no prompt** (anti-alucinação) e um **gate semântico** acusa tabela/coluna
+  inexistente com sugestão ("você quis dizer …?"). Em projetos dbt, analisa o SQL compilado — melhor
+  onde mais importa.
+- **Lineage de coluna + raio de explosão** (#125): `src/sql/lineage.ts` (column-level determinístico,
+  atravessa CTEs) e comando **`/impacto [modelo]`** (host-computado do manifest: downstream, testes,
+  exposures). Lente "dados" no `/revisar` injeta os achados do motor como evidência determinística.
+- **Skills 2.0 de dados** (#125): dbt/sql/airflow/spark reescritas com disciplina de workflow
+  (descoberta de convenções, escada de verificação, regra das 3 falhas, tabelas CAN/CANNOT de
+  preservação semântica). Comandos **`/traduzir-sql <dialeto>`** e **`/testes-dbt [modelo]`** (schema.yml
+  ancorado nas colunas reais do manifest).
+- **Conexões de warehouse governadas** (#127): o dev conecta pelo **caminho tradicional** (os CLIs que
+  já usa) ou por **MCP**. Cobertura: **Oracle 19c/26ai/Exadata/ADW** (SQLcl/sqlplus + wallet→TNS_ADMIN),
+  **PostgreSQL** (psql), **BigQuery** (bq), **DuckDB**, **S3 / OCI Object Storage** (aws/oci). Nenhum
+  driver embutido — spawna o CLI do dev (padrão pytest/mypy/tesseract). **Governança por motor**: SELECT
+  roda; escrita exige `readonly:false` + confirmação modal; DROP/TRUNCATE e blocos PL/SQL nunca. Senha no
+  SecretStorage (via wrapper `/nolog`/PGPASSWORD, jamais em argv/log); saída capada e mascarada (LGPD).
+  Comandos `/conexoes`, `/executar-sql [conn]` (com auto-cura), `/custo` (dry-run/EXPLAIN).
+- **Schema vivo do warehouse** (#127): `/schema-db [conn]` inventaria as colunas por dialeto e **funde ao
+  índice dbt** — o grounding anti-alucinação passa a valer fora de projetos dbt.
+- **Paridade, FinOps e auditoria LGPD** (#127): `/paridade a b [conexao:tabela]` (profile-diff por
+  agregados — nenhuma linha sai do banco; intra e entre warehouses), `/custo` FinOps 7d (BigQuery JOBS,
+  pg_stat_statements, Oracle v$sql), `/auditoria-pii` (dicionário LGPD por nome de coluna, 100% local,
+  com sugestão de mascaramento por dialeto). Novos settings `forge.warehouse.*`.
+
+### Security
+- **Workspace-trust** (#127): `forge.warehouse.connections`, `forge.mcp.catalog`, `forge.run.commands`
+  e afins passam a ser `restrictedConfigurations` — settings que definem comandos executáveis são
+  ignorados em workspace não confiável. O spawn de CLI não usa mais `shell:true` (resolve o binário no
+  PATH e deixa o Node quotar os args), fechando injeção de comando via string de conexão.
+
 ## [2.6.0] — 2026-07-08
 
 **Auto-detecção da janela de contexto servida pelo gateway.** Fecha o último gap da auditoria de campo
