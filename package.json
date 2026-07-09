@@ -335,6 +335,26 @@
           "default": "conservative",
           "markdownDescription": "Motor **SQL determinístico** (dados): analisa toda proposta `.sql` **in-process** (sem instalar nada) — classificação de statements, ~16 regras de **anti-padrão** com confiança declarada (SELECT *, produto cartesiano, `NOT IN` + NULL, predicado não-sargável, CTE morta, LIMIT em modelo dbt…), e **validação de schema** contra o `target/manifest.json` do projeto dbt quando existir (tabela/coluna inexistente vira achado com sugestão). Modelos dbt com Jinja (`{{ ref() }}`) são analisados nativamente. `conservative` (padrão): só os achados de **segurança** bloqueiam o Aplicar; o resto é advisory. Respeita o `forge.validation.gateBlocksApply` mestre."
         },
+        "forge.warehouse.connections": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Conexões de **warehouse** (Onda 3 — dados): o FORGE executa SQL pelos **CLIs que você já usa** (caminho tradicional) ou via **MCP** do catálogo. Cada item: `{ id, kind: oracle|postgres|bigquery|duckdb|s3|oci-os, connect, readonly?, tool?, walletDir?, schemas?, mcp? }`. Exemplos — Oracle 19c/26ai/Exadata: `{ \"id\": \"dw\", \"kind\": \"oracle\", \"connect\": \"user@DWPROD\" }` (SQLcl/sqlplus; senha no SecretStorage, pedida no 1º uso); **ADW**: adicione `walletDir` (vira TNS_ADMIN); PostgreSQL: `connect` = URI do psql; BigQuery: `connect` = projeto GCP (auth do gcloud), `schemas` = datasets; S3/OCI Object Storage: `kind: s3|oci-os` (aws/oci CLI). **Governança do motor**: SELECT roda direto; escrita exige `readonly:false` NA conexão + confirmação por execução; DROP/TRUNCATE **nunca** executam. Amostras são capadas e mascaradas (LGPD) antes de qualquer exibição."
+        },
+        "forge.warehouse.default": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Conexão usada pelos comandos de dados quando nenhum `id` é informado (vazio = a primeira da lista)."
+        },
+        "forge.warehouse.rowCap": {
+          "type": "number",
+          "default": 50,
+          "markdownDescription": "Máximo de **linhas** exibidas de um SELECT (amostra — LGPD: o chat nunca carrega um dataset). 1–500."
+        },
+        "forge.warehouse.timeoutSeconds": {
+          "type": "number",
+          "default": 60,
+          "markdownDescription": "Timeout (s) de cada execução no warehouse via CLI."
+        },
         "forge.project.reconcileDependencies": {
           "type": "boolean",
           "default": true,

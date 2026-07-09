@@ -91,6 +91,23 @@ export class ManagedConfig {
     return v === "advisory" || v === "off" ? v : "conservative";
   }
 
+  // Conexões de warehouse (Onda 3): caminho tradicional (CLIs do dev: SQLcl/sqlplus, psql, bq,
+  // duckdb, aws/oci) e/ou MCP. Senhas NUNCA aqui — SecretStorage (pedidas no primeiro uso).
+  warehouse(): { connections: import("../warehouse/types").WarehouseConnection[]; defaultId: string; rowCap: number; timeoutSeconds: number } {
+    const c = this.cfg();
+    const raw = c.get<unknown[]>("warehouse.connections", []);
+    const connections = (Array.isArray(raw) ? raw : []).filter(
+      (x): x is import("../warehouse/types").WarehouseConnection =>
+        !!x && typeof x === "object" && typeof (x as { id?: unknown }).id === "string" && typeof (x as { kind?: unknown }).kind === "string"
+    );
+    return {
+      connections,
+      defaultId: c.get<string>("warehouse.default", "").trim(),
+      rowCap: Math.max(1, Math.min(500, c.get<number>("warehouse.rowCap", 50))),
+      timeoutSeconds: Math.max(5, c.get<number>("warehouse.timeoutSeconds", 60)),
+    };
+  }
+
   // Gate SQL (dados, Onda 1): o motor determinístico in-process analisa propostas .sql. "conservative"
   // (padrão): só achados de SEGURANÇA (DELETE/UPDATE sem WHERE, DROP/TRUNCATE, produto cartesiano)
   // bloqueiam o Aplicar; anti-padrões e schema (dbt) são sempre advisory. "advisory": nada bloqueia.
