@@ -30,8 +30,17 @@ export function decideSqlRun(sql: string, conn: { readonly?: boolean }): RunDeci
   }
   const unterminated = stmts.some((s) => s.unterminated);
   const writes = stmts.filter((s) => s.write).map((s) => s.kind.toUpperCase());
-  if (writes.length > 0 || unterminated) {
-    const what = unterminated && writes.length === 0 ? "SQL não classificável por inteiro (string não-terminada)" : writes.join(", ");
+  // Defesa em profundidade: statement que o classificador não entendeu por inteiro (kind "other" não
+  // vazio) NUNCA é leitura garantida — trata como escrita (achado da revisão: dialetos/sintaxes fora
+  // do KIND_RE não podem cair no verdict "auto").
+  const unknown = stmts.some((s) => s.kind === "other" && s.stripped.trim().length > 0);
+  if (writes.length > 0 || unterminated || unknown) {
+    const what =
+      writes.length > 0
+        ? writes.join(", ")
+        : unterminated
+          ? "SQL não classificável por inteiro (string não-terminada)"
+          : "SQL cuja natureza o motor não confirma como somente-leitura";
     if (isReadonly) {
       return {
         verdict: "blocked",

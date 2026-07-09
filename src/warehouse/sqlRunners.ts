@@ -4,6 +4,7 @@
 // object storage. O I/O (temp files, spawn, timeout) fica no WarehouseService; aqui é 100% testável.
 // Segredo NUNCA vai em argv (aparece na lista de processos): Oracle recebe a senha no script-wrapper
 // temporário (apagado no finally), psql via env PGPASSWORD, bq/aws/oci usam a auth do próprio CLI.
+import { maskDataSample } from "../util/piiScan";
 import { WarehouseConnection } from "./types";
 
 export interface CliPlan {
@@ -22,6 +23,15 @@ export interface PlanError {
 
 export function isPlanError(p: CliPlan | PlanError): p is PlanError {
   return (p as PlanError).error !== undefined;
+}
+
+// Garante um terminador executável no fim do SQL Oracle. `;` termina um statement comum; `/` executa
+// o buffer (necessário para bloco PL/SQL BEGIN…END). Não mexe se já houver um terminador.
+export function oracleTerminate(sql: string): string {
+  const trimmed = (sql ?? "").trimEnd();
+  if (/[;/]\s*$/.test(trimmed)) return trimmed + "\n";
+  const isBlock = /\b(BEGIN|DECLARE)\b/i.test(trimmed.slice(0, 200)) && /END\s*$/i.test(trimmed);
+  return trimmed + (isBlock ? "\n/\n" : "\n;\n");
 }
 
 const ORA_PRELUDE = ["SET SQLFORMAT csv", "SET FEEDBACK OFF", "SET ECHO OFF", "SET VERIFY OFF", "WHENEVER SQLERROR EXIT FAILURE"];
@@ -57,7 +67,10 @@ export function buildRunPlan(conn: WarehouseConnection, sql: string, opts: { pas
         args: ["-s", "/nolog", "@{{WRAPPER}}"],
         env: conn.walletDir ? { TNS_ADMIN: conn.walletDir, ...conn.env } : conn.env,
         scripts: [
-          { name: "consulta.sql", content: sql },
+          // Terminador OBRIGATÓRIO no Oracle: um `@script` sem `;`/`/` final NÃO executa o buffer (sai 0
+          // sem rodar nada — e a paridade dava falso "OK"). Só adiciona se faltar (um `;`/`/` já presente
+          // significa que executou — reexecutar duplicaria escritas). Achado da revisão adversarial.
+          { name: "consulta.sql", content: oracleTerminate(sql) },
           { name: "wrapper.sql", content: wrapper },
         ],
         display: `${tool} -s ${connect} @consulta.sql`,
@@ -104,8 +117,11 @@ export function buildRunPlan(conn: WarehouseConnection, sql: string, opts: { pas
 }
 
 // Dry-run de CUSTO antes de executar (Onda 3): BigQuery estima bytes escaneados sem rodar;
-// Oracle/Postgres mostram o plano (EXPLAIN) — leitura de metadados, nunca os dados.
-export function buildCostPlan(conn: WarehouseConnection, sql: string, opts: { password?: string }): CliPlan | PlanError {
+// Oracle/Postgres/DuckDB mostram o plano (EXPLAIN) — leitura de metadados, nunca os dados. Para os
+// dialetos que PREFIXAM EXPLAIN, exige statement ÚNICO: com `SELECT 1; DELETE t`, o EXPLAIN cobriria só
+// o 1º e o segundo EXECUTARIA (achado crítico da revisão). O --dry_run do BigQuery é seguro por natureza.
+export function buildCostPlan(conn: WarehouseConnection, sql: string, opts: { password?: string; statementCount?: number }): CliPlan | PlanError {
+  const multi = (opts.statementCount ?? 1) > 1;
   switch (conn.kind) {
     case "bigquery":
       return {
@@ -116,15 +132,18 @@ export function buildCostPlan(conn: WarehouseConnection, sql: string, opts: { pa
         display: "bq query --dry_run",
       };
     case "postgres": {
-      const plan = buildRunPlan(conn, `EXPLAIN ${sql}`, { password: opts.password, rowCap: 500 });
+      if (multi) return { error: "Prévia de custo aceita só UM statement — selecione apenas o SELECT que quer estimar." };
+      const plan = buildRunPlan(conn, `EXPLAIN ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 500 });
       return isPlanError(plan) ? plan : { ...plan, display: plan.display.replace("consulta.sql", "explain.sql") };
     }
     case "oracle": {
+      if (multi) return { error: "Prévia de custo aceita só UM statement — selecione apenas o SELECT que quer estimar." };
       const wrapped = `EXPLAIN PLAN FOR\n${sql.replace(/;\s*$/, "")};\nSELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY());`;
       return buildRunPlan(conn, wrapped, { password: opts.password, rowCap: 500 });
     }
     case "duckdb":
-      return buildRunPlan(conn, `EXPLAIN ${sql}`, { password: opts.password, rowCap: 500 });
+      if (multi) return { error: "Prévia de custo aceita só UM statement." };
+      return buildRunPlan(conn, `EXPLAIN ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 500 });
     default:
       return { error: "Prévia de custo não disponível para este tipo de conexão." };
   }
@@ -156,6 +175,15 @@ export function buildTestPlan(conn: WarehouseConnection, opts: { password?: stri
     default:
       return buildRunPlan(conn, "SELECT 1 AS ok", { password: opts.password, rowCap: 1 });
   }
+}
+
+// Pós-processamento COMPARTILHADO da saída de warehouse (caminho CLI e MCP): cap de linhas + máscara
+// LGPD — o mesmo contrato de SqlRunResult.output ("já capado e mascarado") num lugar só (o ramo MCP
+// deixava PII crua no chat). Metadados/agregados passam skipMask=true (mascarar corromperia os números).
+// PURO/testável (sem vscode).
+export function sanitizeWarehouseOutput(text: string, rowCap: number, skipMask = false): { output: string; truncated: boolean } {
+  const capped = capCsv(text, rowCap);
+  return { output: (skipMask ? capped.text : maskDataSample(capped.text)).slice(0, 16000), truncated: capped.truncated };
 }
 
 // Capa o CSV em N linhas de DADOS (a 1ª é cabeçalho quando houver ≥2). O rowCap protege o dev de

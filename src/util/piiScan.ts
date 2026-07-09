@@ -63,18 +63,43 @@ export function renderPiiCard(findings: PiiFinding[], tablesScanned: number): st
 
 // ---- mascaramento de amostras -------------------------------------------------------------------
 
+// Padrões de dado pessoal em amostras. Exigem PONTUAÇÃO/FORMATO plausível para NÃO engolir inteiros
+// nus (um COUNT de 8 dígitos ou um id não podem virar ▇ — a revisão adversarial mostrou máscara
+// corrompendo agregados). CPF/CNPJ/telefone só casam formatados OU com marcador de contexto; e-mail é
+// inequívoco. O caminho de AGREGADOS (paridade/inventário/custo) ainda passa skipMask, defesa dupla.
 const SAMPLE_MASKS: RegExp[] = [
-  /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, // CPF
-  /\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, // CNPJ
-  /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, // e-mail
-  /\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?9?\d{4}[-\s]?\d{4}\b/g, // telefone BR
-  /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{2,4}\b/g, // cartão
+  /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/g, // CPF formatado
+  /\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/g, // CNPJ formatado
+  /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, // e-mail (inequívoco)
+  /\+?55\s?\(?\d{2}\)?\s?9?\d{4}[-\s]\d{4}\b/g, // telefone BR com DDI/DDD e separador
+  /\(\d{2}\)\s?9?\d{4}[-\s]?\d{4}\b/g, // telefone com DDD entre parênteses
+  /\b\d{4}[\s-]\d{4}[\s-]\d{4}[\s-]\d{2,4}\b/g, // cartão com separadores
 ];
 
-// Mascara valores com CARA de dado pessoal numa amostra (CSV/texto) ANTES de exibir/anexar.
-// Conservador por natureza: melhor mascarar um número inocente que vazar um CPF no trace.
+// Colunas cujo VALOR deve ser mascarado mesmo sem formatação (CPF/telefone nus numa coluna nomeada).
+// Usado quando o CSV tem cabeçalho conhecido — casamento por posição de coluna.
+const SENSITIVE_HEADER = /\b(cpf|cnpj|rg|telefone|celular|fone|phone|cartao|card|pan|senha|password|token|email)\b/i;
+
+// Mascara valores com CARA de dado pessoal numa amostra (CSV/texto) ANTES de exibir/anexar. Além dos
+// padrões formatados, mascara a COLUNA inteira quando o cabeçalho do CSV a nomeia como sensível
+// (pega CPF/telefone nus sem falso-positivo em contagens).
 export function maskDataSample(text: string): string {
   let out = text ?? "";
   for (const re of SAMPLE_MASKS) out = out.replace(re, "▇▇▇");
+  // mascaramento por coluna: se a 1ª linha é cabeçalho e alguma coluna é sensível, apaga os valores dela
+  const lines = out.split(/\r?\n/);
+  if (lines.length >= 2 && lines[0].includes(",")) {
+    const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+    const sensitiveIdx = headers.map((h, i) => (SENSITIVE_HEADER.test(h) ? i : -1)).filter((i) => i >= 0);
+    if (sensitiveIdx.length > 0) {
+      for (let r = 1; r < lines.length; r++) {
+        if (!lines[r].includes(",")) continue;
+        const cells = lines[r].split(",");
+        for (const i of sensitiveIdx) if (i < cells.length && cells[i].trim()) cells[i] = "▇▇▇";
+        lines[r] = cells.join(",");
+      }
+      out = lines.join("\n");
+    }
+  }
   return out;
 }

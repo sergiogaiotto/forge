@@ -37,6 +37,22 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "As conexões de warehouse (forge.warehouse.connections) e o catálogo MCP definem comandos que o FORGE executa localmente. Em um workspace não confiável esses settings são ignorados até você confiar na pasta.",
+      "restrictedConfigurations": [
+        "forge.warehouse.connections",
+        "forge.warehouse.default",
+        "forge.mcp.catalog",
+        "forge.search.server",
+        "forge.search.tool",
+        "forge.run.commands",
+        "forge.test.command",
+        "forge.ocr.tesseractPath"
+      ]
+    }
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [

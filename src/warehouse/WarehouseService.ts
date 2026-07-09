@@ -5,17 +5,50 @@
 // (LGPD) a saída antes de qualquer exibição. Senha: SecretStorage, pedida uma vez por conexão.
 // Fail-open: CLI ausente vira mensagem de instalação, nunca exceção para cima.
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { SecretsStore } from "../secrets/SecretsStore";
 import { maskDataSample } from "../util/piiScan";
+import { classifySql } from "../sql/classify";
 import { decideSqlRun } from "./governance";
-import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, CliPlan, isPlanError, PlanError } from "./sqlRunners";
+import { buildCostPlan, buildRunPlan, buildTestPlan, CliPlan, isPlanError, PlanError, sanitizeWarehouseOutput } from "./sqlRunners";
 import { SqlRunResult, WarehouseConnection, WarehouseSettings } from "./types";
 
 const secretKeyFor = (connId: string) => `forge.warehouse.${connId}`;
+
+// Metacaracteres de shell PROIBIDOS em qualquer valor vindo do settings de conexão (defesa contra RCE
+// mesmo com shell:false, e contra strings de conexão malformadas). A validação roda ANTES de qualquer
+// spawn — um workspace malicioso não pode injetar comando via forge.warehouse.connections.
+const SHELL_METACHARS = /[&|;<>^`$\n\r\0]|\$\(|\|\|/;
+
+function unsafeField(v: string | undefined): boolean {
+  return typeof v === "string" && SHELL_METACHARS.test(v);
+}
+
+// Resolve o binário REAL no PATH (inclui shims .cmd/.bat/.exe do Windows) para spawnar SEM shell:true —
+// a razão de o shell existia era executar esses shims; resolvendo o caminho, o Node quota os args e
+// nenhum metacaractere é interpretado (correção do RCE crítico da revisão adversarial).
+function resolveExecutable(tool: string): string | null {
+  if (tool.includes("/") || tool.includes("\\")) return existsSync(tool) ? tool : null;
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, tool + ext.toLowerCase());
+      if (existsSync(candidate)) return candidate;
+      const upper = path.join(dir, tool + ext);
+      if (existsSync(upper)) return upper;
+    }
+  }
+  return null;
+}
+
+// Prefixo dos temp dirs deste serviço — a varredura de órfãos do startup remove os que sobrarem de um
+// crash (o wrapper Oracle contém a senha em claro; deixá-lo órfão no .forge/ do workspace é risco).
+export const WH_TMP_PREFIX = "wh-";
 
 export class WarehouseService {
   constructor(
@@ -39,9 +72,15 @@ export class WarehouseService {
   // própria (bigquery/duckdb/s3/oci — auth do CLI) retornam undefined sem prompt.
   private async passwordFor(conn: WarehouseConnection): Promise<string | undefined> {
     if (conn.kind !== "oracle" && conn.kind !== "postgres") return undefined;
-    // Postgres com senha na URI ou .pgpass, e Oracle com wallet/external auth, não precisam de prompt.
+    // Postgres com senha na URI ou .pgpass não precisa de prompt.
     if (conn.kind === "postgres" && /:[^@/:]+@/.test(conn.connect ?? "")) return undefined;
-    if (conn.kind === "oracle" && conn.walletDir) return undefined;
+    // Oracle: só é AUTH EXTERNA (sem senha) quando o usuário é vazio ou "/" antes do @ ("/@adw_high").
+    // walletDir sozinho NÃO dispensa senha — o wallet TLS do ADW ainda pede a senha do usuário do banco
+    // (achado da revisão: pular a senha gerava CONNECT sem senha e o sqlplus travava no stdin até o timeout).
+    if (conn.kind === "oracle") {
+      const user = (conn.connect ?? "").split("@")[0].trim();
+      if (user === "" || user === "/") return undefined;
+    }
     const existing = await this.secrets.get(secretKeyFor(conn.id));
     if (existing) return existing;
     const typed = await vscode.window.showInputBox({
@@ -55,44 +94,72 @@ export class WarehouseService {
     return typed;
   }
 
-  // Executa SQL com governança. `confirmed` pula o modal (chamadas já confirmadas pelo dev na UI).
-  async runSql(connId: string | undefined, sql: string, opts?: { label?: string; skipGovernance?: boolean }): Promise<SqlRunResult | { refused: string }> {
-    const conn = this.resolve(connId);
-    if (!conn) return { refused: connId ? `Conexão "${connId}" não existe — veja /conexoes.` : "Nenhuma conexão configurada (forge.warehouse.connections)." };
-
-    if (!opts?.skipGovernance) {
-      const decision = decideSqlRun(sql, conn);
-      if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
-      if (decision.verdict === "confirm") {
-        const pick = await vscode.window.showWarningMessage(
-          `FORGE · conexão "${conn.id}": ${decision.reason}`,
-          { modal: true, detail: sql.slice(0, 600) },
-          "Executar escrita"
-        );
-        if (pick !== "Executar escrita") return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
-      }
+  // Rejeita conexões cujos campos do settings contêm metacaracteres de shell (defesa contra RCE de
+  // workspace malicioso). "" = ok. Aplicado antes de QUALQUER spawn.
+  private validateConn(conn: WarehouseConnection): string | null {
+    for (const [f, v] of [["connect", conn.connect], ["tool", conn.tool], ["walletDir", conn.walletDir]] as const) {
+      if (unsafeField(v)) return `Conexão "${conn.id}": o campo \`${f}\` contém caracteres não permitidos (metacaractere de shell) — corrija forge.warehouse.connections.`;
     }
-    const plan = buildRunPlan(conn, sql, { password: await this.passwordFor(conn), rowCap: this.settings().rowCap });
-    return this.execute(conn, plan);
+    for (const s of conn.schemas ?? []) if (unsafeField(s)) return `Conexão "${conn.id}": um item de \`schemas\` contém caracteres não permitidos.`;
+    return null;
   }
 
+  // Executa SQL com governança (SELECT auto; escrita confirma; DROP/TRUNCATE/bloco nunca sem readonly:false).
+  async runSql(connId: string | undefined, sql: string, opts?: { skipMask?: boolean; rowCapOverride?: number }): Promise<SqlRunResult | { refused: string }> {
+    const conn = this.resolve(connId);
+    if (!conn) return { refused: connId ? `Conexão "${connId}" não existe — veja /conexoes.` : "Nenhuma conexão configurada (forge.warehouse.connections)." };
+    const bad = this.validateConn(conn);
+    if (bad) return { refused: bad };
+
+    const decision = decideSqlRun(sql, conn);
+    if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
+    if (decision.verdict === "confirm") {
+      const pick = await vscode.window.showWarningMessage(
+        `FORGE · conexão "${conn.id}": ${decision.reason}`,
+        { modal: true, detail: sql.slice(0, 600) },
+        "Executar escrita"
+      );
+      if (pick !== "Executar escrita") return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+    }
+    const rowCap = opts?.rowCapOverride ?? this.settings().rowCap;
+    const plan = buildRunPlan(conn, sql, { password: await this.passwordFor(conn), rowCap });
+    return this.execute(conn, plan, { rowCap, skipMask: opts?.skipMask });
+  }
+
+  // Prévia de custo (EXPLAIN/dry-run) — o card promete "sem executar", então é 100% LEITURA: só verdict
+  // "auto" e statement ÚNICO passam (achado crítico da revisão: costPreview pulava a governança e o
+  // EXPLAIN de Oracle/PG/DuckDB cobre só o 1º statement — os finais EXECUTAVAM de verdade).
   async costPreview(connId: string | undefined, sql: string): Promise<SqlRunResult | { refused: string }> {
     const conn = this.resolve(connId);
     if (!conn) return { refused: "Nenhuma conexão configurada." };
-    const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn) });
-    return this.execute(conn, plan);
+    const bad = this.validateConn(conn);
+    if (bad) return { refused: bad };
+    const decision = decideSqlRun(sql, conn);
+    if (decision.verdict !== "auto") {
+      return { refused: `⛔ Prévia de custo é somente leitura — a consulta contém escrita ou statement não confirmado (${decision.reason}). Rode só o SELECT que quer estimar.` };
+    }
+    const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn), statementCount: classifySql(sql).length });
+    return this.execute(conn, plan, { rowCap: 500 });
   }
 
   async testConnection(conn: WarehouseConnection): Promise<SqlRunResult | { refused: string }> {
+    const bad = this.validateConn(conn);
+    if (bad) return { refused: bad };
     const plan = buildTestPlan(conn, { password: await this.passwordFor(conn) });
-    return this.execute(conn, plan);
+    return this.execute(conn, plan, { rowCap: 5 });
   }
 
-  private async execute(conn: WarehouseConnection, plan: CliPlan | PlanError): Promise<SqlRunResult | { refused: string }> {
+  private async execute(conn: WarehouseConnection, plan: CliPlan | PlanError, opts: { rowCap: number; skipMask?: boolean }): Promise<SqlRunResult | { refused: string }> {
     if (isPlanError(plan)) return { refused: plan.error };
+    const toolPath = resolveExecutable(plan.tool);
+    if (!toolPath) {
+      return { refused: `A ferramenta \`${plan.tool}\` não está no PATH. Instale-a (${installHint(plan.tool)}) — o FORGE usa o CLI que você já usa, sem driver embutido.` };
+    }
+    // Wrapper Oracle (contém a senha em claro) e consulta ficam num temp SÓ do serviço, prefixo wh-,
+    // com .gitignore. A varredura de órfãos no startup (sweepWarehouseTemp) limpa o que sobrar de crash.
     const baseDir = this.workspaceRoot() ? path.join(this.workspaceRoot()!, ".forge") : os.tmpdir();
     await fs.mkdir(baseDir, { recursive: true });
-    const tmpDir = await fs.mkdtemp(path.join(baseDir, "wh-"));
+    const tmpDir = await fs.mkdtemp(path.join(baseDir, WH_TMP_PREFIX));
     await fs.writeFile(path.join(tmpDir, ".gitignore"), "*\n", "utf8");
     const started = Date.now();
     try {
@@ -111,35 +178,32 @@ export class WarehouseService {
       const timeoutMs = this.settings().timeoutSeconds * 1000;
 
       const raw = await new Promise<{ code: number | null; out: string }>((resolve) => {
+        // shell:FALSE (mesmo no Windows): o binário já foi resolvido a caminho absoluto (inclui shims
+        // .cmd/.bat), então o Node quota os args e NENHUM metacaractere de shell é interpretado — a
+        // razão de o shell existir some, e o RCE via settings de conexão fecha (revisão adversarial).
         const child = execFile(
-          plan.tool,
+          toolPath,
           args,
-          { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...plan.env }, cwd: tmpDir, shell: process.platform === "win32" },
+          { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...plan.env }, cwd: tmpDir },
           (err, stdout, stderr) => {
-            if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-              resolve({ code: null, out: `__ENOENT__${plan.tool}` });
-              return;
-            }
             const code = err ? ((err as { code?: number }).code as number | null) ?? 1 : 0;
             resolve({ code: typeof code === "number" ? code : 1, out: `${stdout ?? ""}\n${stderr ?? ""}`.trim() });
           }
         );
-        if (plan.stdin !== undefined) {
-          child.stdin?.write(plan.stdin);
-          child.stdin?.end();
-        }
+        // stdin fechado sempre: comandos como sqlplus/psql que esperam entrada não travam até o timeout.
+        if (plan.stdin !== undefined) child.stdin?.write(plan.stdin);
+        child.stdin?.end();
       });
 
-      if (raw.out.startsWith("__ENOENT__")) {
-        const tool = raw.out.slice("__ENOENT__".length);
-        return { refused: `A ferramenta \`${tool}\` não está no PATH. Instale-a (${installHint(tool)}) — o FORGE usa o CLI que você já usa, sem driver embutido.` };
-      }
-      const capped = capCsv(raw.out, this.settings().rowCap);
+      // skipMask: consultas de METADADOS/AGREGADOS (inventário de schema, perfil de paridade, custo) —
+      // o resultado não tem PII por construção (tabela,coluna,tipo / COUNT), e mascarar CORROMPE os
+      // números (um count de 8 dígitos virava ▇ e a paridade dava falso "OK") — achado da revisão.
+      const { output, truncated } = sanitizeWarehouseOutput(raw.out, opts.rowCap, opts.skipMask);
       return {
         ok: raw.code === 0,
         exitCode: raw.code,
-        output: maskDataSample(capped.text).slice(0, 16000),
-        truncated: capped.truncated,
+        output,
+        truncated,
         durationMs: Date.now() - started,
         command: plan.display,
       };

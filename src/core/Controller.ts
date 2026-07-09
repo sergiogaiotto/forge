@@ -82,7 +82,7 @@ import { stripJinja } from "../sql/jinja";
 import { renderLineage, selectLineage } from "../sql/lineage";
 import { WarehouseService } from "../warehouse/WarehouseService";
 import { decideSqlRun } from "../warehouse/governance";
-import { renderResultCard } from "../warehouse/sqlRunners";
+import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -357,8 +357,9 @@ export class Controller {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   }
 
-  // Remove diretórios de validação órfãos (.forge/val-*) deixados por um host encerrado antes do
-  // finally do SkillValidator — restaura o auto-limpeza que o os.tmpdir dava de graça. Best-effort.
+  // Remove temp dirs órfãos deixados por um host encerrado antes do finally: `.forge/val-*` (validação)
+  // e `.forge/wh-*` (warehouse — o wrapper Oracle contém a senha em claro, então limpar é questão de
+  // segurança, não só higiene). Restaura o auto-limpeza que o os.tmpdir dava de graça. Best-effort.
   private async sweepValidatorTemp(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) return;
@@ -367,7 +368,7 @@ export class Controller {
       const entries = await fs.readdir(dir);
       await Promise.all(
         entries
-          .filter((e) => e.startsWith("val-"))
+          .filter((e) => e.startsWith("val-") || e.startsWith("wh-"))
           .map((e) => fs.rm(path.join(dir, e), { recursive: true, force: true }).catch(() => undefined))
       );
     } catch {
@@ -2970,7 +2971,9 @@ export class Controller {
 
   // Executa SQL numa conexão respeitando a governança do MOTOR nos DOIS caminhos: CLI tradicional
   // (WarehouseService) e MCP (catálogo do admin — que ainda passa pelo ToolApprovalGate próprio).
-  private async runOnConnection(conn: WarehouseConnection, sql: string): Promise<SqlRunResult | { refused: string }> {
+  // `internal` (metadados/agregados: schema-db, paridade, custo) pula a máscara LGPD (corromperia os
+  // números — count de 8 dígitos virava ▇) e eleva o cap de linhas.
+  private async runOnConnection(conn: WarehouseConnection, sql: string, internal?: { skipMask?: boolean; rowCapOverride?: number }): Promise<SqlRunResult | { refused: string }> {
     if (conn.mcp) {
       const decision = decideSqlRun(sql, conn);
       if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
@@ -2980,9 +2983,12 @@ export class Controller {
       }
       const started = Date.now();
       const r = await this.mcp.callTool(conn.mcp.server, conn.mcp.tool, { [conn.mcp.sqlArg]: sql });
-      return { ok: r.ok, exitCode: r.ok ? 0 : 1, output: r.content.slice(0, 16000), truncated: false, durationMs: Date.now() - started, command: `mcp:${conn.mcp.server}/${conn.mcp.tool}` };
+      // MESMO pós-processamento do caminho CLI: cap de linhas + máscara LGPD (o ramo MCP deixava PII
+      // crua no chat apesar do rodapé "valores mascarados" — achado da revisão adversarial).
+      const { output, truncated } = sanitizeWarehouseOutput(r.content, internal?.rowCapOverride ?? this.config.warehouse().rowCap, internal?.skipMask);
+      return { ok: r.ok, exitCode: r.ok ? 0 : 1, output, truncated, durationMs: Date.now() - started, command: `mcp:${conn.mcp.server}/${conn.mcp.tool}` };
     }
-    return this.warehouse().runSql(conn.id, sql);
+    return this.warehouse().runSql(conn.id, sql, internal);
   }
 
   private dataCard(markdown: string): void {
@@ -3066,7 +3072,7 @@ export class Controller {
             this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n${inv.error}`);
             return;
           }
-          const r = await this.runOnConnection(conn, inv);
+          const r = await this.runOnConnection(conn, inv, { skipMask: true, rowCapOverride: 50000 });
           if ("refused" in r || !r.ok) {
             this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n${"refused" in r ? r.refused : "Falha no inventário:\n```\n" + r.output.slice(0, 1200) + "\n```"}`);
             return;
@@ -3095,7 +3101,7 @@ export class Controller {
             const conn = this.warehouse().resolve(s.conn || undefined);
             if (!conn) return { error: `Conexão ${s.conn ? `\`${s.conn}\`` : "default"} não existe.` };
             const cols = index?.findTable(s.table)?.columns.map((c) => c.name) ?? [];
-            const r = await this.runOnConnection(conn, profileSql(conn.kind, s.table, cols));
+            const r = await this.runOnConnection(conn, profileSql(conn.kind, s.table, cols), { skipMask: true, rowCapOverride: 5000 });
             if ("refused" in r) return { error: r.refused };
             if (!r.ok) return { error: `Perfil de \`${s.table}\` falhou:\n\`\`\`\n${r.output.slice(0, 800)}\n\`\`\`` };
             return { profile: parseProfileCsv(r.output) };

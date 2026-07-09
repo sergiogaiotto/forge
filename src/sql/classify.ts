@@ -16,6 +16,7 @@ export type StatementKind =
   | "drop"
   | "truncate"
   | "grant"
+  | "block" // bloco PL/SQL / execução dinâmica (BEGIN/DECLARE/CALL/EXEC/DO) — sempre tratado como escrita
   | "other";
 
 export interface SqlStatement {
@@ -46,9 +47,19 @@ const KIND_RE: Record<string, StatementKind> = {
   truncate: "truncate",
   grant: "grant",
   revoke: "grant",
+  // Blocos procedurais / execução dinâmica: podem esconder QUALQUER escrita (EXECUTE IMMEDIATE, CALL de
+  // procedure). Classificados como "block" e tratados como ESCRITA — a governança nunca os libera como
+  // leitura (achado crítico da revisão: BEGIN/CALL/EXEC/DO viravam "other" e rodavam com verdict auto).
+  begin: "block",
+  declare: "block",
+  call: "block",
+  exec: "block",
+  execute: "block",
+  do: "block",
+  merge_into: "merge",
 };
 
-const WRITE_KINDS = new Set<StatementKind>(["insert", "update", "delete", "merge", "create", "alter", "drop", "truncate", "grant"]);
+const WRITE_KINDS = new Set<StatementKind>(["insert", "update", "delete", "merge", "create", "alter", "drop", "truncate", "grant", "block"]);
 
 // Palavras que NUNCA são alias de tabela (aparecem logo após o nome da tabela).
 const NOT_ALIAS = new Set([
@@ -70,34 +81,42 @@ export function normIdent(raw: string): string {
     .join(".");
 }
 
-// Extrai os nomes das CTEs de um `WITH a AS (…), b AS (…)` no nível 0 do statement.
-function collectCtes(stripped: string, d: Int32Array): { names: string[]; bodyEnd: number } {
+// Extrai os nomes das CTEs de um `WITH a AS (…), b AS (…)` no nível 0 do statement, E os KINDS dos
+// corpos: data-modifying CTEs (`WITH d AS (DELETE … RETURNING …) SELECT …`, válido em Postgres/Oracle
+// 21c+) escondem escrita atrás de um SELECT externo — o classificador precisa vê-las, senão a
+// governança de execução as trata como leitura (achado crítico da revisão adversarial).
+function collectCtes(stripped: string, d: Int32Array): { names: string[]; bodyEnd: number; bodyKinds: StatementKind[] } {
   const names: string[] = [];
+  const bodyKinds: StatementKind[] = [];
   // Tolera placeholders `__jinja__` sobrando de macros no TOPO do modelo dbt antes do WITH.
   const withM = /^\s*(?:__jinja__\s*)*WITH\b(\s+RECURSIVE\b)?/i.exec(stripped);
-  if (!withM) return { names, bodyEnd: 0 };
+  if (!withM) return { names, bodyEnd: 0, bodyKinds };
   let i = withM[0].length;
   while (i < stripped.length) {
     const rest = stripped.slice(i);
-    const m = /^\s*([A-Za-z_][\w$]*|"[^"]+")\s*(\([^)]*\))?\s*AS\s*\(/i.exec(rest);
+    const m = /^\s*([A-Za-z_][\w$]*|"[^"]+")\s*(\([^)]*\))?\s*AS\s*(?:NOT\s+)?(?:MATERIALIZED\s+)?\(/i.exec(rest);
     if (!m) break;
     names.push(normIdent(m[1]));
     // pula até o `)` que fecha o corpo desta CTE (profundidade volta ao nível do WITH)
     let j = i + m[0].length; // primeiro char DENTRO do parêntese do corpo
     const openDepth = d[i + m[0].length - 1]; // profundidade do próprio '('
+    const bodyStart = j;
     while (j < stripped.length) {
       if (stripped[j] === ")" && d[j] === openDepth) break;
       j++;
     }
+    // verbo líder do corpo (pula WITH aninhado/__jinja__/parêntese de subquery) → kind da CTE
+    const bodyVerb = /^\s*(?:__jinja__\s*|\(\s*)*([A-Za-z]+)/.exec(stripped.slice(bodyStart, j));
+    bodyKinds.push(bodyVerb ? (KIND_RE[bodyVerb[1].toLowerCase()] ?? "other") : "other");
     j++; // após o ')'
     const after = /^\s*,/.exec(stripped.slice(j));
     if (after) {
       i = j + after[0].length;
       continue;
     }
-    return { names, bodyEnd: j };
+    return { names, bodyEnd: j, bodyKinds };
   }
-  return { names, bodyEnd: i };
+  return { names, bodyEnd: i, bodyKinds };
 }
 
 // Keywords que introduzem subquery quando precedem `(` — o mesmo critério da regra de ORDER BY.
@@ -210,11 +229,15 @@ export function classifySql(content: string): SqlStatement[] {
     const st = stripped.slice(s.start, s.end);
     const orig = (content ?? "").slice(s.start, s.end);
     const d = depthMap(st);
-    const { names: ctes, bodyEnd } = collectCtes(st, d);
+    const { names: ctes, bodyEnd, bodyKinds } = collectCtes(st, d);
     const afterWith = st.slice(bodyEnd);
     const isWith = ctes.length > 0 || /^\s*(?:__jinja__\s*)*WITH\b/i.test(st);
     const kindM = /^\s*(?:__jinja__\s*)*([A-Za-z]+)/.exec(isWith ? afterWith : st);
-    const kind: StatementKind = kindM ? (KIND_RE[kindM[1].toLowerCase()] ?? "other") : "other";
+    const outerKind: StatementKind = kindM ? (KIND_RE[kindM[1].toLowerCase()] ?? "other") : "other";
+    // Uma data-modifying CTE torna o statement uma ESCRITA mesmo que o SELECT externo o mascare. O
+    // `kind` reportado prioriza o verbo mais "forte" para o rótulo do modal e da auditoria.
+    const writeCte = bodyKinds.find((k) => WRITE_KINDS.has(k));
+    const kind: StatementKind = WRITE_KINDS.has(outerKind) ? outerKind : (writeCte ?? outerKind);
     const cteSet = new Set(ctes);
     const { tables, aliases } = collectTables(st, d, cteSet);
     let hasTopLevelWhere = false;
@@ -232,7 +255,7 @@ export function classifySql(content: string): SqlStatement[] {
       stripped: st,
       original: orig,
       write: WRITE_KINDS.has(kind),
-      destructive: kind === "drop" || kind === "truncate",
+      destructive: kind === "drop" || kind === "truncate" || bodyKinds.includes("drop") || bodyKinds.includes("truncate"),
       hasTopLevelWhere,
       tables,
       ctes,

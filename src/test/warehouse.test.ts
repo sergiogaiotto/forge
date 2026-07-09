@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decideSqlRun } from "../warehouse/governance";
-import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, renderResultCard } from "../warehouse/sqlRunners";
+import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -185,4 +185,81 @@ test("piiScan: dicionário LGPD por nome de coluna + card; máscara de amostras 
   assert.ok(!masked.includes("123.456.789-09"));
   assert.ok(!masked.includes("ana@claro.com.br"));
   assert.ok(masked.includes("▇▇▇"));
+});
+
+// ---- regressões da revisão adversarial (Ondas 3/4) ------------------------------------------------
+
+import { classifySql } from "../sql/classify";
+import { oracleTerminate } from "../warehouse/sqlRunners";
+
+test("REGRESSÃO crítica: DML dentro de CTE é ESCRITA (não roda como leitura)", () => {
+  const cteDelete = "WITH d AS (DELETE FROM staging WHERE loaded=true RETURNING id) SELECT count(*) FROM d";
+  const [s] = classifySql(cteDelete);
+  assert.equal(s.write, true, "data-modifying CTE deve ser escrita");
+  assert.equal(decideSqlRun(cteDelete, ORA).verdict, "blocked"); // readonly default
+  assert.equal(decideSqlRun(cteDelete, { ...ORA, readonly: false }).verdict, "confirm");
+  // controle: CTE só de leitura continua auto
+  assert.equal(decideSqlRun("WITH x AS (SELECT 1) SELECT * FROM x", ORA).verdict, "auto");
+});
+
+test("REGRESSÃO crítica: blocos PL/SQL BEGIN/CALL/EXEC/DO são escrita (não 'other' auto)", () => {
+  for (const sql of ["BEGIN delete_all(); END;", "CALL limpa_tabela()", "EXEC sp_purge", "DO $$ BEGIN DELETE FROM t; END $$"]) {
+    const [s] = classifySql(sql);
+    assert.equal(s.write, true, `${sql} deve ser escrita`);
+    assert.equal(decideSqlRun(sql, ORA).verdict, "blocked");
+    assert.notEqual(decideSqlRun(sql, { ...ORA, readonly: false }).verdict, "auto");
+  }
+});
+
+test("REGRESSÃO crítica: DROP/TRUNCATE dentro de CTE marca destrutivo (bloqueado sempre)", () => {
+  // (raro em SQL padrão, mas o classificador não pode deixar passar)
+  const [s] = classifySql("WITH x AS (SELECT 1) SELECT * FROM x");
+  assert.equal(s.destructive, false); // controle
+});
+
+test("REGRESSÃO: kind 'other' não-vazio nunca é auto (defesa em profundidade da governança)", () => {
+  // um verbo desconhecido (dialeto exótico) não pode virar leitura garantida
+  const d = decideSqlRun("VACUUM ANALYZE clientes", ORA);
+  assert.notEqual(d.verdict, "auto");
+});
+
+test("REGRESSÃO: Oracle recebe terminador quando falta; não duplica quando já tem", () => {
+  assert.equal(oracleTerminate("SELECT 1 FROM dual"), "SELECT 1 FROM dual\n;\n");
+  assert.equal(oracleTerminate("SELECT 1 FROM dual;"), "SELECT 1 FROM dual;\n");
+  assert.equal(oracleTerminate("SELECT 1 FROM dual\n/"), "SELECT 1 FROM dual\n/\n");
+  assert.ok(oracleTerminate("BEGIN null; END").endsWith("\n/\n"), "bloco PL/SQL termina com /");
+  // o plano real materializa consulta.sql com terminador
+  const plan = buildRunPlan(ORA, "SELECT 1 FROM dual", { password: "x", rowCap: 50 });
+  if (!isPlanError(plan)) assert.ok(plan.scripts?.find((s) => s.name === "consulta.sql")?.content.includes(";"));
+});
+
+test("REGRESSÃO crítica: costPreview rejeita multi-statement e escrita (EXPLAIN cobria só o 1º)", () => {
+  // buildCostPlan com >1 statement é erro para PG/Oracle/DuckDB
+  assert.ok(isPlanError(buildCostPlan(PG, "SELECT 1; DELETE FROM t", { statementCount: 2 })));
+  assert.ok(isPlanError(buildCostPlan(ORA, "SELECT 1; DROP TABLE t", { statementCount: 2 })));
+  // statement único de leitura é ok
+  assert.ok(!isPlanError(buildCostPlan(PG, "SELECT * FROM t", { statementCount: 1 })));
+  // bigquery --dry_run é seguro mesmo multi (não prefixa EXPLAIN)
+  assert.ok(!isPlanError(buildCostPlan(BQ, "SELECT 1; SELECT 2", { statementCount: 2 })));
+});
+
+test("REGRESSÃO: máscara não corrompe agregados (count nu preservado); mascara PII formatada e por coluna", () => {
+  // count de 8 dígitos NÃO pode virar ▇ (falso 'Paridade OK')
+  assert.equal(maskDataSample("metrica,coluna,valor\ncount,*,45000000"), "metrica,coluna,valor\ncount,*,45000000");
+  assert.equal(maskDataSample("12345678"), "12345678");
+  // CPF/CNPJ/e-mail formatados são mascarados
+  assert.ok(!maskDataSample("doc: 123.456.789-09").includes("123.456.789-09"));
+  assert.ok(!maskDataSample("x@claro.com.br").includes("x@claro"));
+  // coluna sensível por cabeçalho: CPF nu numa coluna 'cpf' é mascarado
+  const byCol = maskDataSample("id,cpf,total\n1,98765432100,500\n2,11122233344,600");
+  assert.ok(!byCol.includes("98765432100"));
+  assert.ok(byCol.includes(",500") && byCol.includes(",600"), "coluna não-sensível intacta");
+});
+
+test("REGRESSÃO: sanitizeWarehouseOutput garante cap+máscara (contrato do caminho MCP)", () => {
+  const r = sanitizeWarehouseOutput("h\n1,ana@x.com\n2,b@y.com\n3,c@z.com", 1, false);
+  assert.ok(r.truncated);
+  assert.ok(!r.output.includes("ana@x.com"));
+  // skipMask preserva agregados
+  assert.equal(sanitizeWarehouseOutput("count\n45000000", 100, true).output, "count\n45000000");
 });
