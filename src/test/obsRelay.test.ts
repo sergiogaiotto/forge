@@ -61,9 +61,21 @@ test("RoutingObsSink: enqueue vai para o sink do modo; off descarta; flush drena
   assert.equal(direct.events.length, 1, "off não enfileira");
   assert.equal(gateway.events.length, 1);
 
+  // num modo ATIVO, flush drena os dois (não perde resíduo de uma troca direct↔gateway)
+  mode = "gateway";
   await r.flush();
   assert.equal(direct.flushed, 1);
   assert.equal(gateway.flushed, 1, "flush drena os dois (resíduo de troca de modo)");
+});
+
+test("REGRESSÃO: modo 'off' NÃO drena o resíduo bufferizado ('off = nada sai')", async () => {
+  const direct = new SpySink();
+  const gateway = new SpySink();
+  let mode: ObsMode = "off";
+  const r = new RoutingObsSink(() => mode, direct, gateway);
+  await r.flush();
+  assert.equal(direct.flushed, 0, "off retém o resíduo (simétrico ao LangfuseDirectSink)");
+  assert.equal(gateway.flushed, 0);
 });
 
 // ---- GatewayRelaySink ----

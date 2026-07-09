@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRevocationChecker } from "./revocations.mjs";
+import { processRelayBatch } from "./obsRelay.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, ".env"));
@@ -245,9 +246,10 @@ async function handleRenew(req, res, reqId) {
 }
 
 // Relay governado de observabilidade: o cliente (GatewayRelaySink) envia eventos de WORKFLOW já no
-// formato de ingestão do Langfuse; o gateway valida a sessão (+ revogação) e os encaminha com a
-// secretKey SERVER-SIDE — fechando o gap de a secret viver no cliente. Fail-open: sem Langfuse
-// habilitado, aceita e descarta (o cliente não precisa saber). Respeita amostragem/teto da fila.
+// formato de ingestão do Langfuse; o gateway valida a sessão (+ revogação), e — via processRelayBatch —
+// CARIMBA a identidade da sessão, aplica a captura/amostragem do ADMIN (não confia no cliente) e
+// encaminha com a secretKey SERVER-SIDE. Fecha o gap de a secret viver no cliente E o de a governança
+// de captura/identidade/amostragem depender do cliente. Fail-open: sem Langfuse, aceita e descarta.
 async function handleObsIngest(req, res, reqId) {
   const token = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
   const session = sessions.get(token);
@@ -261,22 +263,24 @@ async function handleObsIngest(req, res, reqId) {
   if (rateLimited("obs:" + token)) return send(res, 429, { error: "rate limited" });
   const lf = CFG.langfuse;
   const body = JSON.parse((await readBody(req, 4_000_000)) || "{}");
-  const batch = Array.isArray(body.batch) ? body.batch : [];
-  // Sem Langfuse habilitado/sample-out, aceita silenciosamente (o cliente é fail-open e não deve travar).
   if (!lf.enabled || !lf.secretKey) return send(res, 202, { accepted: 0 });
-  let accepted = 0;
-  for (const e of batch) {
-    if (!e || typeof e !== "object") continue;
-    if (Math.random() > lf.sampleRate) continue; // amostragem governada pelo Admin (server-side)
+
+  const { events, total, dropped } = processRelayBatch(body.batch, {
+    capture: lf.capture,
+    mask,
+    environment: lf.environment,
+    session,
+    sampleRate: lf.sampleRate,
+  });
+  for (const e of events) {
     if (traceQueue.length >= lf.queueMax) {
       traceQueue.shift();
       droppedTraces++;
     }
     traceQueue.push(e);
-    accepted++;
   }
-  logLine("info", "obs relay recebido", { reqId, org: session.org, eventos: batch.length, aceitos: accepted });
-  send(res, 202, { accepted });
+  logLine("info", "obs relay recebido", { reqId, org: session.org, eventos: total, aceitos: events.length, capados: dropped });
+  send(res, 202, { accepted: events.length });
 }
 
 async function handleProxy(req, res, reqId) {
