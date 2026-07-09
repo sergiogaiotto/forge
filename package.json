@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, perfil de projeto, quality gates, licença Ed25519, observabilidade e MCP in-network.",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -331,7 +331,11 @@
         },
         "forge.gate.security": {
           "type": "string",
-          "enum": ["conservative", "advisory", "off"],
+          "enum": [
+            "conservative",
+            "advisory",
+            "off"
+          ],
           "enumDescriptions": [
             "Só achados de severidade ALTA E confiança ALTA do bandit bloqueiam o Aplicar; o resto é advisory (padrão).",
             "Roda o bandit e mostra os achados, mas NUNCA bloqueia o Aplicar.",
@@ -342,7 +346,11 @@
         },
         "forge.gate.sql": {
           "type": "string",
-          "enum": ["conservative", "advisory", "off"],
+          "enum": [
+            "conservative",
+            "advisory",
+            "off"
+          ],
           "enumDescriptions": [
             "Só achados de SEGURANÇA do SQL (DELETE/UPDATE sem WHERE, DROP/TRUNCATE, produto cartesiano) bloqueiam o Aplicar; anti-padrões e schema (dbt) são advisory (padrão).",
             "Analisa e mostra os achados no cartão da proposta, mas NUNCA bloqueia o Aplicar.",
