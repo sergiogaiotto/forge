@@ -35,6 +35,30 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ["sumario-projeto", "summary"],
     acceptsArgs: true, // aceita a forma completa "/sumário projeto" (a cauda é ignorada)
   },
+  {
+    id: "impacto",
+    label: "/impacto",
+    hint: "Raio de explosão da mudança (lineage do manifest dbt: downstream, testes, exposures)",
+    icon: "network",
+    aliases: ["impact", "blast"],
+    acceptsArgs: true, // cauda = nome do modelo; sem cauda usa o arquivo ativo
+  },
+  {
+    id: "traduzir-sql",
+    label: "/traduzir-sql",
+    hint: "Traduz o SQL do arquivo ativo para outro dialeto (proposta .sql validada pelo motor)",
+    icon: "git-compare",
+    aliases: ["translate-sql", "traduzir"],
+    acceptsArgs: true, // cauda = dialeto alvo (bigquery, snowflake, postgres, spark, oracle…)
+  },
+  {
+    id: "testes-dbt",
+    label: "/testes-dbt",
+    hint: "Gera testes dbt (schema.yml) para um modelo, com as colunas REAIS do manifest",
+    icon: "list-check",
+    aliases: ["dbt-tests", "testes-modelo"],
+    acceptsArgs: true, // cauda = nome do modelo; sem cauda usa o arquivo ativo
+  },
 ];
 
 // Normalização para matching: minúsculas + remoção de diacríticos (á→a, ç→c) — o dev digita
@@ -121,6 +145,54 @@ export function buildProjectSummaryRequest(todayIso: string = new Date().toISOSt
     `12. **Histórico de Revisões** — tabela iniciada com a versão 1.0 (data ${todayIso}, autor FORGE).`,
     "Seja FIEL ao código: cite caminhos reais, não invente funcionalidades. Seções sem evidência no código",
     "devem dizer 'não identificado no código' em vez de especular. NÃO gere nenhum outro arquivo.",
+  ].join("\n");
+}
+
+// Dialetos que o /traduzir-sql aceita como alvo (validação leve client-side; o motor SQL do host
+// valida o RESULTADO da tradução como qualquer proposta .sql).
+export const SQL_DIALECTS = [
+  "postgres", "mysql", "bigquery", "snowflake", "redshift", "oracle", "sqlserver", "tsql",
+  "spark", "databricks", "duckdb", "trino", "hive", "sqlite",
+];
+
+// Prompt do /traduzir-sql <dialeto>: tradução com PRESERVAÇÃO SEMÂNTICA explícita (o padrão CAN/CANNOT
+// das skills de dados) — na dúvida o modelo mantém e avisa, nunca "otimiza" mudando resultado. A saída
+// é proposta .sql normal: o motor SQL determinístico do host a valida (parse, anti-padrões, schema).
+export function buildSqlTranslateRequest(dialect: string): string {
+  const d = dialect.trim().toLowerCase();
+  return [
+    `Traduza o SQL do ARQUIVO ATIVO (fornecido no contexto como "Arquivo aberto") para o dialeto ${d.toUpperCase()}.`,
+    "Regras INEGOCIÁVEIS de preservação semântica:",
+    "1. O resultado deve retornar EXATAMENTE as mesmas linhas/colunas — traduza sintaxe, NUNCA \"otimize\" a lógica;",
+    "2. Funções sem equivalente direto: use a construção idiomática do dialeto alvo e ADICIONE um comentário `-- TRADUÇÃO:` explicando a troca;",
+    "3. Se algum trecho NÃO tem tradução segura (semântica pode mudar), mantenha o original nesse trecho com um comentário `-- REVISAR:` — não invente;",
+    "4. Preserve nomes de tabelas/colunas e a formatação geral (CTEs continuam CTEs).",
+    `Produza UM único bloco forge-file com o arquivo traduzido ao lado do original: mesmo diretório, sufixo .${d}.sql`,
+    "(ex.: consultas/relatorio.sql → consultas/relatorio." + d + ".sql). NÃO modifique o arquivo original.",
+    "Após o bloco, liste em 2-4 bullets o que mudou de sintaxe e qualquer `-- REVISAR:` pendente.",
+  ].join("\n");
+}
+
+// Prompt do /testes-dbt [modelo]: gera/estende o schema.yml com a taxonomia coluna→teste, ancorado nas
+// colunas REAIS (o host injeta o "Schema real do projeto dbt" no contexto — o prompt PROÍBE inventar).
+export function buildDbtTestsRequest(model: string): string {
+  const alvo = model.trim()
+    ? `o modelo dbt \`${model.trim()}\``
+    : "o modelo dbt do ARQUIVO ATIVO (fornecido no contexto como \"Arquivo aberto\")";
+  return [
+    `Gere os TESTES dbt (schema.yml) para ${alvo}.`,
+    "Use SOMENTE as colunas do bloco \"Schema real do projeto dbt\" do contexto — se o bloco não tiver o modelo,",
+    "diga isso e PARE (peça para rodar `dbt parse`); NUNCA invente nomes de coluna.",
+    "Taxonomia (aplique o que couber, coluna a coluna):",
+    "- chave primária / id único → `unique` + `not_null`;",
+    "- chave estrangeira (sufixo _id que referencia outro modelo do schema) → `not_null` + `relationships` (to: ref('<modelo>'), field: <coluna>);",
+    "- colunas de status/categoria com domínio pequeno e ÓBVIO → `accepted_values` com um comentário `# TODO: confirmar domínio com o negócio` (nunca invente valores silenciosamente);",
+    "- colunas de data/timestamp essenciais ao grain → `not_null`.",
+    "Regras: siga o ESTILO dos schema.yml já existentes no projeto (indentação, ordem, pacotes de teste em uso —",
+    "NÃO introduza dbt_utils se o projeto não o usa); todo modelo sai com pelo menos 1 teste; documente o grain",
+    "na description do modelo (uma linha, o PORQUÊ).",
+    "Produza UM único bloco forge-file com o schema.yml no MESMO diretório do modelo (se já existir um",
+    "schema.yml/models.yml lá, produza o arquivo COMPLETO atualizado com o novo modelo adicionado).",
   ].join("\n");
 }
 

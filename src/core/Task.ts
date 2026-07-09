@@ -45,6 +45,10 @@ export interface TaskDeps {
   // Chamado (Modo Projeto) assim que um bloco de arquivo FECHA no streaming — habilita o status
   // "gerando…" → "gerado" um a um no modal, em vez de tudo em lote no fim.
   onFileClosed?: (path: string) => void;
+  // Validador IN-PROCESS (Onda 1 dados): o motor SQL determinístico analisa propostas .sql (anti-padrões,
+  // segurança, schema dbt) sem spawnar processo — os resultados entram no MESMO canal dos validadores
+  // de skill (cartão, gate, Langfuse). Opcional: só o Controller o injeta quando configurado.
+  sqlAnalyzer?: (relPath: string, content: string) => Promise<ValidatorResult[]>;
   emit?: (e: ObsEvent) => void; // observabilidade (geração + workflow)
   obsMeta?: { mode: "normal" | "tdd" | "review" | "project"; model: string; provider: string; sessionId: string; userId: string; org?: string; reasoningEffort?: string; maxOutputTokens?: number; inputBudgetTokens?: number; ragMs?: number; assembleMs?: number };
 }
@@ -416,10 +420,15 @@ export class Task {
 
   private async validateProposal(proposal: DiffProposal): Promise<void> {
     const d = this.deps;
-    if (d.validators.length === 0) return;
+    const sqlApplies = !!d.sqlAnalyzer && /\.sql$/i.test(proposal.filePath);
+    if (d.validators.length === 0 && !sqlApplies) return;
     d.post({ type: "validation/result", proposalId: proposal.id, results: [], gateOk: true, running: true });
     try {
-      const results = await d.skillValidator.run(d.validators, proposal.modified, proposal.filePath);
+      const shellResults =
+        d.validators.length > 0 ? await d.skillValidator.run(d.validators, proposal.modified, proposal.filePath) : [];
+      // Motor SQL in-process (nunca lança — fail-open interno); resultados no mesmo canal do cartão.
+      const sqlResults = sqlApplies ? await d.sqlAnalyzer!(proposal.filePath, proposal.modified) : [];
+      const results = [...sqlResults, ...shellResults];
       const gateOk = gatePassed(results);
       const entry = this.proposals.get(proposal.id);
       if (entry) {

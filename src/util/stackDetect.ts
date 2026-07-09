@@ -32,6 +32,7 @@ export const STACK_PROBE_FILES = [
   ".pre-commit-config.yaml",
   "package.json",
   "tsconfig.json",
+  "dbt_project.yml",
 ];
 
 // Bibliotecas de dados/IA reconhecidas (hint de domínio para o modelo).
@@ -120,6 +121,12 @@ export function detectStack(files: Record<string, string | undefined>): Detected
   }
   for (const lib of KNOWN_NODE_LIBS) {
     if (pkg.includes(`"${lib}"`)) stack.libs.push(lib);
+  }
+
+  // Projeto dbt: o dbt_project.yml é a âncora (repos dbt puros nem sempre têm requirements.txt).
+  if (has("dbt_project.yml")) {
+    if (!stack.libs.includes("dbt")) stack.libs.unshift("dbt");
+    if (!stack.language) stack.language = "SQL (projeto dbt)";
   }
 
   return stack;

@@ -18,9 +18,27 @@ validators:
 
 # Spark Pipelines
 
+**Every shuffle you did not plan is a bill you did not approve.**
+
 Senior-level guidance for writing and tuning PySpark pipelines (batch and structured
 streaming) using the DataFrame / Spark SQL API. The goal is correct, scalable code that
 minimizes shuffles, keeps work on the executors, and degrades gracefully under skew.
+
+## Critical rules
+
+- **ALWAYS discover conventions first.** Read 2–3 existing jobs in the repo before writing one:
+  imitate session builders, config profiles, IO wrappers and naming. Do not introduce a new
+  pattern (RDDs, pandas-on-Spark, another writer) when the project already has one.
+- **ALWAYS verify with real output, not absence of errors.** The ladder: code runs → `df.explain()`
+  shows the plan you intended (no surprise shuffles/cartesian) → row counts at each stage are
+  plausible → ONE record recomputed by hand matches. Lazy evaluation means "it ran" proves little.
+- **NEVER collect to the driver as a fix.** `collect()`/`toPandas()` on big data moves the problem
+  to a smaller machine. Aggregate/sample on executors first.
+- **NEVER change partitioning/checkpointing of a production streaming job casually** — state and
+  reprocessing semantics depend on it; treat it as a migration with a plan.
+- **Three-failure rule.** If a stage fails 3+ times (OOM/skew/timeout), stop tweaking one config
+  at a time: read the Spark UI for the REAL bottleneck (skewed key? spill? tiny files?) and fix
+  the cause, not the symptom.
 
 ## When to use
 

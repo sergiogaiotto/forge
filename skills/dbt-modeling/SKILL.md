@@ -17,10 +17,35 @@ templates:
 
 # dbt-modeling
 
+**Read before you write. Build after you write. Verify the output — compiling is not success.**
+
 Senior-level guidance for designing, building and reviewing dbt projects. The goal is a
 clean, layered, testable warehouse: raw sources are isolated, transformations are explicit,
 and costly operations (full table scans, full refreshes) are deliberate rather than
 accidental.
+
+## Critical rules
+
+- **ALWAYS discover conventions first.** Before writing any model, read `dbt_project.yml` and
+  2–3 existing models + their `schema.yml` in the target layer. Imitate the project's naming,
+  YAML style, test depth and packages in use (do NOT introduce `dbt_utils` if the project does
+  not already use it). Misaligned conventions are the #1 review rejection.
+- **ALWAYS state the grain.** Every model starts by answering "one row per what?" — put it in
+  the model's `description`. If you cannot state the grain, you are not ready to write SQL.
+- **NEVER declare success after compile.** The verification ladder is: compile (syntax) →
+  `dbt build --select <model>` (runs model AND its tests) → `dbt show --select <model> --limit 5`
+  (output exists and looks right) → recalculate ONE row by hand against the source → re-read
+  the original request ("did I solve the real problem or just make the error go away?").
+- **NEVER invent table or column names.** Use the "Schema real do projeto dbt" block from the
+  context when present; if a column you need is not there, say so instead of guessing.
+- **Three-failure rule.** If `dbt build` fails 3+ times on the same model, STOP iterating on
+  micro-fixes. Re-read the error end-to-end, inspect the real data, check the upstream models
+  (many failures originate upstream, not in the model you are editing), and reassess the whole
+  approach.
+- **Blast radius before refactoring.** Before changing an existing model, enumerate downstream
+  dependents (`/impacto <modelo>` in FORGE, or `dbt ls --select <model>+`) and check which
+  columns they consume. Report the impact scope; change one thing at a time and validate that
+  row counts did not shift.
 
 ## When to use
 

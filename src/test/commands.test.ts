@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ContextReport } from "../shared/protocol";
 import {
+  buildDbtTestsRequest,
   buildDiagramRequest,
   buildProjectSummaryRequest,
+  buildSqlTranslateRequest,
   exactSlashCommand,
   matchSlashCommands,
   normalizeSlash,
@@ -13,6 +15,7 @@ import {
   renderTokensReport,
   SLASH_COMMANDS,
   slashWithArgs,
+  SQL_DIALECTS,
 } from "../../webview-ui/src/commands";
 
 test("normalizeSlash: remove acentos e baixa a caixa (/Sumário ≡ /sumario)", () => {
@@ -24,7 +27,7 @@ test("normalizeSlash: remove acentos e baixa a caixa (/Sumário ≡ /sumario)", 
 test("matchSlashCommands: prefixo filtra; '/' sozinho lista tudo; sem '/' não abre", () => {
   assert.equal(matchSlashCommands("/").length, SLASH_COMMANDS.length);
   assert.deepEqual(matchSlashCommands("/lim").map((c) => c.id), ["limpar"]);
-  assert.deepEqual(matchSlashCommands("/te").map((c) => c.id), ["testes"]);
+  assert.deepEqual(matchSlashCommands("/te").map((c) => c.id), ["testes", "testes-dbt"]);
   assert.deepEqual(matchSlashCommands("olá"), []);
   // acento no que foi digitado não atrapalha
   assert.deepEqual(matchSlashCommands("/índ").map((c) => c.id), ["indice"]);
@@ -153,4 +156,40 @@ test("renderSummarized: cartão explica a compactação e traz o resumo (concord
   assert.ok(md.includes("- decisão A"));
   assert.ok(md.includes("/limpar"));
   assert.match(renderSummarized(1, "x"), /1 turno virou/);
+});
+
+// ---- comandos de dados (Ondas 1 e 2) --------------------------------------------------------------
+
+test("/impacto, /traduzir-sql e /testes-dbt: registrados, com cauda como argumento", () => {
+  assert.equal(exactSlashCommand("/impacto")?.id, "impacto");
+  assert.equal(slashWithArgs("/impacto stg_orders")?.args, "stg_orders");
+  assert.equal(slashWithArgs("/traduzir-sql bigquery")?.cmd.id, "traduzir-sql");
+  assert.equal(slashWithArgs("/testes-dbt fct_pedidos")?.args, "fct_pedidos");
+  // aliases
+  assert.equal(exactSlashCommand("/impact")?.id, "impacto");
+  assert.equal(exactSlashCommand("/dbt-tests")?.id, "testes-dbt");
+});
+
+test("buildSqlTranslateRequest: preservação semântica, sufixo do dialeto e forge-file único", () => {
+  const req = buildSqlTranslateRequest("BigQuery");
+  assert.match(req, /BIGQUERY/);
+  assert.match(req, /\.bigquery\.sql/);
+  assert.match(req, /NUNCA "otimize"/);
+  assert.match(req, /-- REVISAR:/); // escape hatch: na dúvida, manter e avisar
+  assert.match(req, /forge-file/);
+  assert.match(req, /NÃO modifique o arquivo original/);
+  assert.ok(SQL_DIALECTS.includes("bigquery"));
+  assert.ok(SQL_DIALECTS.includes("snowflake"));
+});
+
+test("buildDbtTestsRequest: taxonomia coluna→teste, proíbe inventar coluna e segue estilo do projeto", () => {
+  const req = buildDbtTestsRequest("stg_orders");
+  assert.ok(req.includes("`stg_orders`"));
+  assert.match(req, /Schema real do projeto dbt/); // ancora nas colunas REAIS injetadas pelo host
+  assert.match(req, /NUNCA invente nomes de coluna/);
+  assert.match(req, /`unique` \+ `not_null`/);
+  assert.match(req, /relationships/);
+  assert.match(req, /NÃO introduza dbt_utils/);
+  const semAlvo = buildDbtTestsRequest("");
+  assert.match(semAlvo, /ARQUIVO ATIVO/);
 });

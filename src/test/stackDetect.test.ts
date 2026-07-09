@@ -87,3 +87,13 @@ test("renderStackBlock é vazio sem detecção e formata quando há dados", () =
   assert.match(block, /Linguagem: Python/);
   assert.match(block, /Libs: pandas/);
 });
+
+test("dbt_project.yml ancora projeto dbt: lib dbt em primeiro e linguagem SQL quando não há outra", () => {
+  const stack = detectStack({ "dbt_project.yml": "name: shop\nprofile: shop" });
+  assert.ok(stack.libs.includes("dbt"));
+  assert.equal(stack.language, "SQL (projeto dbt)");
+  // com Python presente, a linguagem detectada permanece e o dbt não duplica
+  const misto = detectStack({ "dbt_project.yml": "name: x", "requirements.txt": "dbt-core==1.8\npandas" });
+  assert.equal(misto.language, "Python");
+  assert.equal(misto.libs.filter((l) => l === "dbt").length, 1);
+});
