@@ -3,6 +3,61 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.8.0] — 2026-07-09
+
+**Hardening corporativo — Fases 1 a 3.** Sequência derivada da gap analysis corporativa: o que decide
+"corporate solid" no FORGE não é virar agente autônomo, e sim fechar os gaps de governança,
+observabilidade e confiabilidade do gerador governado. Três fases, cada uma com revisão adversarial
+multi-agente antes do merge (PRs #129–#133), que confirmou e corrigiu defeitos reais de segurança
+(bypass de revogação, SSRF por prefixo de hostname, vazamento de captura no relay, EINVAL de spawn no
+Windows). 809 testes (eram 762 na 2.7.0).
+
+### Security
+- **Revogação enforçada no gateway** (#129): `gateway/revocations.mjs` (puro, testável) com cache por
+  assinatura mtime+size + TTL de 5s e fail-safe (JSON corrompido mantém a última lista boa; cold-start
+  corrompido NÃO cacheia a falha — re-tenta e auto-cura). `isRevoked()` roda em **activate, renew E
+  proxy** (antes só activate): um subject revogado perde acesso no PRÓXIMO request, sem esperar o
+  gateway reiniciar. Subject canonicalizado (trim+lowercase) nos dois lados — e-mail é case-insensitive.
+- **Egress sob workspace-trust** (#129): `forge.gateway.url`, `forge.rag.embeddings.url`,
+  `forge.observability.langfuse.baseUrl` e `forge.egress.*` viram `restrictedConfigurations` — um repo
+  malicioso não redireciona o egress nem injeta host via settings. Novo
+  `forge.egress.trustInNetwork` (default `true` = retrocompat): com `false`, só loopback é liberado
+  automaticamente; LAN/`.internal`/IP privado exige allowlist. Regex de faixa de IP só se aplica a IP
+  **literal** (`net.isIP`) — `127.0.0.1.attacker.com` não vira mais "in-network" por prefixo de string.
+- **O relay de observabilidade não confia no cliente** (#131): `gateway/obsRelay.mjs` (puro, testável)
+  re-mascara pela política do Admin server-side (`LANGFUSE_CAPTURE` prevalece — cliente em `full` não
+  vaza mais prompt cru ao Langfuse governado), **carimba a identidade da sessão** (userId/org/environment
+  vêm da sessão, não do payload — anti-impersonação), amostra **por-trace** (não fragmenta traces com
+  `sampleRate<1`) e capa 500 eventos por request (anti-DoS da fila compartilhada).
+
+### Added
+- **Observabilidade governada — GatewayRelaySink** (#130): eventos de workflow (aplicar/gate/run/revisão,
+  que nunca passam pelo proxy de geração) agora chegam ao Langfuse **via gateway** (`POST /obs/ingest`,
+  autenticado pelo token de sessão + revogação + rate limit) — a `secretKey` do Langfuse fica SÓ no
+  servidor. Novo `forge.observability.mode` (`off`|`direct`|`gateway`; legado `enabled=true` ⇒ `direct`),
+  com `RoutingObsSink` roteando e drenando resíduo na troca de modo. Fail-open, egress-checked.
+- **Custo em R$ (FinOps)** (#130): tabela de preços **configurável** por modelo
+  (`forge.observability.pricing`; vazio = nenhum custo — o FORGE não fabrica preço) com moeda
+  configurável; `inputCost`/`outputCost`/`totalCost` anexados à usage da geração no Langfuse.
+  `sanitizePricing` exige número real (rejeita coerções `''`→0, `true`→1) — não subvaloriza custo.
+- **Persistência do índice RAG + embedding incremental** (#132): snapshot do índice no `globalStorage`
+  (vetores em base64 Float32) com reconciliação por mtime+size — o build REUSA chunks e vetores dos
+  arquivos que não mudaram e só re-embeda o que mudou; `rebuildRetrieval` embeda só chunks SEM vetor
+  (antes re-embedava o codebase inteiro a cada build e a cada save). Escrita atômica (temp+rename),
+  poda de snapshots órfãos (>60d), teto de chunks vira aviso VISÍVEL ao dev (não trunca em silêncio).
+  Se o modelo de embeddings mudou, re-embeda tudo.
+
+### Fixed
+- **Spawn de shims `.bat`/`.cmd` no Windows** (#133): o Node recusa `.bat`/`.cmd` sob `shell:false`
+  (EINVAL, CVE-2024-27980) — Oracle SQLcl (`sql.bat`) e BigQuery (`bq.cmd`) quebravam no Windows.
+  `buildSpawn` agora roteia shims por shell com caminho+args quotados manualmente (seguro: `unsafeField`
+  já rejeita metacaracteres nos settings); `.exe`/POSIX seguem `shell:false`. O teste de spawn exercita
+  um shim `.cmd` REAL (teste com `node.exe` mascarava o bug) e prova que metacaractere é literal.
+- **Drift de dimensão no cache de vetores do RAG** (#133): o rebuild verifica HOMOGENEIDADE de
+  comprimento entre cache e endpoint (re-embeda tudo se divergem — dims da config `0=default` não é
+  confiável) e o cosine retorna 0 para dimensões diferentes (não trunca por `Math.min` → score espúrio).
+  Falha transitória de embed não rebaixa um snapshot de embeddings para lexical.
+
 ## [2.7.0] — 2026-07-09
 
 **FORGE Dados — o salto para engenharia de dados.** Quatro ondas que dão ao FORGE uma *camada

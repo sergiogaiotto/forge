@@ -47,7 +47,8 @@ Você vai precisar de:
 
 ## 2. Instalar a extensão
 
-A extensão é entregue num arquivo chamado **`forge-1.0.0.vsix`** (um "pacote" da extensão).
+A extensão é entregue num arquivo chamado **`forge-<versão>.vsix`** (um "pacote" da extensão —
+por exemplo, `forge-2.8.0.vsix`; o número acompanha a versão distribuída).
 
 ### Jeito 1 — pela tela do VSCode (recomendado)
 1. Abra o VSCode.
@@ -55,13 +56,13 @@ A extensão é entregue num arquivo chamado **`forge-1.0.0.vsix`** (um "pacote" 
    `Ctrl+Shift+X`.
 3. No topo desse painel, clique no botão **`...`** (três pontinhos).
 4. Escolha **"Install from VSIX..."** (Instalar do VSIX).
-5. Encontre e selecione o arquivo `forge-1.0.0.vsix`.
+5. Encontre e selecione o arquivo `forge-<versão>.vsix`.
 6. Aguarde a mensagem de sucesso e clique em **"Reload"** (Recarregar) se aparecer.
 
 ### Jeito 2 — pelo terminal
 Se você se sente à vontade com o terminal:
 ```bash
-code --install-extension forge-1.0.0.vsix
+code --install-extension forge-<versão>.vsix
 ```
 Depois, reabra o VSCode.
 

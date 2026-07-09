@@ -136,13 +136,13 @@ no primeiro uso da extensão.
 Gere o pacote instalável (`.vsix`):
 ```bash
 npm run build      # compila a extensão e a interface
-npm run package    # gera forge-1.0.0.vsix
+npm run package    # gera forge-<versão>.vsix (a versão vem do package.json)
 ```
 
 Formas de distribuir:
 
 **A) Entrega direta do `.vsix` (mais simples, recomendado para uso interno)**
-Compartilhe o arquivo `forge-1.0.0.vsix` (rede, repositório de artefatos, etc.). O dev instala pelo
+Compartilhe o arquivo `forge-<versão>.vsix` (rede, repositório de artefatos, etc.). O dev instala pelo
 *"Install from VSIX..."* (ver Guia do Usuário). Como é uso interno, normalmente **não** se publica
 em lojas públicas.
 
