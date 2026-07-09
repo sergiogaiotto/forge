@@ -427,6 +427,8 @@ export type WebviewToExt =
   | { type: "proposal/applyAll"; forceBlocked?: boolean }
   | { type: "tests/run" }
   | { type: "env/prepare" }
+  // Re-roda o gate do Modo Projeto sobre as propostas EXISTENTES (pós-"Preparar ambiente"), sem regenerar.
+  | { type: "project/regate" }
   | { type: "chat/abort"; taskId: string }
   // force: "Aplicar assim mesmo, revisei" — pula o quality gate reprovado (override consciente e auditável).
   | { type: "proposal/apply"; proposalId: string; force?: boolean }

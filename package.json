@@ -343,7 +343,8 @@
         "forge.gate.blockUnverifiedContract": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Política do admin (**Modo Projeto**, Python): quando o conjunto compilou mas o **contrato cross-file NÃO foi verificado** (o mypy não rodou — sem venv/mypy no ambiente), o **Aplicar tudo** passa de *confirmação* a **BLOQUEIO sem escape** — o botão \"Aplicar sem verificar contrato\" some e o caminho é **Preparar ambiente** (cria o venv; o gate instala o mypy nele) e gerar novamente. Garante que \"projeto pronto\" nunca dependa do toolchain presente na máquina do dev. Em rede sem PyPI, disponibilize um mirror interno (`pip config set global.index-url …`) — senão o Aplicar tudo fica bloqueado para projetos Python. Default `false` (confirmação explícita). Respeita o `forge.validation.gateBlocksApply` mestre."
+          "scope": "machine",
+          "markdownDescription": "Política do admin (**Modo Projeto**, projetos **Python**): enquanto o **contrato cross-file NÃO foi verificado** (o mypy não rodou — sem venv/mypy; ou o gate inteiro não pôde rodar), **BLOQUEIA sem escape** o Aplicar tudo, o \"Forçar bloqueados\" **e o Aplicar de cada cartão** do projeto. O caminho de saída é **Preparar ambiente** (cria o venv) e **Re-verificar contrato** (o gate instala o mypy no venv e re-verifica as MESMAS propostas, sem regenerar). Escopo `machine`: valor em `.vscode/settings.json` do repositório é **ignorado** (workspace não desliga a política); deliberadamente **não** respeita o mestre `forge.validation.gateBlocksApply` (que é sobrescritível por workspace). Em rede sem PyPI, disponibilize um mirror interno (`pip config set global.index-url …`) antes de ligar — sem mypy instalável, projetos Python ficam bloqueados. Default `false` (confirmação explícita, comportamento clássico)."
         },
         "forge.gate.security": {
           "type": "string",

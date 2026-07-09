@@ -86,10 +86,11 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("gate.definitionOfDone", true);
   }
 
-  // Política do admin (gate autossuficiente): contrato cross-file NÃO verificado (Python compilou, mas o
-  // mypy não rodou) passa de confirmação a BLOQUEIO do "Aplicar tudo" — sem o escape "Aplicar sem
-  // verificar contrato". O dev prepara o ambiente (venv; o gate instala o mypy nele) e gera de novo.
-  // Respeita o `validation.gateBlocksApply` mestre. Default false (retrocompat: confirmação explícita).
+  // Política do admin (gate autossuficiente): contrato cross-file NÃO verificado (Python — mypy não
+  // rodou, ou o gate inteiro não rodou) BLOQUEIA sem escape o Aplicar tudo, o "Forçar bloqueados" e o
+  // apply por-arquivo. Saída: "Preparar ambiente" + "Re-verificar contrato" (sem regenerar). Escopo
+  // machine (workspace não desliga) e deliberadamente NÃO respeita o mestre gateBlocksApply — o mestre é
+  // sobrescritível por workspace e o AND reabriria o bypass. Default false (confirmação explícita).
   blockUnverifiedContract(): boolean {
     return this.cfg().get<boolean>("gate.blockUnverifiedContract", false);
   }
