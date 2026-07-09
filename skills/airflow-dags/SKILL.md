@@ -18,8 +18,26 @@ validators:
 
 # Airflow DAGs
 
+**A DAG that is not idempotent is a bug with a schedule.**
+
 Senior-level guidance for writing and reviewing Apache Airflow 2.x+ DAGs that are
 idempotent, schedule correctly, recover from failure, and parse cheaply.
+
+## Critical rules
+
+- **ALWAYS discover conventions first.** Read 2–3 existing DAGs in the repo before writing one:
+  imitate the project's `dag_id` naming, default_args, retry policy, connections/variables
+  pattern and folder layout. A DAG that ignores house style gets rejected in review.
+- **ALWAYS design for re-run.** Every task must be idempotent (same logical date → same result):
+  no `datetime.now()` in task logic (use the data interval), writes are upsert/overwrite-partition,
+  never blind append.
+- **NEVER put heavy work at module top-level.** The scheduler imports the file constantly —
+  top-level API calls/queries slow every parse. Connections and clients live INSIDE task callables.
+- **Verification ladder:** `python dag_file.py` parses → `airflow dags list-import-errors` clean →
+  task callable runs standalone against a dev target → only then declare done. Compiling ≠ working.
+- **Three-failure rule.** If the same task fails 3+ times during development, stop patching:
+  re-read the FULL traceback from the task log (not the scheduler log), check upstream data, and
+  reassess the approach.
 
 ## When to use
 

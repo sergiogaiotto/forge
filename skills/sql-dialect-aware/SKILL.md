@@ -18,10 +18,40 @@ validators:
 
 # SQL Dialect-Aware Authoring & Review
 
+**When in doubt, don't change semantics: keep the original and say why.**
+
 Write SQL that runs correctly on the *target* warehouse the first time. The same
 logical query is spelled differently across PostgreSQL, BigQuery, Snowflake,
 Oracle and Spark SQL. This skill keeps those differences front-of-mind and pushes
 toward readable, NULL-safe, join-explicit query construction.
+
+## Critical rules
+
+- **ALWAYS preserve semantics when optimizing or translating.** The rewritten query must
+  return exactly the same rows and columns. If you cannot GUARANTEE identical results,
+  keep the original fragment and flag it with a `-- REVISAR:` comment instead of guessing.
+- **NEVER rename output columns** during an optimization/translation — downstream consumers
+  break silently.
+- **ALWAYS confirm the target dialect first.** Unknown → ask, or default to ANSI and say so.
+- **Three-failure rule.** If the query fails 3+ times against the engine, stop patching
+  token-by-token: re-read the full error, check the actual table schema, reassess the approach.
+
+## Safe vs. unsafe rewrites (semantic preservation)
+
+| CAN rewrite safely | Why it is safe |
+|---|---|
+| Function-on-column filter → equivalent range (`WHERE DATE(ts) = '2026-01-01'` → `ts >= '2026-01-01' AND ts < '2026-01-02'`) | Same rows, restores index/partition pruning |
+| Repeated scalar subquery → CTE | Same value, evaluated once |
+| Implicit join (`FROM a, b WHERE …`) → explicit `JOIN … ON` | Same predicate, clearer and safer |
+| `NOT IN (SELECT col …)` → `NOT EXISTS` **only if** the subquery column is provably NOT NULL | Removes the NULL trap without changing results on non-NULL data |
+
+| CANNOT rewrite (without explicit user approval) | Why it is unsafe |
+|---|---|
+| `UNION` → `UNION ALL` | Changes results whenever duplicates exist |
+| Adding/removing `DISTINCT` or changing dedup logic (`ROW_NUMBER` filters) | Changes the row set |
+| Touching window function frames (`ROWS`/`RANGE`, `ORDER BY` inside `OVER`) | Subtle result changes, especially with ties |
+| Reordering `LIMIT` without a deterministic `ORDER BY` | Different rows may be returned |
+| "Simplifying" `COALESCE`/`NVL` chains on nullable columns | NULL handling is usually intentional |
 
 ## When to use
 

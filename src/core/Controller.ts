@@ -73,6 +73,13 @@ import { buildFewShotTurn } from "../util/fewShot";
 import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
 import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
+import { DbtIndex, mdSafe, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
+import { dbtIndexStale, DbtProjectLocation, findDbtProject, loadDbtIndex, LoadedDbtIndex } from "../dbt/loader";
+import { analyzeSqlProposal, sqlEvidenceForReview } from "../sql/engine";
+import { renderFindings } from "../sql/antipatterns";
+import { classifySql } from "../sql/classify";
+import { stripJinja } from "../sql/jinja";
+import { renderLineage, selectLineage } from "../sql/lineage";
 import { evaluateDodGate } from "../util/dodCheck";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
@@ -147,6 +154,16 @@ export class Controller {
   private currentTask: Task | undefined;
   // Usage REAL acumulado da sessão (todas as gerações, incl. continuações) — /contexto e /tokens.
   private sessionUsage = { input: 0, output: 0 };
+  // Grounding dbt (dados, Onda 1): índice dos artefatos (target/manifest.json [+ catalog.json]),
+  // recarregado por mtime (um `dbt compile` do dev atualiza sem reindexação manual). null = sem
+  // projeto dbt ou sem artefatos (fail-open: as camadas que o consomem simplesmente não opinam).
+  private dbtLoaded: LoadedDbtIndex | null = null;
+  private dbtProbed = false; // já VARREMOS o workspace atrás de dbt_project.yml? (só isso — nunca "desisti do manifest")
+  // Localização do projeto dbt encontrada no probe — mantida mesmo quando o manifest ainda não existe
+  // ou uma recarga falhou (TOCTOU com `dbt compile` em andamento): a próxima chamada RE-TENTA a partir
+  // dela (um fs.stat barato), em vez de degradar o grounding para o resto da sessão (revisão adversarial).
+  private dbtLocation: DbtProjectLocation | null = null;
+  private dbtInflight: Promise<DbtIndex | undefined> | null = null; // single-flight (propostas chegam em paralelo)
   private readonly runService: RunService;
   private readonly previewService: PreviewService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -1409,6 +1426,9 @@ export class Controller {
       case "context/inspect":
         await this.reportContext();
         break;
+      case "impact/request":
+        await this.reportImpact(msg.target);
+        break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui, framework: msg.framework });
         break;
@@ -1972,6 +1992,10 @@ export class Controller {
         assembleMs: asmMs,
       },
       post: (m) => this.post(m),
+      // Motor SQL determinístico (dados, Onda 1): analisa propostas .sql in-process (anti-padrões +
+      // segurança + schema dbt) no mesmo canal dos validadores de skill. Cobre chat, TDD e Modo Projeto.
+      sqlAnalyzer: async (relPath, content) =>
+        analyzeSqlProposal(relPath, content, { mode: this.config.sqlGate(), index: await this.getDbtIndex() }),
       // Modo Projeto: à medida que cada bloco de arquivo FECHA no streaming, marca "gerado" um a um,
       // em vez de tudo em lote no fim. A reconciliação final (complete/failed) segue autoritativa.
       onFileClosed:
@@ -2860,6 +2884,98 @@ export class Controller {
     };
   }
 
+  // ---- grounding dbt (dados) ---------------------------------------------------------------------
+
+  // Índice dos artefatos dbt do workspace, com recarga por mtime. undefined = sem grounding.
+  // Single-flight: chamadas concorrentes (várias propostas validando em paralelo) compartilham a mesma
+  // Promise em vez de recarregar em duplicidade ou verem "sem grounding" durante o probe.
+  private getDbtIndex(): Promise<DbtIndex | undefined> {
+    if (this.dbtInflight) return this.dbtInflight;
+    this.dbtInflight = this.getDbtIndexInner().finally(() => {
+      this.dbtInflight = null;
+    });
+    return this.dbtInflight;
+  }
+
+  private async getDbtIndexInner(): Promise<DbtIndex | undefined> {
+    const ws = this.workspaceRoot();
+    if (!ws) return undefined;
+    try {
+      if (this.dbtLoaded && !(await dbtIndexStale(this.dbtLoaded))) return this.dbtLoaded.index;
+      if (!this.dbtProbed) {
+        this.dbtProbed = true; // significa só "já varri o workspace atrás de dbt_project.yml"
+        this.dbtLocation = await findDbtProject(ws);
+      }
+      if (!this.dbtLocation) return undefined; // não há projeto dbt — nada a fazer nesta sessão
+      // (Re)carrega da localização conhecida: cobre o primeiro load, a recarga por staleness E o
+      // "rode dbt parse e tente de novo" (manifest criado DEPOIS do probe). Custo: um fs.stat.
+      const before = this.dbtLoaded?.index;
+      this.dbtLoaded = await loadDbtIndex(this.dbtLocation, (m, e) => log.warn(m, e));
+      if (this.dbtLoaded && this.dbtLoaded.index !== before) {
+        log.info(`dbt: grounding ativo — ${this.dbtLoaded.index.size()} tabelas do manifest (${this.dbtLoaded.location.targetDir}).`);
+      }
+      return this.dbtLoaded?.index;
+    } catch (err) {
+      log.warn("dbt: grounding indisponível (fail-open).", err);
+      return undefined;
+    }
+  }
+
+  // /impacto [modelo]: raio de explosão determinístico via lineage do manifest (host-computado, sem
+  // LLM) + lineage de coluna do arquivo do modelo quando legível. O cartão volta como impact/report.
+  async reportImpact(target?: string): Promise<void> {
+    const index = await this.getDbtIndex();
+    if (!index || index.size() === 0) {
+      this.post({
+        type: "impact/report",
+        markdown:
+          "### Raio de explosão\n\nSem grounding dbt: não encontrei `target/manifest.json` no workspace. Rode `dbt parse` (ou `dbt compile`) no projeto dbt e tente de novo — o FORGE lê o lineage real do manifest.",
+      });
+      return;
+    }
+    // alvo: argumento explícito > arquivo ativo no editor
+    let node = target?.trim() ? index.findModelByName(target.trim()) : undefined;
+    let modelFile: string | undefined;
+    if (!node) {
+      const editor = vscode.window.activeTextEditor;
+      const ws = this.workspaceRoot();
+      if (!target?.trim() && editor && ws && editor.document.uri.scheme === "file") {
+        const rel = path.relative(ws, editor.document.uri.fsPath).split(path.sep).join("/");
+        node = index.findByPath(rel);
+        if (node) modelFile = editor.document.getText();
+      }
+    }
+    if (!node) {
+      const alvo = mdSafe(target?.trim() ?? "");
+      const sug = alvo ? index.suggestTable(alvo) : undefined;
+      const hint = alvo
+        ? `O modelo \`${alvo}\` não existe no manifest do dbt${sug ? ` — você quis dizer \`${mdSafe(sug)}\`?` : "."}`
+        : "Abra o arquivo de um modelo dbt no editor (ou use `/impacto nome_do_modelo`).";
+      this.post({ type: "impact/report", markdown: `### Raio de explosão\n\n${hint}` });
+      return;
+    }
+    let card = renderImpactCard(index, node);
+    // lineage de coluna do próprio modelo (Onda 2): de onde vem cada coluna de saída
+    try {
+      if (!modelFile && node.originalFilePath && this.workspaceRoot()) {
+        const base = this.dbtLoaded?.location.projectDir ?? this.workspaceRoot()!;
+        modelFile = await fs.readFile(path.join(base, node.originalFilePath), "utf8");
+      }
+      if (modelFile) {
+        const { sql } = stripJinja(modelFile);
+        const stmts = classifySql(sql);
+        const sel = stmts.find((s) => s.kind === "select");
+        if (sel) {
+          const lin = renderLineage(selectLineage(sel));
+          if (lin) card += `\n\n${lin}`;
+        }
+      }
+    } catch {
+      // lineage de coluna é bônus — o cartão de modelo já responde o essencial
+    }
+    this.post({ type: "impact/report", markdown: card });
+  }
+
   // Contexto recuperado: trechos relevantes do codebase (RAG: embeddings ou
   // BM25 lexical) + o conteúdo do editor ativo (RF-041, RNF-009).
   private async gatherContext(query: string): Promise<string> {
@@ -2882,6 +2998,18 @@ export class Controller {
       }
     } catch (err) {
       log.warn("RAG: recuperação falhou, seguindo só com o editor ativo.", err);
+    }
+
+    // Schema REAL do projeto dbt (anti-alucinação): top-K tabelas relevantes para a query, com colunas
+    // e tipos do manifest/catalog — o modelo consulta em vez de "lembrar" nomes. Vazio quando nada casa.
+    try {
+      const index = await this.getDbtIndex();
+      if (index) {
+        const schemaBlock = renderSchemaContext(index, query);
+        if (schemaBlock) parts.push(schemaBlock);
+      }
+    } catch (err) {
+      log.warn("dbt: schema no contexto falhou (fail-open).", err);
     }
 
     // Notebook ativo: lista as células com índice ABSOLUTO (para edição por célula).
@@ -3664,13 +3792,24 @@ export class Controller {
       return;
     }
 
+    // Lente "dados" (Onda 2): achados do motor SQL determinístico sobre os .sql alterados + raio de
+    // explosão do manifest dbt entram como EVIDÊNCIA no prompt — o revisor cita fatos, não opinião.
+    const sqlEvidence = await this.buildSqlReviewEvidence(diff);
+
     const provider = createProvider(runtime, this.egress);
     const taskId = `review_${Date.now()}`;
     const task = new Task({
       taskId,
       provider,
       systemPrompt: buildReviewPrompt(),
-      messages: [{ role: "user", content: `Revise estas alterações do workspace (\`git diff\`):\n\n\`\`\`diff\n${diff}\n\`\`\`` }],
+      messages: [
+        {
+          role: "user",
+          content:
+            `Revise estas alterações do workspace (\`git diff\`):\n\n\`\`\`diff\n${diff}\n\`\`\`` +
+            (sqlEvidence ? `\n\n${sqlEvidence}` : ""),
+        },
+      ],
       activatedSkillNames: ["FORGE Review (in-network)"],
       validators: [],
       skillValidator: new SkillValidator(this.workspaceRoot()),
@@ -3698,6 +3837,51 @@ export class Controller {
     await task.run();
     this.post({ type: "review/done" }); // alimenta o checklist "Definição de Pronto"
     this.obs.record({ type: "review.done" });
+  }
+
+  // Evidência determinística para a lente "dados" do revisor: para cada .sql alterado no diff (cap 6),
+  // achados do motor SQL (anti-padrões/segurança/schema dbt) + raio de explosão via manifest. "" quando
+  // não há .sql no diff — o revisor de código comum segue idêntico. Fail-open em tudo.
+  private async buildSqlReviewEvidence(diff: string): Promise<string> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) return "";
+      const paths = [...new Set([...diff.matchAll(/^\+\+\+ b\/(.+\.sql)\s*$/gim)].map((m) => m[1].trim()))].slice(0, 6);
+      if (paths.length === 0) return "";
+      const index = await this.getDbtIndex();
+      const sections: string[] = [];
+      for (const rel of paths) {
+        // Contenção no workspace: os caminhos vêm do TEXTO do diff (linhas `+++ b/…` podem ser conteúdo
+        // adicionado, não cabeçalho) — nunca ler fora da raiz (achado da revisão adversarial).
+        const abs = safeWorkspacePath(ws, rel);
+        if (!abs) continue;
+        let content: string;
+        try {
+          content = await fs.readFile(abs, "utf8");
+        } catch {
+          continue; // arquivo deletado no diff — nada a analisar
+        }
+        const findings = sqlEvidenceForReview(rel, content, { mode: "advisory", index });
+        const node = index?.findByPath(rel);
+        const impact = node ? index!.downstream(node.uniqueId) : undefined;
+        const impactLine =
+          impact && (impact.transitive.length > 0 || impact.tests > 0)
+            ? `Impacto (manifest dbt): ${impact.transitive.length} modelo(s) downstream, ${impact.tests} teste(s)${impact.exposures.length > 0 ? `, exposures: ${impact.exposures.join(", ")}` : ""}.`
+            : "";
+        if (findings.length === 0 && !impactLine) continue;
+        sections.push([`**${rel}**`, impactLine, findings.length > 0 ? renderFindings(findings) : ""].filter(Boolean).join("\n"));
+      }
+      if (sections.length === 0) return "";
+      return [
+        "### Evidência determinística (motor SQL do FORGE)",
+        "Fatos apurados por análise estática — cite-os nos achados em vez de especular; confiança declarada por item:",
+        "",
+        sections.join("\n\n"),
+      ].join("\n");
+    } catch (err) {
+      log.warn("Revisão: evidência SQL indisponível (fail-open).", err);
+      return "";
+    }
   }
 
   // git diff (working tree vs HEAD); fallback: conteúdo do editor ativo.

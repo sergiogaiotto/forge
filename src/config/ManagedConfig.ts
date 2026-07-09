@@ -91,6 +91,15 @@ export class ManagedConfig {
     return v === "advisory" || v === "off" ? v : "conservative";
   }
 
+  // Gate SQL (dados, Onda 1): o motor determinístico in-process analisa propostas .sql. "conservative"
+  // (padrão): só achados de SEGURANÇA (DELETE/UPDATE sem WHERE, DROP/TRUNCATE, produto cartesiano)
+  // bloqueiam o Aplicar; anti-padrões e schema (dbt) são sempre advisory. "advisory": nada bloqueia.
+  // "off": não roda. Respeita o `validation.gateBlocksApply` mestre, como todos os gates.
+  sqlGate(): "conservative" | "advisory" | "off" {
+    const v = this.cfg().get<string>("gate.sql", "conservative");
+    return v === "advisory" || v === "off" ? v : "conservative";
+  }
+
   // Reconciliação de dependências (P4) no Modo Projeto: depois do gate, acrescenta ao requirements.txt GERADO
   // os pacotes que o código importa mas não declara (idempotente, conservador — nunca adiciona ambíguo).
   // Desligue (`false`) para não auto-editar a proposta do manifesto.

@@ -359,6 +359,9 @@ export type ExtToWebview =
   | { type: "project/closed" }
   // Resposta do /contexto: orçamento da janela calculado pelo HOST (mesmo deriveBudget da geração).
   | { type: "context/report"; report: ContextReport }
+  // Resposta do /impacto: raio de explosão (lineage do manifest dbt) computado pelo HOST — cartão
+  // markdown pronto, renderizado como mensagem local na thread (mesmo padrão do context/report).
+  | { type: "impact/report"; markdown: string }
   // Cartão pós-seleção do PAPEL: o que o papel carrega (linha de estilo + skills relacionadas) —
   // substitui o toast de 5s que sumia antes de o dev ler.
   | { type: "profile/roleCard"; card: RoleCard }
@@ -407,6 +410,9 @@ export type WebviewToExt =
   | { type: "chat/summarize" }
   // /contexto: pede o relatório do orçamento da janela (o host responde com context/report).
   | { type: "context/inspect" }
+  // /impacto [modelo]: raio de explosão via manifest dbt (host responde impact/report). Sem target,
+  // o host usa o modelo do arquivo ativo no editor.
+  | { type: "impact/request"; target?: string }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/generate" }

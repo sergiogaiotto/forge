@@ -20,7 +20,7 @@ import {
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
-import { buildDiagramRequest, buildProjectSummaryRequest, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashWithArgs, type SlashCommand } from "../commands";
+import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, MAX_OUTPUT_PRESETS, maxOutputLabel, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -147,6 +147,19 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       case "sumario":
         runSummary();
         break;
+      case "impacto":
+        runImpact(""); // sem argumento = modelo do arquivo ativo
+        break;
+      case "traduzir-sql":
+        // dialeto é obrigatório — orienta sem apagar o rascunho
+        dispatch({
+          kind: "pushLocal",
+          text: `Informe o dialeto alvo: \`/traduzir-sql <dialeto>\` — um de: ${SQL_DIALECTS.map((d) => `\`${d}\``).join(", ")}.`,
+        });
+        break;
+      case "testes-dbt":
+        runDbtTests(""); // sem argumento = modelo do arquivo ativo
+        break;
     }
   };
 
@@ -164,6 +177,41 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const runSummary = () => {
     dispatch({ kind: "pushUser", text: "[/sumário projeto] Gerar a documentação funcional do projeto." });
     post({ type: "chat/send", text: buildProjectSummaryRequest() });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
+  };
+
+  // /impacto [modelo]: raio de explosão determinístico (lineage do manifest dbt) — computado pelo HOST,
+  // sem LLM; a resposta volta como impact/report → cartão na thread (padrão do /contexto).
+  const runImpact = (target: string) => {
+    dispatch({ kind: "pushUser", text: `[/impacto] ${target.trim() || "modelo do arquivo ativo"}` });
+    post({ type: "impact/request", target: target.trim() || undefined });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
+  };
+
+  // /traduzir-sql <dialeto>: tradução com preservação semântica como PROPOSTA .sql — o motor SQL
+  // determinístico do host valida o resultado (parse/anti-padrões/schema) como qualquer proposta.
+  const runTranslate = (dialect: string) => {
+    const d = dialect.trim().toLowerCase();
+    if (!SQL_DIALECTS.includes(d)) {
+      dispatch({
+        kind: "pushLocal",
+        text: `Dialeto \`${dialect.trim()}\` não reconhecido — use um de: ${SQL_DIALECTS.map((x) => `\`${x}\``).join(", ")}.`,
+      });
+      return;
+    }
+    dispatch({ kind: "pushUser", text: `[/traduzir-sql] arquivo ativo → ${d}` });
+    post({ type: "chat/send", text: buildSqlTranslateRequest(d) });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
+  };
+
+  // /testes-dbt [modelo]: schema.yml com a taxonomia coluna→teste, ancorado no schema REAL que o host
+  // injeta no contexto (manifest dbt) — proposta versionável, mesmo pipeline de aplicação.
+  const runDbtTests = (model: string) => {
+    dispatch({ kind: "pushUser", text: `[/testes-dbt] ${model.trim() || "modelo do arquivo ativo"}` });
+    post({ type: "chat/send", text: buildDbtTestsRequest(model) });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
   };
@@ -191,6 +239,21 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       }
       if (withArgs.cmd.id === "sumario" && normalizeSlash(withArgs.args) === "projeto") {
         runSummary(); // só a forma completa "/sumário projeto" executa
+        return;
+      }
+      // /impacto e /testes-dbt: a cauda só é argumento quando é UM token (nome de modelo válido);
+      // cauda multi-palavra ("/impacto o que quebra se eu mudar X?") é mensagem do dev e segue ao
+      // modelo — anti-sequestro (achado da revisão adversarial).
+      if (withArgs.cmd.id === "impacto" && /^[\w.-]+$/.test(withArgs.args)) {
+        runImpact(withArgs.args);
+        return;
+      }
+      if (withArgs.cmd.id === "traduzir-sql") {
+        runTranslate(withArgs.args); // a cauda É o argumento (dialeto alvo); inválido orienta sem apagar
+        return;
+      }
+      if (withArgs.cmd.id === "testes-dbt" && /^[\w.-]+$/.test(withArgs.args)) {
+        runDbtTests(withArgs.args);
         return;
       }
       // Cauda que NÃO é o argumento esperado ("/sumario o que ficou pendente?") é mensagem do dev —

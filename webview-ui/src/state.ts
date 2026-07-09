@@ -487,6 +487,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "context/report":
       // /contexto: o relatório vira uma mensagem local do assistente (markdown), na própria thread.
       return pushLocalMessage(state, renderContextReport(msg.report));
+    case "impact/report":
+      // /impacto: o raio de explosão (host-computado do manifest dbt) vira cartão na thread.
+      return pushLocalMessage(state, msg.markdown);
     case "profile/roleCard":
       return { ...state, roleCard: msg.card };
     case "chat/summarized":

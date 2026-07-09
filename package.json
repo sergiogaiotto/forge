@@ -324,6 +324,17 @@
           "default": "conservative",
           "markdownDescription": "Gate de **segurança** (P2) no **Modo Projeto**: roda o **bandit** (SAST) sobre o projeto gerado — pega senha/segredo hardcoded, `eval`/`exec` de input, cripto fraca, `yaml.load` inseguro, etc. (análise por AST; **não executa** o código). `conservative` (padrão): só severidade **ALTA + confiança ALTA** bloqueia o Aplicar (pouquíssimo falso-positivo); o resto é advisory. `advisory`: nunca bloqueia. `off`: não roda. bandit ausente → consultivo (fail-open); se estiver no venv do workspace, é instalado best-effort. Respeita o `forge.validation.gateBlocksApply` mestre."
         },
+        "forge.gate.sql": {
+          "type": "string",
+          "enum": ["conservative", "advisory", "off"],
+          "enumDescriptions": [
+            "Só achados de SEGURANÇA do SQL (DELETE/UPDATE sem WHERE, DROP/TRUNCATE, produto cartesiano) bloqueiam o Aplicar; anti-padrões e schema (dbt) são advisory (padrão).",
+            "Analisa e mostra os achados no cartão da proposta, mas NUNCA bloqueia o Aplicar.",
+            "Não roda o motor SQL."
+          ],
+          "default": "conservative",
+          "markdownDescription": "Motor **SQL determinístico** (dados): analisa toda proposta `.sql` **in-process** (sem instalar nada) — classificação de statements, ~16 regras de **anti-padrão** com confiança declarada (SELECT *, produto cartesiano, `NOT IN` + NULL, predicado não-sargável, CTE morta, LIMIT em modelo dbt…), e **validação de schema** contra o `target/manifest.json` do projeto dbt quando existir (tabela/coluna inexistente vira achado com sugestão). Modelos dbt com Jinja (`{{ ref() }}`) são analisados nativamente. `conservative` (padrão): só os achados de **segurança** bloqueiam o Aplicar; o resto é advisory. Respeita o `forge.validation.gateBlocksApply` mestre."
+        },
         "forge.project.reconcileDependencies": {
           "type": "boolean",
           "default": true,
