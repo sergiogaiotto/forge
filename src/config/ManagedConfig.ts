@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { EgressPolicy } from "../net/EgressEnforcer";
 import { McpServerEntry } from "../mcp/types";
-import { CaptureMode, ObsConfig, ObsMode } from "../obs/types";
+import { CaptureMode, ObsConfig, resolveObsMode } from "../obs/types";
 import { sanitizePricing } from "../api/pricing";
 
 export interface RagConfig {
@@ -215,8 +215,11 @@ export class ManagedConfig {
     const c = this.cfg();
     const cap = c.get<string>("observability.langfuse.capture", "masked");
     const legacyEnabled = c.get<boolean>("observability.langfuse.enabled", false);
-    const rawMode = c.get<string>("observability.mode", legacyEnabled ? "direct" : "off");
-    const mode: ObsMode = rawMode === "direct" || rawMode === "gateway" ? rawMode : "off";
+    // O contributes declara default "off" para observability.mode, então get() nunca retorna undefined
+    // e o fallback legado ali seria código morto — o valor EXPLÍCITO do usuário vem de inspect().
+    const ins = c.inspect<string>("observability.mode");
+    const explicitMode = ins?.workspaceFolderValue ?? ins?.workspaceValue ?? ins?.globalValue;
+    const mode = resolveObsMode(explicitMode, legacyEnabled);
     return {
       enabled: mode !== "off",
       mode,

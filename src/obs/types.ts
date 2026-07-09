@@ -65,6 +65,15 @@ export type CaptureMode = "full" | "masked" | "metadata-only";
 // de workflow do cliente (aplicar/gate/run), que nunca passam pelo proxy de geração.
 export type ObsMode = "off" | "direct" | "gateway";
 
+// Resolve o modo efetivo. `explicitMode` é o valor que o USUÁRIO definiu (via inspect() — o contributes
+// declara default "off" para forge.observability.mode, então get(key, fallback) nunca devolve undefined
+// e um fallback no get() seria código morto). Sem valor explícito, o setting legado
+// `observability.langfuse.enabled=true` equivale a "direct"; valor inválido cai em "off" (fail-safe).
+export function resolveObsMode(explicitMode: string | undefined, legacyEnabled: boolean): ObsMode {
+  const raw = explicitMode ?? (legacyEnabled ? "direct" : "off");
+  return raw === "direct" || raw === "gateway" ? raw : "off";
+}
+
 import type { PricingTable } from "../api/pricing";
 
 export interface ObsConfig {
