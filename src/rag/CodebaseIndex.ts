@@ -96,8 +96,9 @@ export class CodebaseIndex {
       // Snapshot persistido: reusa os chunks (com vetores) dos arquivos que NÃO mudaram; só re-indexa
       // (e depois re-embeda) os que mudaram/são novos. Se o modelo de embeddings mudou, os vetores são
       // incompatíveis e tudo é re-embedado (reconciliação por conteúdo continua valendo).
+      void this.pruneOrphanSnapshots(root); // remove snapshots de workspaces sumidos (best-effort, não bloqueia)
       const snap = await this.loadSnapshot(root);
-      const vecOk = snap ? vectorsCompatible(snap, cfg.embeddingModel, cfg.embeddingDimensions) : false;
+      const vecOk = snap ? vectorsCompatible(snap, cfg.embeddingModel) : false;
       let reused = 0;
       const files = await this.listFiles(cfg);
       for (const rel of files) {
@@ -117,7 +118,13 @@ export class CodebaseIndex {
       }
       await this.rebuildRetrieval(); // embeda só os chunks SEM vetor (os reusados já têm)
       if (this.capped) this.warnCapped();
-      await this.persist(root, cfg);
+      // NÃO sobrescreve um snapshot de embeddings bom quando caímos para lexical por FALHA transitória
+      // do endpoint (senão a próxima sessão perde o cache e re-embeda tudo). Achado da revisão adversarial.
+      if (!(this.lastEmbedFailed && snap?.mode === "embeddings")) {
+        await this.persist(root, cfg);
+      } else {
+        log.warn("RAG: embeddings falharam nesta sessão — preservando o snapshot anterior (não sobrescreve com lexical).");
+      }
       log.info(`RAG pronto: ${this.byFile.size} arquivos (${reused} reusados do cache), ${this.chunkCount()} trechos, modo ${this.mode}.`);
     } catch (err) {
       log.warn("RAG: falha ao indexar codebase", err);
@@ -175,17 +182,48 @@ export class CodebaseIndex {
         const meta = this.fileMeta.get(rel);
         if (meta) files.set(rel, { meta, chunks });
       }
+      // dims REAIS do vetor (não o valor da config, que é 0 = "padrão do modelo") — para observabilidade
+      // do snapshot; a correção de drift real é a checagem de homogeneidade no rebuildRetrieval.
+      const realDims = this.allChunks().find((c) => c.vector && c.vector.length > 0)?.vector?.length ?? 0;
       const json = serializeSnapshot({
         workspaceRoot: root,
         embeddingModel: this.mode === "embeddings" ? cfg.embeddingModel : "",
-        embeddingDims: this.mode === "embeddings" ? cfg.embeddingDimensions : 0,
+        embeddingDims: this.mode === "embeddings" ? realDims : 0,
         mode: this.mode,
         files,
       });
       await fs.mkdir(path.dirname(p), { recursive: true });
-      await fs.writeFile(p, json, "utf8");
+      // Escrita ATÔMICA: grava num temp e renomeia por cima. Um crash no meio do writeFile não destrói
+      // mais o snapshot bom anterior (rename é atômico no mesmo FS). Achado da revisão adversarial.
+      const tmp = `${p}.tmp`;
+      await fs.writeFile(tmp, json, "utf8");
+      await fs.rename(tmp, p);
     } catch (err) {
       log.warn("RAG: falha ao persistir o índice (segue em memória).", err);
+    }
+  }
+
+  // Remove snapshots órfãos (workspaces que não são o atual e cujo arquivo é antigo) do globalStorage —
+  // sem isto, cada projeto já aberto deixa ~MBs de snapshot para sempre. Best-effort, age-based: só
+  // apaga arquivos com mtime > 60 dias (o snapshot do workspace ATIVO é reescrito todo build, mtime
+  // sempre fresco, então nunca é apagado). Achado da revisão adversarial.
+  private async pruneOrphanSnapshots(root: string): Promise<void> {
+    const dir = this.getStorageDir();
+    if (!dir) return;
+    const keep = snapshotFileName(root);
+    const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    try {
+      for (const name of await fs.readdir(dir)) {
+        if (name === keep || !/^rag-index-[0-9a-f]{16}\.json$/.test(name)) continue;
+        try {
+          const st = await fs.stat(path.join(dir, name));
+          if (st.mtimeMs < cutoff) await fs.rm(path.join(dir, name), { force: true });
+        } catch {
+          /* corrida/permissão — ignora */
+        }
+      }
+    } catch {
+      /* dir ausente — nada a podar */
     }
   }
 
@@ -200,7 +238,10 @@ export class CodebaseIndex {
         seen.add(toRel(root, u.fsPath));
       }
     }
-    return [...seen];
+    // Ordem DETERMINÍSTICA: o vscode.workspace.findFiles não garante ordem estável entre sessões, e o
+    // teto MAX_CHUNKS trunca a lista — sem ordenar, um repo capado re-embedaria um subconjunto diferente
+    // a cada sessão (revisão adversarial). Ordenado, o corte é sempre o mesmo.
+    return [...seen].sort();
   }
 
   private async indexOneFile(root: string, rel: string, cfg: RagConfig): Promise<void> {
@@ -219,26 +260,40 @@ export class CodebaseIndex {
     }
   }
 
+  private lastEmbedFailed = false; // rebuildRetrieval caiu para lexical por FALHA de embed (não por ausência de endpoint)?
+
   /** Recalcula vetores (embeddings) ou o índice BM25 a partir dos trechos atuais. O embedding é
    *  INCREMENTAL: só os chunks SEM vetor são embedados (os reusados do snapshot já têm) — evita
    *  re-embedar o codebase inteiro a cada build/save (o custo recorrente que a auditoria apontou). */
   private async rebuildRetrieval(): Promise<void> {
     const all = this.allChunks();
     const embedder = this.embedder();
+    this.lastEmbedFailed = false;
     if (embedder?.available()) {
-      const missing = all.filter((c) => !c.vector || c.vector.length === 0);
       try {
+        let missing = all.filter((c) => !c.vector || c.vector.length === 0);
         if (missing.length > 0) {
           const vectors = await embedder.embed(missing.map((c) => `${c.symbol ?? ""}\n${c.text}`));
           missing.forEach((c, i) => (c.vector = vectors[i]));
+        }
+        // Homogeneidade de dimensão: se algum vetor REUSADO do snapshot tem comprimento diferente dos
+        // recém-embedados, o modelo/deploy de embeddings mudou por trás do mesmo nome — re-embeda TUDO
+        // (senão a mistura de dims dá score espúrio no cosseno). Achado da revisão adversarial.
+        const fresh = missing.find((c) => c.vector && c.vector.length > 0);
+        const dim = fresh?.vector?.length ?? all.find((c) => c.vector)?.vector?.length;
+        if (dim && all.some((c) => c.vector && c.vector.length !== dim)) {
+          log.warn("RAG: dimensão de embedding inconsistente entre o cache e o endpoint — re-embedando tudo.");
+          for (const c of all) c.vector = undefined;
+          const revectors = await embedder.embed(all.map((c) => `${c.symbol ?? ""}\n${c.text}`));
+          all.forEach((c, i) => (c.vector = revectors[i]));
         }
         this.mode = "embeddings";
         this.bm25 = undefined;
         return;
       } catch (err) {
         log.warn("RAG: embeddings indisponíveis — caindo para BM25 lexical (RF-079).", err);
-        // limpa vetores parciais para não misturar modelos/dims no modo lexical
-        for (const c of all) c.vector = undefined;
+        this.lastEmbedFailed = true; // FALHA transitória — o build não deve sobrescrever um snapshot bom
+        for (const c of all) c.vector = undefined; // não mistura modelos/dims no modo lexical
       }
     }
     this.mode = "lexical";
