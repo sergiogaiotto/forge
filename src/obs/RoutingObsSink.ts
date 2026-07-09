@@ -19,7 +19,12 @@ export class RoutingObsSink implements ObsSink {
   }
 
   async flush(): Promise<void> {
-    // Drena os dois independentemente do modo atual (cada um é no-op quando a fila está vazia).
+    // "off" = nada sai do cliente: NÃO drena — retém o resíduo bufferizado antes da troca de modo
+    // (simétrico ao LangfuseDirectSink, cujo flush já respeita cfg.enabled). Achado da revisão: sem
+    // isto, virar o modo para off ainda mandava o resíduo do gateway na próxima batida do timer.
+    if (this.getMode() === "off") return;
+    // Nos modos ativos, drena os DOIS (cada um é no-op com fila vazia) — não perde resíduo de uma
+    // troca direct↔gateway no meio da sessão.
     await this.direct.flush();
     await this.gateway.flush();
   }

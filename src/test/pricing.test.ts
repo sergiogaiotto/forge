@@ -44,3 +44,16 @@ test("sanitizePricing: descarta lixo, mantém entradas válidas; nega negativos 
   assert.deepEqual(sanitizePricing(null), {});
   assert.deepEqual(sanitizePricing([{ input: 1, output: 1 }]), {});
 });
+
+test("REGRESSÃO: sanitizePricing exige NÚMERO real — rejeita lixo coagido por Number()", () => {
+  // "" → 0, true → 1, [3] → 3, null → 0 seriam ACEITOS por Number(); agora são rejeitados
+  const clean = sanitizePricing({
+    a: { input: 3, output: "" },
+    b: { input: true, output: 2 },
+    c: { input: [3], output: 1 },
+    d: { input: null, output: 5 },
+    e: { input: "3", output: 15 }, // string numérica também é rejeitada (só number literal)
+    ok: { input: 3, output: 15 },
+  });
+  assert.deepEqual(clean, { ok: { input: 3, output: 15 } }, "só a entrada com dois números reais sobrevive");
+});

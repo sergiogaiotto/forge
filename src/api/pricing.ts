@@ -61,9 +61,10 @@ export function sanitizePricing(raw: unknown): PricingTable {
   for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
     if (!key || typeof val !== "object" || val === null) continue;
     const v = val as Record<string, unknown>;
-    const input = Number(v.input);
-    const output = Number(v.output);
-    if (Number.isFinite(input) && Number.isFinite(output) && input >= 0 && output >= 0) {
+    // Exige NÚMEROS REAIS — nada de coerção do Number() (""→0, true→1, [3]→3): coagir lixo a preço
+    // subvaloriza o custo em silêncio (o oposto do "não fabricar preço"). Só número finito >= 0 vale.
+    const { input, output } = v;
+    if (typeof input === "number" && typeof output === "number" && Number.isFinite(input) && Number.isFinite(output) && input >= 0 && output >= 0) {
       out[key] = { input, output };
     }
   }
