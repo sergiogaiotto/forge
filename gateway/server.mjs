@@ -244,6 +244,41 @@ async function handleRenew(req, res, reqId) {
   send(res, 200, { token, expiresAt: s.expiresAt, subject: s.subject, org: s.org });
 }
 
+// Relay governado de observabilidade: o cliente (GatewayRelaySink) envia eventos de WORKFLOW já no
+// formato de ingestão do Langfuse; o gateway valida a sessão (+ revogação) e os encaminha com a
+// secretKey SERVER-SIDE — fechando o gap de a secret viver no cliente. Fail-open: sem Langfuse
+// habilitado, aceita e descarta (o cliente não precisa saber). Respeita amostragem/teto da fila.
+async function handleObsIngest(req, res, reqId) {
+  const token = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
+  const session = sessions.get(token);
+  if (!session || session.expiresAt <= Math.floor(Date.now() / 1000)) {
+    return send(res, 401, { error: "invalid session" });
+  }
+  if (revocation.isRevoked(session.subject)) {
+    sessions.delete(token);
+    return send(res, 403, { error: "revoked" });
+  }
+  if (rateLimited("obs:" + token)) return send(res, 429, { error: "rate limited" });
+  const lf = CFG.langfuse;
+  const body = JSON.parse((await readBody(req, 4_000_000)) || "{}");
+  const batch = Array.isArray(body.batch) ? body.batch : [];
+  // Sem Langfuse habilitado/sample-out, aceita silenciosamente (o cliente é fail-open e não deve travar).
+  if (!lf.enabled || !lf.secretKey) return send(res, 202, { accepted: 0 });
+  let accepted = 0;
+  for (const e of batch) {
+    if (!e || typeof e !== "object") continue;
+    if (Math.random() > lf.sampleRate) continue; // amostragem governada pelo Admin (server-side)
+    if (traceQueue.length >= lf.queueMax) {
+      traceQueue.shift();
+      droppedTraces++;
+    }
+    traceQueue.push(e);
+    accepted++;
+  }
+  logLine("info", "obs relay recebido", { reqId, org: session.org, eventos: batch.length, aceitos: accepted });
+  send(res, 202, { accepted });
+}
+
 async function handleProxy(req, res, reqId) {
   const token = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
   const session = sessions.get(token);
@@ -330,6 +365,7 @@ async function router(req, res) {
     }
     if (req.method === "POST" && req.url === "/license/activate") return handleActivate(req, res, reqId);
     if (req.method === "POST" && req.url === "/license/renew") return handleRenew(req, res, reqId);
+    if (req.method === "POST" && req.url === "/obs/ingest") return handleObsIngest(req, res, reqId);
     if (req.method === "POST" && (req.url === "/v1/chat/completions" || req.url === "/chat/completions")) return handleProxy(req, res, reqId);
     send(res, 404, { error: "not found" });
   } catch (err) {

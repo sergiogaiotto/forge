@@ -59,17 +59,29 @@ export interface IngestionEvent {
 
 export type CaptureMode = "full" | "masked" | "metadata-only";
 
+// Destino da observabilidade. "off" = nada sai. "direct" = sink Langfuse com as chaves do DEV (modo
+// pessoal/PoC — a secretKey vive no cliente). "gateway" = GatewayRelaySink: os eventos vão pelo gateway
+// (secretKey server-side, governado pelo Admin) — fecha o gap da observabilidade governada dos eventos
+// de workflow do cliente (aplicar/gate/run), que nunca passam pelo proxy de geração.
+export type ObsMode = "off" | "direct" | "gateway";
+
+import type { PricingTable } from "../api/pricing";
+
 export interface ObsConfig {
-  enabled: boolean;
+  enabled: boolean; // = (mode !== "off"); derivado, mantido para compat dos chamadores existentes
+  mode: ObsMode;
   baseUrl: string;
   publicKey: string;
   environment: string;
   sampleRate: number;
   capture: CaptureMode;
+  // FinOps: tabela de preços por modelo (configurável; vazia = sem custo emitido) + rótulo da moeda.
+  pricing: PricingTable;
+  currency: string;
 }
 
-// Destino plugável dos eventos de ingestão. Hoje: sink DIRETO (Langfuse com as chaves do dev).
-// Futuro: GatewayRelaySink (eventos vão pelo gateway; secretKey server-side, governado pelo Admin).
+// Destino plugável dos eventos de ingestão: LangfuseDirectSink (direto) ou GatewayRelaySink (governado),
+// selecionados por `mode` via RoutingObsSink.
 export interface ObsSink {
   enqueue(events: IngestionEvent[]): void;
   flush(): Promise<void>;

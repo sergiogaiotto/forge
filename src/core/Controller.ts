@@ -102,6 +102,8 @@ import { validatorsFromStack } from "../skills/stackValidators";
 import { Role, resolveRole, roleGuidance, roleGuidanceLine, roleLabel, roleSkills, setRole, stripFrontmatter } from "../util/roleDefaults";
 import { Observability } from "../obs/Observability";
 import { LangfuseDirectSink } from "../obs/LangfuseDirectSink";
+import { GatewayRelaySink } from "../obs/GatewayRelaySink";
+import { RoutingObsSink } from "../obs/RoutingObsSink";
 import { LocalDiagnosticsLog } from "../obs/LocalDiagnosticsLog";
 import { renderDiagnosticsBundle } from "../obs/diagnostics";
 import { Runner } from "./Runner";
@@ -211,9 +213,22 @@ export class Controller {
       () => this.sessionId,
       { enabled: () => this.config.diagnostics().enabled, now: () => new Date().toISOString() }
     );
+    // Observabilidade com sink roteável: "direct" (chaves do dev) ou "gateway" (relay governado —
+    // secret server-side, autenticado pelo token de sessão). O modo vem de forge.observability.mode.
+    const directSink = new LangfuseDirectSink(
+      () => this.config.observability(),
+      () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET),
+      this.egress
+    );
+    const relaySink = new GatewayRelaySink(
+      () => this.config.gatewayUrl(),
+      () => this.sessionToken?.token,
+      this.egress,
+      { warn: (m) => log.warn(m) }
+    );
     this.obs = new Observability(
       () => this.config.observability(),
-      new LangfuseDirectSink(() => this.config.observability(), () => this.secrets.get(SecretsStore.KEY_LANGFUSE_SECRET), this.egress),
+      new RoutingObsSink(() => this.config.observability().mode, directSink, relaySink),
       { onError: (m) => log.warn(m) },
       this.diag
     );

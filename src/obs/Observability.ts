@@ -69,7 +69,17 @@ export class Observability {
 
     const nowIso = this.now();
     const events = orphan ? [orphanTrace(this.id(), ctx.traceId, nowIso, cfg.environment)] : [];
-    events.push(...buildIngestion(e, { traceId: ctx.traceId, id: this.id, nowIso, capture: cfg.capture, environment: cfg.environment }));
+    events.push(
+      ...buildIngestion(e, {
+        traceId: ctx.traceId,
+        id: this.id,
+        nowIso,
+        capture: cfg.capture,
+        environment: cfg.environment,
+        pricing: cfg.pricing,
+        currency: cfg.currency,
+      })
+    );
     this.sink.enqueue(events);
   }
 
