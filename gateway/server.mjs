@@ -15,6 +15,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRevocationChecker } from "./revocations.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, ".env"));
@@ -49,6 +50,11 @@ const CFG = {
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const sessions = new Map(); // token -> { subject, org, expiresAt }
+// Revogação enforçada em activate/renew/proxy (cache por mtime). Um subject revogado perde o acesso
+// no próximo request, sem esperar o gateway reiniciar.
+const revocation = createRevocationChecker(CFG.revocationsPath, {
+  onError: (e) => logLine("warn", "revocations.json ilegível — mantendo última lista boa", { error: e.message }),
+});
 const rateBuckets = new Map(); // key -> { tokens, updatedAt }
 const traceQueue = [];
 let droppedTraces = 0;
@@ -120,14 +126,7 @@ function verifyLicense(key) {
   if (!valid) return { ok: false, reason: "signature" };
   const payload = JSON.parse(b64urlDecode(payloadB64).toString("utf8"));
   if (payload.expiry <= Math.floor(Date.now() / 1000)) return { ok: false, reason: "expired" };
-  if (fs.existsSync(CFG.revocationsPath)) {
-    try {
-      const revs = JSON.parse(fs.readFileSync(CFG.revocationsPath, "utf8"));
-      if (revs.some((r) => r.subject === payload.subject)) return { ok: false, reason: "revoked" };
-    } catch {
-      /* lista corrompida — ignora, não bloqueia indevidamente */
-    }
-  }
+  if (revocation.isRevoked(payload.subject)) return { ok: false, reason: "revoked" };
   return { ok: true, payload };
 }
 
@@ -224,10 +223,17 @@ async function handleActivate(req, res, reqId) {
   send(res, 200, { token, expiresAt, subject: v.payload.subject, org: v.payload.org });
 }
 
-async function handleRenew(req, res) {
+async function handleRenew(req, res, reqId) {
   const { token } = JSON.parse((await readBody(req)) || "{}");
   const s = sessions.get(token);
   if (!s) return send(res, 403, { error: "unknown token" });
+  // Revogação enforçada na renovação: um subject revogado NÃO estende a sessão (o gap era exatamente
+  // renovar indefinidamente uma sessão em memória). Mata a sessão para não vazar em requests seguintes.
+  if (revocation.isRevoked(s.subject)) {
+    sessions.delete(token);
+    logLine("info", "renovação recusada — subject revogado", { reqId, subject: s.subject });
+    return send(res, 403, { error: "revoked" });
+  }
   s.expiresAt = Math.floor(Date.now() / 1000) + CFG.sessionTtlSec;
   send(res, 200, { token, expiresAt: s.expiresAt, subject: s.subject, org: s.org });
 }
@@ -237,6 +243,13 @@ async function handleProxy(req, res, reqId) {
   const session = sessions.get(token);
   if (!session || session.expiresAt <= Math.floor(Date.now() / 1000)) {
     return send(res, 401, { error: "invalid session" }); // RF-013 recusa autoritativa
+  }
+  // Revogação enforçada no proxy: mesmo com sessão válida e não-expirada, um subject revogado é
+  // barrado no PRÓXIMO request de inferência (sem esperar restart do gateway). Mata a sessão.
+  if (revocation.isRevoked(session.subject)) {
+    sessions.delete(token);
+    logLine("info", "proxy recusado — subject revogado", { reqId, subject: session.subject });
+    return send(res, 403, { error: "revoked" });
   }
   if (rateLimited(token)) return send(res, 429, { error: "rate limited" });
 
@@ -310,7 +323,7 @@ async function router(req, res) {
       });
     }
     if (req.method === "POST" && req.url === "/license/activate") return handleActivate(req, res, reqId);
-    if (req.method === "POST" && req.url === "/license/renew") return handleRenew(req, res);
+    if (req.method === "POST" && req.url === "/license/renew") return handleRenew(req, res, reqId);
     if (req.method === "POST" && (req.url === "/v1/chat/completions" || req.url === "/chat/completions")) return handleProxy(req, res, reqId);
     send(res, 404, { error: "not found" });
   } catch (err) {

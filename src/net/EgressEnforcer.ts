@@ -8,12 +8,23 @@
 export interface EgressPolicy {
   allowExternal: boolean;
   allowedHosts: string[];
+  // Quando true (padrão), hosts in-network de LAN (`.internal`/`.local`/IP privado) são liberados
+  // automaticamente sem constar na allowlist — conveniente numa rede corporativa fechada. Um admin que
+  // queira defesa em profundidade contra redirecionamento de egress (ex.: um settings apontando
+  // `rag.embeddings.url` para um host interno arbitrário) define `false`: aí SÓ o loopback é liberado
+  // automaticamente; qualquer host de LAN precisa estar explicitamente em `allowedHosts`. Ausente = true
+  // (retrocompatível). Loopback (localhost/127.x/::1) é SEMPRE permitido — tooling local legítimo, não
+  // vetor de exfiltração para a rede.
+  trustInNetwork?: boolean;
 }
 
 export type WarnFn = (message: string) => void;
 
-const PRIVATE_IP =
-  /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc00:|fd00:|fe80:)/i;
+// Loopback: sempre in-network (Ollama/LM Studio/gateway local). Nunca é vetor de exfiltração LAN.
+const LOOPBACK_IP = /^(127\.|::1$|0:0:0:0:0:0:0:1$)/i;
+// LAN/privado: in-network só quando trustInNetwork (default). Redirecionável por settings — o gate.
+const PRIVATE_LAN_IP =
+  /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|fc00:|fd00:|fe80:)/i;
 
 export class EgressBlockedError extends Error {
   constructor(public readonly target: string) {
@@ -31,9 +42,14 @@ export class EgressEnforcer {
 
   /** Hosts que contam como in-network mesmo sem estarem listados. */
   private isInNetwork(host: string): boolean {
-    const h = host.toLowerCase();
-    if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal")) return true;
-    if (PRIVATE_IP.test(h)) return true;
+    // IPv6 vem entre colchetes de `new URL(...).hostname` (ex.: "[::1]") — normaliza para casar o regex.
+    const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+    // Loopback é sempre liberado (tooling local), independente de trustInNetwork.
+    if (h === "localhost" || h === "ip6-localhost" || LOOPBACK_IP.test(h)) return true;
+    // LAN/privado só quando o admin confia na rede (padrão). Com trustInNetwork:false, exige allowlist.
+    if (this.policy.trustInNetwork === false) return false;
+    if (h.endsWith(".local") || h.endsWith(".internal")) return true;
+    if (PRIVATE_LAN_IP.test(h)) return true;
     return false;
   }
 

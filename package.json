@@ -40,7 +40,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "As conexões de warehouse (forge.warehouse.connections) e o catálogo MCP definem comandos que o FORGE executa localmente. Em um workspace não confiável esses settings são ignorados até você confiar na pasta.",
+      "description": "Alguns settings do FORGE definem comandos que ele executa localmente (conexões de warehouse, catálogo MCP, comandos de run/test) ou DESTINOS DE REDE para onde ele envia dados (gateway, embeddings do RAG, Langfuse). Em um workspace não confiável esses settings são ignorados até você confiar na pasta — evitando que um repositório malicioso injete comando ou redirecione o egress para um host arbitrário.",
       "restrictedConfigurations": [
         "forge.warehouse.connections",
         "forge.warehouse.default",
@@ -49,7 +49,13 @@
         "forge.search.tool",
         "forge.run.commands",
         "forge.test.command",
-        "forge.ocr.tesseractPath"
+        "forge.ocr.tesseractPath",
+        "forge.gateway.url",
+        "forge.rag.embeddings.url",
+        "forge.observability.langfuse.baseUrl",
+        "forge.egress.allowedHosts",
+        "forge.egress.allowExternal",
+        "forge.egress.trustInNetwork"
       ]
     }
   },
@@ -270,6 +276,11 @@
             "hub-gpus.claro.com.br"
           ],
           "markdownDescription": "Hosts in-network permitidos (provedor, gateway, Langfuse, MCP, licença). Qualquer destino fora desta lista é bloqueado e registrado."
+        },
+        "forge.egress.trustInNetwork": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Liberar automaticamente hosts **in-network de LAN** (`.internal`, `.local`, IPs privados 10.x/192.168.x/172.16-31.x) sem que constem na `allowedHosts`. **Padrão: true** (retrocompatível — conveniente numa rede corporativa fechada). Defina **false** para **defesa em profundidade**: com `false`, só o **loopback** (`localhost`/`127.x`/`::1`) é liberado automaticamente e qualquer host de LAN precisa estar explicitamente em `forge.egress.allowedHosts` — evita que um settings (ex.: `forge.rag.embeddings.url`, `forge.gateway.url`) redirecione o egress para um host interno arbitrário (defesa contra exfiltração/SSRF intra-rede). Este setting é ignorado em workspace não confiável."
         },
         "forge.mcp.catalog": {
           "type": "array",

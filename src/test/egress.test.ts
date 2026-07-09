@@ -32,3 +32,30 @@ test("non-URL targets (stdio commands) are not network egress", () => {
   const e = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, silent);
   assert.equal(e.isAllowed("sqlcl"), true);
 });
+
+// ---- trustInNetwork (defesa em profundidade contra redirecionamento de egress) ----
+
+test("trustInNetwork ausente = true = retrocompatível (LAN in-network liberada)", () => {
+  const e = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, silent);
+  assert.equal(e.isAllowed("http://10.0.0.5:9000/"), true);
+  assert.equal(e.isAllowed("https://x.internal/embed"), true);
+});
+
+test("trustInNetwork:false exige allowlist para LAN, mas loopback segue liberado", () => {
+  const e = new EgressEnforcer({ allowExternal: false, allowedHosts: [], trustInNetwork: false }, silent);
+  // loopback (tooling local) SEMPRE ok
+  assert.equal(e.isAllowed("http://localhost:11434/v1"), true);
+  assert.equal(e.isAllowed("http://127.0.0.1:8787/"), true);
+  assert.equal(e.isAllowed("http://[::1]:8080/"), true);
+  // LAN/interno agora BLOQUEADO (o vetor de redirecionamento de egress por settings)
+  assert.equal(e.isAllowed("http://10.0.0.5:9000/steal"), false);
+  assert.equal(e.isAllowed("http://192.168.1.10/"), false);
+  assert.equal(e.isAllowed("https://exfil.internal/embed"), false);
+  assert.equal(e.isAllowed("https://x.local/"), false);
+});
+
+test("trustInNetwork:false ainda libera host de LAN explicitamente na allowlist", () => {
+  const e = new EgressEnforcer({ allowExternal: false, allowedHosts: ["oracle.internal"], trustInNetwork: false }, silent);
+  assert.equal(e.isAllowed("https://oracle.internal/mcp"), true);
+  assert.equal(e.isAllowed("https://outro.internal/mcp"), false);
+});

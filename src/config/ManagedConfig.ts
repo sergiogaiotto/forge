@@ -63,6 +63,9 @@ export class ManagedConfig {
     return {
       allowExternal: this.cfg().get<boolean>("egress.allowExternal", false),
       allowedHosts: this.cfg().get<string[]>("egress.allowedHosts", ["hub-gpus.claro.com.br"]),
+      // Default true = retrocompatível (LAN in-network liberada). Admin põe false para exigir que até
+      // hosts internos estejam na allowlist (defesa contra redirecionamento de egress por settings).
+      trustInNetwork: this.cfg().get<boolean>("egress.trustInNetwork", true),
     };
   }
 
