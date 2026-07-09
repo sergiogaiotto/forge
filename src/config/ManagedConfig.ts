@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import { EgressPolicy } from "../net/EgressEnforcer";
 import { McpServerEntry } from "../mcp/types";
-import { CaptureMode, ObsConfig } from "../obs/types";
+import { CaptureMode, ObsConfig, ObsMode } from "../obs/types";
+import { sanitizePricing } from "../api/pricing";
 
 export interface RagConfig {
   enabled: boolean;
@@ -207,18 +208,25 @@ export class ManagedConfig {
     };
   }
 
-  // Config da observabilidade do cliente (sink direto Langfuse). A secretKey NÃO vem daqui —
-  // fica no SecretStorage (RNF-010). Em produção governada, prefira o gateway-relay.
+  // Config da observabilidade. `mode` decide o destino: "direct" (chaves do dev), "gateway" (relay
+  // governado, secret server-side) ou "off". Retrocompat: sem `mode` explícito, o legado
+  // `observability.langfuse.enabled=true` vira "direct". A secretKey NÃO vem daqui (SecretStorage).
   observability(): ObsConfig {
     const c = this.cfg();
     const cap = c.get<string>("observability.langfuse.capture", "masked");
+    const legacyEnabled = c.get<boolean>("observability.langfuse.enabled", false);
+    const rawMode = c.get<string>("observability.mode", legacyEnabled ? "direct" : "off");
+    const mode: ObsMode = rawMode === "direct" || rawMode === "gateway" ? rawMode : "off";
     return {
-      enabled: c.get<boolean>("observability.langfuse.enabled", false),
+      enabled: mode !== "off",
+      mode,
       baseUrl: c.get<string>("observability.langfuse.baseUrl", "https://cloud.langfuse.com").trim(),
       publicKey: c.get<string>("observability.langfuse.publicKey", "").trim(),
       environment: c.get<string>("observability.langfuse.env", "development").trim() || "development",
       sampleRate: c.get<number>("observability.langfuse.sampleRate", 1.0),
       capture: (cap === "full" || cap === "metadata-only" ? cap : "masked") as CaptureMode,
+      pricing: sanitizePricing(c.get<unknown>("observability.pricing", {})),
+      currency: c.get<string>("observability.currency", "R$").trim() || "R$",
     };
   }
 

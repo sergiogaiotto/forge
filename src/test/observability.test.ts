@@ -7,11 +7,14 @@ import { IngestionEvent, ObsConfig, ObsSink } from "../obs/types";
 const NOW = "2026-06-28T12:00:00.000Z";
 const cfg = (over: Partial<ObsConfig> = {}): ObsConfig => ({
   enabled: true,
+  mode: "direct",
   baseUrl: "https://cloud.langfuse.com",
   publicKey: "pk",
   environment: "test",
   sampleRate: 1,
   capture: "masked",
+  pricing: {},
+  currency: "R$",
   ...over,
 });
 

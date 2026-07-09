@@ -556,10 +556,38 @@
           "default": "",
           "markdownDescription": "Pasta `tessdata` com os idiomas do OCR (ex.: `eng.traineddata`, `por.traineddata`). Vazio = usa o `tessdata` padrão do tesseract. Aponte para uma pasta **gravável do usuário** para adicionar o `por` **sem admin**."
         },
+        "forge.observability.mode": {
+          "type": "string",
+          "enum": ["off", "direct", "gateway"],
+          "enumDescriptions": [
+            "Observabilidade desligada (nada sai do cliente).",
+            "Cliente → Langfuse direto (a secretKey vive no cliente). Modo pessoal/PoC.",
+            "Cliente → GATEWAY → Langfuse (o gateway detém a secretKey server-side; o Admin governa amostragem/captura). Modo corporativo recomendado."
+          ],
+          "default": "off",
+          "markdownDescription": "Destino da **observabilidade** (geração + workflow: skill, aplicar/descartar, gate, execução, testes, revisão). `gateway` é o **relay governado** — os eventos vão pelo gateway autenticados pelo token de sessão, e a **secretKey do Langfuse nunca existe no cliente** (fecha o gap de governança). `direct` mantém o modo legado (chaves no cliente). Sem definir, o legado `forge.observability.langfuse.enabled=true` equivale a `direct`."
+        },
+        "forge.observability.currency": {
+          "type": "string",
+          "default": "R$",
+          "markdownDescription": "Rótulo da moeda usado no custo estimado (só um rótulo — ex.: `R$`, `US$`). Ver `forge.observability.pricing`."
+        },
+        "forge.observability.pricing": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "**Preços por modelo** para o custo estimado (FinOps) que aparece no trace do Langfuse. Chave = trecho do `modelId` (a mais específica vence); valor = `{ \"input\": <preço por 1M tokens de entrada>, \"output\": <por 1M de saída> }`. Ex.: `{ \"claude-sonnet\": { \"input\": 18, \"output\": 90 }, \"gpt-oss\": { \"input\": 0, \"output\": 0 } }`. **Vazio (padrão) = nenhum custo é emitido** — o FORGE não fabrica preço (o HubGPU é self-hosted; o custo é decisão da organização).",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "input": { "type": "number" },
+              "output": { "type": "number" }
+            }
+          }
+        },
         "forge.observability.langfuse.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Habilita a **observabilidade direta** (cliente → Langfuse) da geração de código e do workflow ao redor (skill, aplicar/descartar, gate, execução, testes, revisão). Modo pessoal/PoC — a secretKey fica no cliente. Para garantia/governança do Admin, use o **gateway-relay** (secret server-side). Defina a secretKey via comando `FORGE: Configurar observabilidade (Langfuse)`."
+          "markdownDescription": "**(Legado)** Habilita a observabilidade **direta** (cliente → Langfuse). Prefira `forge.observability.mode` (`direct`/`gateway`). Mantido para retrocompatibilidade: com este `true` e sem `mode` definido, o modo efetivo é `direct`. A secretKey fica no cliente — para governança do Admin use o `gateway`."
         },
         "forge.observability.langfuse.baseUrl": {
           "type": "string",

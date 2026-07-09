@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { estimateCost, PricingTable } from "../api/pricing";
 import { CaptureMode, IngestionEvent, ObsEvent } from "./types";
 
 // Mascaramento defensivo: redige segredos/PII no payload capturado. As classes incluem hífen para
@@ -42,6 +43,10 @@ export interface BuildOpts {
   nowIso: string;
   capture: CaptureMode;
   environment: string;
+  // FinOps: quando o admin configurou preços, o custo estimado (R$/US$) é anexado à observação de
+  // geração — é o que dá ao SRE visibilidade monetária. Ausente/vazio = nenhum custo emitido.
+  pricing?: PricingTable;
+  currency?: string;
 }
 
 // Mapeia um evento de domínio para eventos de ingestão do Langfuse. Puro — ids/tempo/traceId vêm
@@ -85,6 +90,17 @@ export function buildIngestion(e: ObsEvent, o: BuildOpts): IngestionEvent[] {
     case "generation.end": {
       const endMs = Date.parse(o.nowIso);
       const startIso = Number.isFinite(endMs) ? new Date(endMs - Math.max(0, e.durationMs)).toISOString() : o.nowIso;
+      // Custo estimado (FinOps): os campos inputCost/outputCost/totalCost são reconhecidos pelo Langfuse
+      // e aparecem na análise de custo. Só quando o admin configurou preços para este modelo.
+      const cost = e.usage ? estimateCost(e.model, e.usage, o.pricing ?? {}, o.currency ?? "R$") : undefined;
+      const usage = e.usage
+        ? {
+            input: e.usage.inputTokens,
+            output: e.usage.outputTokens,
+            unit: "TOKENS",
+            ...(cost ? { inputCost: cost.inputCost, outputCost: cost.outputCost, totalCost: cost.totalCost } : {}),
+          }
+        : undefined;
       return [
         {
           id: o.id(),
@@ -97,12 +113,12 @@ export function buildIngestion(e: ObsEvent, o: BuildOpts): IngestionEvent[] {
             model: e.model,
             input: mask(e.input, o.capture),
             output: mask(e.output, o.capture),
-            usage: e.usage ? { input: e.usage.inputTokens, output: e.usage.outputTokens, unit: "TOKENS" } : undefined,
+            usage,
             level: e.error ? "ERROR" : "DEFAULT",
             statusMessage: e.error,
             startTime: startIso,
             endTime: o.nowIso,
-            metadata: { proposals: e.proposals },
+            metadata: { proposals: e.proposals, ...(cost ? { costCurrency: cost.currency } : {}) },
           },
         },
       ];
