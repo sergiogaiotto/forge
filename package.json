@@ -340,6 +340,11 @@
           "default": true,
           "markdownDescription": "Gate de **definição de pronto** (P2) no **Modo Projeto**: quando o projeto foi gerado por completo mas falta **manifesto de dependências** (requirements.txt / pyproject.toml), **qualquer teste** (test_*.py / tests/) ou um **README com \"## Como rodar\"**, bloqueia o **Aplicar** de todos os arquivos (bloqueio + aviso, sem auto-reparo). Determinístico e conservador — só acusa ausência real. Desligue (`false`) para projetos onde teste/README não se aplicam. Respeita o `forge.validation.gateBlocksApply` mestre."
         },
+        "forge.gate.blockUnverifiedContract": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Política do admin (**Modo Projeto**, Python): quando o conjunto compilou mas o **contrato cross-file NÃO foi verificado** (o mypy não rodou — sem venv/mypy no ambiente), o **Aplicar tudo** passa de *confirmação* a **BLOQUEIO sem escape** — o botão \"Aplicar sem verificar contrato\" some e o caminho é **Preparar ambiente** (cria o venv; o gate instala o mypy nele) e gerar novamente. Garante que \"projeto pronto\" nunca dependa do toolchain presente na máquina do dev. Em rede sem PyPI, disponibilize um mirror interno (`pip config set global.index-url …`) — senão o Aplicar tudo fica bloqueado para projetos Python. Default `false` (confirmação explícita). Respeita o `forge.validation.gateBlocksApply` mestre."
+        },
         "forge.gate.security": {
           "type": "string",
           "enum": [

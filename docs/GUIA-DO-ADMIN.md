@@ -436,6 +436,18 @@ Exemplo de bloco padrão para o time:
 }
 ```
 
+**Endurecer o gate do Modo Projeto (opcional).** Por padrão, num projeto **Python** gerado sem
+`mypy` disponível, o conjunto compila mas o **contrato cross-file** (import/atributo fantasma) fica
+sem verificação — o dev vê um aviso e pode clicar *"Aplicar sem verificar contrato"*. Com:
+```jsonc
+"forge.gate.blockUnverifiedContract": true
+```
+esse escape **some**: o "Aplicar tudo" fica **bloqueado** até o contrato ser verificado de fato — o
+dev clica **Preparar ambiente** (cria o venv; o gate instala o mypy nele) e gera novamente. Use
+quando a política é "projeto selado = projeto verificado". Atenção: em rede **sem acesso ao PyPI**,
+disponibilize um **mirror interno** (`pip config set global.index-url …`) antes de ligar — sem mypy
+instalável, projetos Python ficam permanentemente bloqueados no Aplicar tudo.
+
 ---
 
 ## 13. Revogar e rotacionar chaves

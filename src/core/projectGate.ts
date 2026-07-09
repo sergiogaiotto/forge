@@ -279,6 +279,18 @@ export function requiresContractConfirmation(language: ProjectLanguage, partial:
   return language === "python" && partial;
 }
 
+// Decide o destino do "Aplicar tudo" quando o contrato cross-file não foi verificado. Padrão
+// (blockPolicy=false): confirmação explícita — o dev pode assumir com "Aplicar sem verificar contrato"
+// (force). Com a política do admin `forge.gate.blockUnverifiedContract` (E o mestre gateBlocksApply),
+// NÃO há escape: bloqueia até o contrato ser verificado de fato ("Preparar ambiente" instala o mypy) —
+// "projeto que roda" deixa de depender do toolchain presente no ambiente do dev. Puro/testável.
+export type ContractGateDecision = "proceed" | "confirm" | "block";
+export function contractGateDecision(unverified: boolean, blockPolicy: boolean, force: boolean): ContractGateDecision {
+  if (!unverified) return "proceed";
+  if (blockPolicy) return "block";
+  return force ? "proceed" : "confirm";
+}
+
 // Consolida os resultados das checagens numa decisão de gate. Só uma checagem de GATE (gate:true) que
 // REALMENTE rodou e reprovou (status "failed") contribui bloqueio — skipped nunca bloqueia (degradação
 // segura). Uma reprovação sem erro atribuível a arquivo vira `projectErrors` (bloqueio amplo). Puro.

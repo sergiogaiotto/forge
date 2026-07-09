@@ -349,7 +349,9 @@ export type ExtToWebview =
   // projectErrors → falha ampla (sem arquivo atribuível) que bloqueia todos os .py.
   // requiresContractConfirm: o conjunto compilou mas o contrato cross-file NÃO foi verificado (mypy não
   // rodou, projeto Python) — o "Aplicar tudo" exige confirmação explícita (não é verde nem bloqueio duro).
-  | { type: "project/gate"; advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[] }
+  // contractBlocked: a política do admin (forge.gate.blockUnverifiedContract) transforma essa confirmação
+  // em BLOQUEIO sem escape — a UI não oferece "Aplicar sem verificar contrato"; o caminho é verificar.
+  | { type: "project/gate"; advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; contractBlocked?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[] }
   | { type: "project/done" }
   // Todos os arquivos do projeto foram APLICADOS (após "Aplicar tudo"). O webview desmarca o Modo
   // Projeto automaticamente — fim de fluxo: a próxima mensagem volta a ser chat/diagnóstico normal.

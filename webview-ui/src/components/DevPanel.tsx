@@ -1081,7 +1081,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                       <Icon name="alert-triangle" size={13} /> Forçar bloqueados
                     </button>
                   )}
-                  {gate && gate.requiresContractConfirm && !(gate.files.length > 0 || gate.dod.length > 0) && (
+                  {gate && gate.requiresContractConfirm && !gate.contractBlocked && !(gate.files.length > 0 || gate.dod.length > 0) && (
                     // Contrato cross-file NÃO verificado (o mypy não rodou): o "Aplicar tudo" pede confirmação.
                     // Este é o "sim, gravar sem verificação" — o dev revisou e assume. forceBlocked = confirmo.
                     <button
@@ -1091,6 +1091,19 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                       onClick={() => post({ type: "proposal/applyAll", forceBlocked: true })}
                     >
                       <Icon name="alert-triangle" size={13} /> Aplicar sem verificar contrato
+                    </button>
+                  )}
+                  {gate && gate.requiresContractConfirm && gate.contractBlocked && !(gate.files.length > 0 || gate.dod.length > 0) && (
+                    // Política do admin (forge.gate.blockUnverifiedContract): SEM escape — o contrato precisa
+                    // ser verificado de fato. O caminho é preparar o ambiente (venv; o gate instala o mypy)
+                    // e gerar novamente; o host recusa o "Aplicar tudo" enquanto isso.
+                    <button
+                      className="btn"
+                      style={{ borderColor: "#d16969", color: "#d16969" }}
+                      title="Política do admin: o contrato cross-file precisa ser verificado (mypy) antes de aplicar tudo — sem escape. Preparar o ambiente cria o venv (o gate instala o mypy nele); depois gere novamente."
+                      onClick={() => post({ type: "env/prepare" })}
+                    >
+                      <Icon name="plug" size={13} /> Verificação exigida — Preparar ambiente
                     </button>
                   )}
                   <button className="btn p" disabled={!anyComplete} title="Aplicar todos os arquivos gerados, na ordem de dependência" onClick={() => post({ type: "proposal/applyAll" })}>

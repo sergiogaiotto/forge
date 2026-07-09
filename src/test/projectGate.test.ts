@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ValidatorResult } from "../shared/protocol";
 import {
+  contractGateDecision,
   GateCheckResult,
   isTscSyntaxError,
   mypyUnavailable,
@@ -25,6 +26,18 @@ test("requiresContractConfirmation: só Python + partial exige confirmação (Go
   assert.equal(requiresContractConfirmation("go", true), false);
   assert.equal(requiresContractConfirmation("java", true), false);
   assert.equal(requiresContractConfirmation("typescript", true), false);
+});
+
+test("contractGateDecision: contrato verificado segue; sem política, confirmação (force fura); com política, BLOQUEIO (force NÃO fura)", () => {
+  // contrato verificado (ou não-Python): segue direto, política e force irrelevantes
+  assert.equal(contractGateDecision(false, false, false), "proceed");
+  assert.equal(contractGateDecision(false, true, true), "proceed");
+  // padrão (sem política): confirmação explícita — "Aplicar sem verificar contrato" (force) fura
+  assert.equal(contractGateDecision(true, false, false), "confirm");
+  assert.equal(contractGateDecision(true, false, true), "proceed");
+  // política do admin (blockUnverifiedContract): bloqueio SEM escape — nem o force fura
+  assert.equal(contractGateDecision(true, true, false), "block");
+  assert.equal(contractGateDecision(true, true, true), "block");
 });
 
 test("normGatePath: separadores pra frente, sem ./ inicial nem / final", () => {
