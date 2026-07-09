@@ -12,7 +12,7 @@ import * as vscode from "vscode";
 import { SecretsStore } from "../secrets/SecretsStore";
 import { maskDataSample } from "../util/piiScan";
 import { classifySql } from "../sql/classify";
-import { resolveExecutable, unsafeField } from "./exec";
+import { buildSpawn, resolveExecutable, unsafeField } from "./exec";
 import { decideSqlRun } from "./governance";
 import { buildCostPlan, buildRunPlan, buildTestPlan, CliPlan, isPlanError, PlanError, sanitizeWarehouseOutput } from "./sqlRunners";
 import { SqlRunResult, WarehouseConnection, WarehouseSettings } from "./types";
@@ -150,22 +150,29 @@ export class WarehouseService {
       const args = plan.args.map((a) => a.replace(/\{\{WRAPPER\}\}/g, wrapper).replace(/\{\{SQL_FILE\}\}/g, sqlFile));
       const timeoutMs = this.settings().timeoutSeconds * 1000;
 
+      // buildSpawn: .exe/POSIX → shell:false (Node quota, nenhum metacaractere interpretado). Shims
+      // .bat/.cmd do Windows → shell com caminho e args MANUALMENTE quotados (o Node RECUSA .bat/.cmd
+      // sob shell:false — EINVAL, endurecimento do CVE-2024-27980). Seguro porque unsafeField já rejeitou
+      // metacaracteres nos campos de settings; a linha só tem flags, conexão validada e paths temp.
+      const spawn = buildSpawn(toolPath, args);
       const raw = await new Promise<{ code: number | null; out: string }>((resolve) => {
-        // shell:FALSE (mesmo no Windows): o binário já foi resolvido a caminho absoluto (inclui shims
-        // .cmd/.bat), então o Node quota os args e NENHUM metacaractere de shell é interpretado — a
-        // razão de o shell existir some, e o RCE via settings de conexão fecha (revisão adversarial).
-        const child = execFile(
-          toolPath,
-          args,
-          { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...plan.env }, cwd: tmpDir },
-          (err, stdout, stderr) => {
-            const code = err ? ((err as { code?: number }).code as number | null) ?? 1 : 0;
-            resolve({ code: typeof code === "number" ? code : 1, out: `${stdout ?? ""}\n${stderr ?? ""}`.trim() });
-          }
-        );
-        // stdin fechado sempre: comandos como sqlplus/psql que esperam entrada não travam até o timeout.
-        if (plan.stdin !== undefined) child.stdin?.write(plan.stdin);
-        child.stdin?.end();
+        try {
+          const child = execFile(
+            spawn.file,
+            spawn.args,
+            { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...plan.env }, cwd: tmpDir, shell: spawn.useShell },
+            (err, stdout, stderr) => {
+              const code = err ? ((err as { code?: number }).code as number | null) ?? 1 : 0;
+              resolve({ code: typeof code === "number" ? code : 1, out: `${stdout ?? ""}\n${stderr ?? ""}`.trim() });
+            }
+          );
+          // stdin fechado sempre: comandos como sqlplus/psql que esperam entrada não travam até o timeout.
+          if (plan.stdin !== undefined) child.stdin?.write(plan.stdin);
+          child.stdin?.end();
+        } catch (e) {
+          // execFile pode LANÇAR síncrono (ex.: EINVAL). Fail-open: nunca escapa de execute().
+          resolve({ code: 1, out: `Falha ao iniciar ${plan.tool}: ${(e as Error).message}` });
+        }
       });
 
       // skipMask: consultas de METADADOS/AGREGADOS (inventário de schema, perfil de paridade, custo) —

@@ -14,9 +14,7 @@ export function unsafeField(v: string | undefined): boolean {
   return typeof v === "string" && SHELL_METACHARS.test(v);
 }
 
-// Resolve o binário REAL no PATH (inclui shims .cmd/.bat/.exe do Windows) para spawnar SEM shell:true —
-// a razão de o shell existir era executar esses shims; resolvendo o caminho, o Node quota os args e
-// nenhum metacaractere é interpretado. `env` injetável para teste; default = process.env.
+// Resolve o binário REAL no PATH (inclui shims .cmd/.bat do Windows). `env` injetável para teste.
 export function resolveExecutable(tool: string, env: NodeJS.ProcessEnv = process.env, platform: string = process.platform): string | null {
   if (tool.includes("/") || tool.includes("\\")) return existsSync(tool) ? tool : null;
   const dirs = (env.PATH ?? "").split(path.delimiter).filter(Boolean);
@@ -30,4 +28,27 @@ export function resolveExecutable(tool: string, env: NodeJS.ProcessEnv = process
     }
   }
   return null;
+}
+
+// Quota um argumento para a linha de comando do cmd.exe (aspas duplas; aspas internas dobradas).
+export function cmdQuote(s: string): string {
+  return '"' + String(s).replace(/"/g, '""') + '"';
+}
+
+export interface SpawnPlan {
+  file: string;
+  args: string[];
+  useShell: boolean;
+}
+
+// Decide COMO spawnar o binário já resolvido. Para .exe (e todo POSIX): shell:FALSE — o Node quota os
+// args e nenhum metacaractere é interpretado (defesa em profundidade). Para SHIMS .bat/.cmd/.com no
+// Windows: o Node RECUSA rodá-los sob shell:false (EINVAL, endurecimento do CVE-2024-27980), então
+// roda via shell com o caminho e os args MANUALMENTE quotados. Isso é seguro AQUI porque `unsafeField`
+// já rejeitou metacaracteres de shell nos campos de settings ANTES do spawn — a linha de comando só
+// tem flags constantes, valores de conexão validados e caminhos temporários (sem metacaractere).
+export function buildSpawn(toolPath: string, args: string[], platform: string = process.platform): SpawnPlan {
+  const isShim = platform === "win32" && /\.(cmd|bat|com)$/i.test(toolPath);
+  if (!isShim) return { file: toolPath, args, useShell: false };
+  return { file: cmdQuote(toolPath), args: args.map(cmdQuote), useShell: true };
 }

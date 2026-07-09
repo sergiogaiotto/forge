@@ -114,8 +114,10 @@ export function canReuse(persisted: PersistedFile | undefined, current: FileMeta
   return persisted.mtimeMs === current.mtimeMs && persisted.size === current.size;
 }
 
-// Os vetores persistidos servem para o modelo/dims ATUAIS? (se o admin trocou o modelo de embeddings,
-// os vetores antigos são incompatíveis — descarta e re-embeda tudo.)
-export function vectorsCompatible(snap: IndexSnapshot, model: string, dims: number): boolean {
-  return snap.mode === "embeddings" && snap.embeddingModel === model && snap.embeddingDims === dims;
+// Os vetores persistidos servem para o modelo ATUAL? Compara só o MODELO — a dimensão vem da config
+// (0 = "padrão do modelo"), que NÃO reflete o comprimento real do vetor; confiar nela deixaria passar
+// um drift de dimensão do mesmo model name. A homogeneidade real de comprimento é verificada no
+// rebuildRetrieval (re-embeda tudo se detectar mistura). Aqui é só um pré-filtro barato.
+export function vectorsCompatible(snap: IndexSnapshot, model: string): boolean {
+  return snap.mode === "embeddings" && !!model && snap.embeddingModel === model;
 }

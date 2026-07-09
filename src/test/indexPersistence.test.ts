@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { canReuse, parseSnapshot, serializeSnapshot, snapshotFileName, SNAPSHOT_VERSION, vectorsCompatible } from "../rag/indexPersistence";
 import { IndexedChunk } from "../rag/types";
+import { cosine } from "../util/vector";
+
+test("REGRESSÃO: cosine retorna 0 para vetores de dimensões diferentes (não trunca por Math.min)", () => {
+  assert.equal(cosine([1, 0, 0], [1, 0]), 0, "dims diferentes = incomparável = 0");
+  assert.ok(cosine([1, 0, 0], [1, 0, 0]) > 0.99); // mesma dim continua funcionando
+});
 
 const chunk = (id: string, vector?: number[]): IndexedChunk =>
   ({ id, relPath: "a.ts", language: "typescript", startLine: 1, endLine: 5, symbol: "foo", text: "código", vector }) as IndexedChunk;
@@ -57,16 +63,16 @@ test("canReuse: reusa só quando mtime E size batem", () => {
   assert.equal(canReuse(p, undefined), false); // sumiu do disco
 });
 
-test("vectorsCompatible: só reusa vetores se modo=embeddings E modelo+dims batem", () => {
+test("vectorsCompatible: reusa se modo=embeddings E modelo bate (dims real vem da checagem de homogeneidade)", () => {
   const snap = parseSnapshot(serializeSnapshot({
     workspaceRoot: "r", embeddingModel: "Qwen3", embeddingDims: 1024, mode: "embeddings",
     files: makeFiles([]),
   }))!;
-  assert.equal(vectorsCompatible(snap, "Qwen3", 1024), true);
-  assert.equal(vectorsCompatible(snap, "OutroModelo", 1024), false); // trocou o modelo → re-embeda
-  assert.equal(vectorsCompatible(snap, "Qwen3", 512), false); // trocou dims
+  assert.equal(vectorsCompatible(snap, "Qwen3"), true);
+  assert.equal(vectorsCompatible(snap, "OutroModelo"), false); // trocou o modelo → re-embeda
+  assert.equal(vectorsCompatible(snap, ""), false); // modelo vazio nunca reusa
   const lex = parseSnapshot(serializeSnapshot({ workspaceRoot: "r", embeddingModel: "", embeddingDims: 0, mode: "lexical", files: makeFiles([]) }))!;
-  assert.equal(vectorsCompatible(lex, "", 0), false); // lexical não tem vetores para reusar
+  assert.equal(vectorsCompatible(lex, ""), false); // lexical não tem vetores para reusar
 });
 
 test("snapshotFileName: estável por workspace, diferente entre workspaces", () => {

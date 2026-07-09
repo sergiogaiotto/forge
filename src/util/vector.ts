@@ -1,11 +1,14 @@
 // Utilitários vetoriais para a recuperação semântica (RAG).
 
-/** Similaridade do cosseno entre dois vetores de mesma dimensão. */
+/** Similaridade do cosseno entre dois vetores de mesma dimensão. Vetores de dimensões DIFERENTES não
+ *  são comparáveis — retorna 0 (o par cai fora do top-k) em vez de truncar por Math.min e devolver um
+ *  score espúrio (defesa contra vetores de modelos/dims distintos no mesmo índice — revisão adversarial). */
 export function cosine(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0;
   let dot = 0;
   let na = 0;
   let nb = 0;
-  const n = Math.min(a.length, b.length);
+  const n = a.length;
   for (let i = 0; i < n; i++) {
     dot += a[i] * b[i];
     na += a[i] * a[i];

@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveExecutable, unsafeField } from "../warehouse/exec";
+import { buildSpawn, resolveExecutable, unsafeField } from "../warehouse/exec";
 
 // ---- resolveExecutable (puro) ----
 
@@ -39,26 +39,68 @@ test("unsafeField: rejeita metacaracteres de shell; aceita string de conexão no
 
 // ---- SPAWN REAL: a correção de RCE não interpreta metacaractere (o teste que faltava) ----
 
-test("RCE: spawn com shell:false NÃO interpreta metacaractere no argumento (arquivo não é criado)", async () => {
+test("buildSpawn: .exe/POSIX usa shell:false; shim .bat/.cmd no Windows usa shell com args quotados", () => {
+  assert.deepEqual(buildSpawn("/usr/bin/psql", ["--csv", "-f", "/tmp/q.sql"], "linux"), {
+    file: "/usr/bin/psql",
+    args: ["--csv", "-f", "/tmp/q.sql"],
+    useShell: false,
+  });
+  const shim = buildSpawn("C:/Program Files/oracle/sql.cmd", ["-s", "@/tmp/w.sql"], "win32");
+  assert.equal(shim.useShell, true);
+  assert.equal(shim.file, '"C:/Program Files/oracle/sql.cmd"'); // caminho quotado (espaço)
+  assert.deepEqual(shim.args, ['"-s"', '"@/tmp/w.sql"']);
+  // .exe no Windows NÃO é shim → shell:false
+  assert.equal(buildSpawn("C:/nodejs/node.exe", ["-e", "1"], "win32").useShell, false);
+});
+
+test("RCE: metacaractere NÃO é interpretado E o argumento chega literal ao processo (não-vacuous)", async () => {
   const node = resolveExecutable("node");
   assert.ok(node);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "rce-"));
   const marker = path.join(dir, "PWNED.txt").replace(/\\/g, "/");
   try {
-    // Se o arg fosse interpretado por um shell, o `& echo ... > marker` criaria o arquivo. Com
-    // shell:false, é um ARGUMENTO literal passado ao node — que só o imprime (console.log recebe o
-    // arg cru). O marcador NÃO deve existir.
     const injectedArg = `pwned & echo hacked > "${marker}"`;
-    await new Promise<void>((resolve) => {
-      execFile(node!, ["-e", "console.log(process.argv[1])", injectedArg], { windowsHide: true }, () => resolve());
+    // Captura o stdout E rejeita em erro de spawn: prova que o node REALMENTE rodou e recebeu o arg
+    // como um único token literal (não-vacuous — antes o teste passava mesmo se o filho nem rodasse).
+    const out = await new Promise<string>((resolve, reject) => {
+      execFile(node!, ["-e", "process.stdout.write(process.argv[1])", injectedArg], { windowsHide: true }, (err, stdout) =>
+        err ? reject(err) : resolve(String(stdout))
+      );
     });
+    assert.equal(out, injectedArg, "o node recebeu o arg com '&' como texto literal (não dividido por shell)");
     let created = true;
     try {
       await fs.access(marker);
     } catch {
       created = false;
     }
-    assert.equal(created, false, "o metacaractere & foi tratado como texto literal, não executado");
+    assert.equal(created, false, "o metacaractere & não foi executado");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
+// Windows-only: prova que um SHIM .cmd de verdade RODA via buildSpawn (shell:false lançaria EINVAL) e
+// que o metacaractere continua não sendo interpretado. Fecha o gap do teste anterior (só node.exe).
+test("RCE (Windows): shim .cmd roda via buildSpawn e não interpreta metacaractere", { skip: process.platform !== "win32" }, async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shim "));
+  const shim = path.join(dir, "tool.cmd");
+  const marker = path.join(dir, "PWNED.txt").replace(/\\/g, "/");
+  try {
+    await fs.writeFile(shim, "@echo off\r\necho GOT=[%1]\r\n", "utf8");
+    const injectedArg = `x & echo hacked > "${marker}"`;
+    const plan = buildSpawn(shim, [injectedArg], "win32");
+    const out = await new Promise<string>((resolve) => {
+      execFile(plan.file, plan.args, { windowsHide: true, shell: plan.useShell }, (_e, stdout) => resolve(String(stdout || "")));
+    });
+    assert.match(out, /GOT=\[/, "o .cmd EXECUTOU (shell:false teria lançado EINVAL)");
+    let created = true;
+    try {
+      await fs.access(marker);
+    } catch {
+      created = false;
+    }
+    assert.equal(created, false, "o & não virou comando separado (quotado)");
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
