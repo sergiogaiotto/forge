@@ -73,8 +73,8 @@ import { buildFewShotTurn } from "../util/fewShot";
 import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
 import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
-import { DbtIndex, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
-import { dbtIndexStale, findDbtProject, loadDbtIndex, LoadedDbtIndex } from "../dbt/loader";
+import { DbtIndex, mdSafe, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
+import { dbtIndexStale, DbtProjectLocation, findDbtProject, loadDbtIndex, LoadedDbtIndex } from "../dbt/loader";
 import { analyzeSqlProposal, sqlEvidenceForReview } from "../sql/engine";
 import { renderFindings } from "../sql/antipatterns";
 import { classifySql } from "../sql/classify";
@@ -158,7 +158,12 @@ export class Controller {
   // recarregado por mtime (um `dbt compile` do dev atualiza sem reindexação manual). null = sem
   // projeto dbt ou sem artefatos (fail-open: as camadas que o consomem simplesmente não opinam).
   private dbtLoaded: LoadedDbtIndex | null = null;
-  private dbtProbed = false; // já procuramos dbt_project.yml nesta sessão? (evita re-varredura a cada geração)
+  private dbtProbed = false; // já VARREMOS o workspace atrás de dbt_project.yml? (só isso — nunca "desisti do manifest")
+  // Localização do projeto dbt encontrada no probe — mantida mesmo quando o manifest ainda não existe
+  // ou uma recarga falhou (TOCTOU com `dbt compile` em andamento): a próxima chamada RE-TENTA a partir
+  // dela (um fs.stat barato), em vez de degradar o grounding para o resto da sessão (revisão adversarial).
+  private dbtLocation: DbtProjectLocation | null = null;
+  private dbtInflight: Promise<DbtIndex | undefined> | null = null; // single-flight (propostas chegam em paralelo)
   private readonly runService: RunService;
   private readonly previewService: PreviewService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -2882,22 +2887,31 @@ export class Controller {
   // ---- grounding dbt (dados) ---------------------------------------------------------------------
 
   // Índice dos artefatos dbt do workspace, com recarga por mtime. undefined = sem grounding.
-  private async getDbtIndex(): Promise<DbtIndex | undefined> {
+  // Single-flight: chamadas concorrentes (várias propostas validando em paralelo) compartilham a mesma
+  // Promise em vez de recarregar em duplicidade ou verem "sem grounding" durante o probe.
+  private getDbtIndex(): Promise<DbtIndex | undefined> {
+    if (this.dbtInflight) return this.dbtInflight;
+    this.dbtInflight = this.getDbtIndexInner().finally(() => {
+      this.dbtInflight = null;
+    });
+    return this.dbtInflight;
+  }
+
+  private async getDbtIndexInner(): Promise<DbtIndex | undefined> {
     const ws = this.workspaceRoot();
     if (!ws) return undefined;
     try {
       if (this.dbtLoaded && !(await dbtIndexStale(this.dbtLoaded))) return this.dbtLoaded.index;
-      if (this.dbtLoaded) {
-        // artefatos mudaram (dbt compile/parse rodou) — recarrega do MESMO projeto
-        this.dbtLoaded = await loadDbtIndex(this.dbtLoaded.location, (m, e) => log.warn(m, e));
-        return this.dbtLoaded?.index;
+      if (!this.dbtProbed) {
+        this.dbtProbed = true; // significa só "já varri o workspace atrás de dbt_project.yml"
+        this.dbtLocation = await findDbtProject(ws);
       }
-      if (this.dbtProbed) return undefined; // já procuramos e não há projeto dbt — não re-varre a cada geração
-      this.dbtProbed = true;
-      const location = await findDbtProject(ws);
-      if (!location) return undefined;
-      this.dbtLoaded = await loadDbtIndex(location, (m, e) => log.warn(m, e));
-      if (this.dbtLoaded) {
+      if (!this.dbtLocation) return undefined; // não há projeto dbt — nada a fazer nesta sessão
+      // (Re)carrega da localização conhecida: cobre o primeiro load, a recarga por staleness E o
+      // "rode dbt parse e tente de novo" (manifest criado DEPOIS do probe). Custo: um fs.stat.
+      const before = this.dbtLoaded?.index;
+      this.dbtLoaded = await loadDbtIndex(this.dbtLocation, (m, e) => log.warn(m, e));
+      if (this.dbtLoaded && this.dbtLoaded.index !== before) {
         log.info(`dbt: grounding ativo — ${this.dbtLoaded.index.size()} tabelas do manifest (${this.dbtLoaded.location.targetDir}).`);
       }
       return this.dbtLoaded?.index;
@@ -2932,8 +2946,10 @@ export class Controller {
       }
     }
     if (!node) {
-      const hint = target?.trim()
-        ? `O modelo \`${target.trim()}\` não existe no manifest do dbt${index.suggestTable(target.trim()) ? ` — você quis dizer \`${index.suggestTable(target.trim())}\`?` : "."}`
+      const alvo = mdSafe(target?.trim() ?? "");
+      const sug = alvo ? index.suggestTable(alvo) : undefined;
+      const hint = alvo
+        ? `O modelo \`${alvo}\` não existe no manifest do dbt${sug ? ` — você quis dizer \`${mdSafe(sug)}\`?` : "."}`
         : "Abra o arquivo de um modelo dbt no editor (ou use `/impacto nome_do_modelo`).";
       this.post({ type: "impact/report", markdown: `### Raio de explosão\n\n${hint}` });
       return;
@@ -3835,9 +3851,13 @@ export class Controller {
       const index = await this.getDbtIndex();
       const sections: string[] = [];
       for (const rel of paths) {
+        // Contenção no workspace: os caminhos vêm do TEXTO do diff (linhas `+++ b/…` podem ser conteúdo
+        // adicionado, não cabeçalho) — nunca ler fora da raiz (achado da revisão adversarial).
+        const abs = safeWorkspacePath(ws, rel);
+        if (!abs) continue;
         let content: string;
         try {
-          content = await fs.readFile(path.join(ws, rel), "utf8");
+          content = await fs.readFile(abs, "utf8");
         } catch {
           continue; // arquivo deletado no diff — nada a analisar
         }

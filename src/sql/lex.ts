@@ -4,15 +4,27 @@
 // É a fundação do classificador, das regras anti-padrão e do lineage — heurístico por construção
 // (dialeto-agnóstico), nunca um parser completo: na dúvida, as camadas acima degradam confiança.
 
+export interface StrippedSql {
+  text: string;
+  // Um literal de string abriu e NUNCA fechou: o resto do statement foi apagado da análise. As camadas
+  // acima devem DEGRADAR (achado de segurança vira advisory) em vez de opinar com confiança alta —
+  // achado da revisão adversarial: o descompasso pode tanto bloquear um UPDATE filtrado quanto deixar
+  // passar um sem WHERE (o texto apagado pode conter ou fabricar o WHERE).
+  unterminated: boolean;
+}
+
 // Substitui comentários (`--`, `/* */`, `#` NÃO — em MySQL `#` comenta, mas em Snowflake/BQ é parte de
-// identificadores; fica de fora por segurança) e literais de string (aspas simples com escape `''`,
+// identificadores; fica de fora por segurança) e literais de string (aspas simples com escape `''` E
+// `\'` — MySQL/BigQuery/Spark usam backslash; aceitar ambos é seguro para uma camada heurística,
 // dollar-quoting $tag$...$tag$ do Postgres) por espaços. Aspas duplas/backticks/colchetes delimitam
-// IDENTIFICADORES — o conteúdo é mantido. Quebras de linha dentro do trecho apagado são preservadas.
-export function stripSqlNoise(sql: string): string {
+// IDENTIFICADORES — o conteúdo é mantido, EXCETO `;`/`(`/`)` (viram espaço para não corromper o split
+// de statements e o mapa de profundidade). Quebras de linha nos trechos apagados são preservadas.
+export function stripSqlNoiseEx(sql: string): StrippedSql {
   const src = sql ?? "";
   const out = src.split("");
   const n = src.length;
   let i = 0;
+  let unterminated = false;
 
   const blank = (from: number, to: number) => {
     for (let k = from; k < to && k < n; k++) if (out[k] !== "\n") out[k] = " ";
@@ -38,14 +50,23 @@ export function stripSqlNoise(sql: string): string {
     }
     if (c === "'") {
       let j = i + 1;
+      let closed = false;
       while (j < n) {
-        if (src[j] === "'" && src[j + 1] === "'") {
-          j += 2; // '' = aspas escapadas dentro do literal
+        if (src[j] === "\\") {
+          j += 2; // \' (MySQL/BigQuery/Spark) — escape por backslash
           continue;
         }
-        if (src[j] === "'") break;
+        if (src[j] === "'" && src[j + 1] === "'") {
+          j += 2; // '' = aspas escapadas dentro do literal (ANSI)
+          continue;
+        }
+        if (src[j] === "'") {
+          closed = true;
+          break;
+        }
         j++;
       }
+      if (!closed) unterminated = true;
       const to = Math.min(j + 1, n);
       // Mantém as aspas delimitadoras (regras como LIKE '%…' inspecionam o ORIGINAL; aqui o
       // conteúdo vira espaço para nenhum FROM/JOIN dentro de string virar tabela fantasma).
@@ -59,27 +80,33 @@ export function stripSqlNoise(sql: string): string {
       if (m) {
         const open = m[0];
         const close = src.indexOf(open, i + open.length);
+        if (close === -1) unterminated = true;
         const to = close === -1 ? n : close + open.length;
         blank(i, to);
         i = to;
         continue;
       }
     }
-    if (c === '"' || c === "`") {
-      // Identificador quotado: pula o corpo inteiro (conteúdo preservado) para um `"a -- b"` não
-      // ser confundido com comentário.
-      const close = src.indexOf(c, i + 1);
-      i = close === -1 ? n : close + 1;
-      continue;
-    }
-    if (c === "[") {
-      const close = src.indexOf("]", i + 1);
+    if (c === '"' || c === "`" || c === "[") {
+      // Identificador quotado: conteúdo preservado (normIdent/lookups extraem o interior), mas os
+      // caracteres ESTRUTURAIS internos viram espaço — um `"tab;ela"` não pode dividir o statement
+      // nem desbalancear o depthMap (achado da revisão adversarial).
+      const closeCh = c === "[" ? "]" : c;
+      const close = src.indexOf(closeCh, i + 1);
+      const to = close === -1 ? n : close;
+      for (let k = i + 1; k < to; k++) {
+        if (out[k] === ";" || out[k] === "(" || out[k] === ")") out[k] = " ";
+      }
       i = close === -1 ? n : close + 1;
       continue;
     }
     i++;
   }
-  return out.join("");
+  return { text: out.join(""), unterminated };
+}
+
+export function stripSqlNoise(sql: string): string {
+  return stripSqlNoiseEx(sql).text;
 }
 
 // Profundidade de parênteses ANTES de cada caractere (depth[i] = profundidade em que src[i] vive).

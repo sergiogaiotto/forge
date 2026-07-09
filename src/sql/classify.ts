@@ -3,7 +3,7 @@
 // SELECT é leitura; INSERT/UPDATE/DELETE são escrita; DROP/TRUNCATE são destrutivos. Heurístico por
 // tokenização (dialeto-agnóstico, sobre o texto já limpo pelo lex) — nunca bloqueia por si só: quem
 // decide o que fazer com a classificação são as camadas acima (engine/gates). PURO/testável.
-import { depthMap, splitStatements, stripSqlNoise } from "./lex";
+import { depthMap, splitStatements, stripSqlNoiseEx } from "./lex";
 
 export type StatementKind =
   | "select"
@@ -29,6 +29,9 @@ export interface SqlStatement {
   tables: string[]; // tabelas físicas referenciadas (FROM/JOIN/INTO/UPDATE/TABLE), sem CTEs
   ctes: string[]; // nomes definidos no WITH deste statement
   aliases: Map<string, string>; // alias → tabela (para resolução de colunas qualificadas)
+  // O conteúdo tinha string não-terminada: parte do texto foi APAGADA da análise — as camadas acima
+  // degradam achados de segurança para advisory (a análise pode estar vendo/perdendo um WHERE falso).
+  unterminated: boolean;
 }
 
 const KIND_RE: Record<string, StatementKind> = {
@@ -97,15 +100,53 @@ function collectCtes(stripped: string, d: Int32Array): { names: string[]; bodyEn
   return { names, bodyEnd: i };
 }
 
-// Coleta tabelas + aliases a partir das keywords que introduzem relações. Ignora subqueries `FROM (`
-// e funções de tabela `FROM f(...)`. `USING` só em MERGE (em JOIN…USING(cols) vem `(` logo após).
-function collectTables(stripped: string, ctes: Set<string>): { tables: string[]; aliases: Map<string, string> } {
+// Keywords que introduzem subquery quando precedem `(` — o mesmo critério da regra de ORDER BY.
+// Um `(` precedido de identificador COMUM é chamada de função: `FROM` dentro dele (EXTRACT(DAY FROM
+// col), SUBSTRING(x FROM 2), TRIM(BOTH FROM y)) NÃO introduz relação (achado da revisão adversarial).
+const SUBQUERY_INTRODUCERS = new Set([
+  "from", "join", "in", "exists", "union", "all", "select", "where", "and", "or", "on", "as", "not",
+  "intersect", "except", "having", "when", "then", "else", "using", "lateral", ",", "(",
+]);
+
+// O `FROM` neste offset está dentro de uma CHAMADA DE FUNÇÃO? (o `(` que abre a profundidade atual é
+// precedido de identificador comum, não de keyword introdutora de subquery).
+function insideFunctionCall(stripped: string, d: Int32Array, offset: number): boolean {
+  const depth = d[offset];
+  if (depth === 0) return false;
+  for (let i = offset - 1; i >= 0; i--) {
+    if (stripped[i] === "(" && d[i] === depth - 1) {
+      const before = stripped.slice(Math.max(0, i - 40), i);
+      const w = /([A-Za-z_][\w$]*)\s*$/.exec(before);
+      return !!w && !SUBQUERY_INTRODUCERS.has(w[1].toLowerCase());
+    }
+  }
+  return false;
+}
+
+// Coleta tabelas + aliases a partir das keywords que introduzem relações. Ignora subqueries `FROM (`,
+// funções de tabela `FROM f(...)` e `FROM` dentro de função (EXTRACT/SUBSTRING/TRIM). Alias reutilizado
+// para tabelas DIFERENTES (subquery sem escopo) é ENVENENADO — sem resolução, o schemaCheck não opina
+// (fail-open) em vez de ligar a coluna à tabela errada. `USING` só em MERGE.
+function collectTables(stripped: string, d: Int32Array, ctes: Set<string>): { tables: string[]; aliases: Map<string, string> } {
   const tables: string[] = [];
   const aliases = new Map<string, string>();
+  const poisoned = new Set<string>();
+  const setAlias = (alias: string, table: string) => {
+    const a = alias.toLowerCase();
+    if (poisoned.has(a)) return;
+    const prev = aliases.get(a);
+    if (prev !== undefined && prev !== table) {
+      aliases.delete(a); // mesmo alias, tabelas diferentes (escopos distintos) → ambíguo, ninguém opina
+      poisoned.add(a);
+      return;
+    }
+    aliases.set(a, table);
+  };
   const re = new RegExp(String.raw`\b(FROM|JOIN|INTO|UPDATE|USING|TABLE)\s+(${IDENT_CHAIN})`, "gi");
   let m: RegExpExecArray | null;
   while ((m = re.exec(stripped))) {
     const kw = m[1].toUpperCase();
+    if (kw === "FROM" && insideFunctionCall(stripped, d, m.index)) continue; // EXTRACT(DAY FROM col)…
     const rawIdent = m[2];
     const after = stripped.slice(m.index + m[0].length);
     // função de tabela: FROM generate_series(...) / TABLE(FLATTEN(...))
@@ -119,25 +160,40 @@ function collectTables(stripped: string, ctes: Set<string>): { tables: string[];
     // alias: `FROM tabela [AS] t` (t não pode ser keyword)
     const aliasM = /^\s*(?:AS\s+)?([A-Za-z_][\w$]*)/i.exec(after);
     if (aliasM && !NOT_ALIAS.has(aliasM[1].toLowerCase())) {
-      aliases.set(aliasM[1].toLowerCase(), name);
+      setAlias(aliasM[1], name);
     }
     if (kw === "FROM") {
       // vírgulas no mesmo nível continuam listando relações: FROM a, b c, d
-      let rest = after;
       let base = m.index + m[0].length;
       // pula o alias se houver
       if (aliasM && !NOT_ALIAS.has(aliasM[1].toLowerCase())) {
         base += aliasM[0].length;
-        rest = stripped.slice(base);
       }
-      const commaRe = new RegExp(String.raw`^\s*,\s*(${IDENT_CHAIN})(?:\s+(?:AS\s+)?([A-Za-z_][\w$]*))?`, "i");
-      let cm: RegExpExecArray | null;
-      while ((cm = commaRe.exec(rest))) {
-        const nm = normIdent(cm[1]);
-        if (nm && !ctes.has(nm) && !tables.includes(nm)) tables.push(nm);
-        if (cm[2] && !NOT_ALIAS.has(cm[2].toLowerCase())) aliases.set(cm[2].toLowerCase(), nm);
+      const commaRe = new RegExp(String.raw`^\s*,\s*(LATERAL\s+)?(${IDENT_CHAIN})`, "i");
+      for (;;) {
+        const cm = commaRe.exec(stripped.slice(base));
+        if (!cm) break;
         base += cm[0].length;
-        rest = stripped.slice(base);
+        const afterIdent = stripped.slice(base);
+        if (/^\s*\(/.test(afterIdent)) {
+          // relação-função (UNNEST(x), FLATTEN(...), GENERATE_SERIES(...)): não é tabela — pula a
+          // lista de argumentos inteira para continuar varrendo `FROM a, UNNEST(x) u, b`.
+          const openRel = base + afterIdent.indexOf("(");
+          const openDepth = d[openRel];
+          let close = openRel + 1;
+          while (close < stripped.length && !(stripped[close] === ")" && d[close] === openDepth)) close++;
+          base = close + 1;
+          const alias = /^\s*(?:AS\s+)?([A-Za-z_][\w$]*)/i.exec(stripped.slice(base));
+          if (alias && !NOT_ALIAS.has(alias[1].toLowerCase())) base += alias[0].length;
+          continue;
+        }
+        const nm = normIdent(cm[2]);
+        if (nm && !ctes.has(nm) && !/^__\w+__$/.test(nm) && !tables.includes(nm)) tables.push(nm);
+        const alias = /^\s*(?:AS\s+)?([A-Za-z_][\w$]*)/i.exec(afterIdent);
+        if (alias && !NOT_ALIAS.has(alias[1].toLowerCase())) {
+          setAlias(alias[1], nm);
+          base += alias[0].length;
+        }
       }
     }
   }
@@ -147,7 +203,7 @@ function collectTables(stripped: string, ctes: Set<string>): { tables: string[];
 // Classifica todos os statements de um conteúdo SQL (já sem Jinja, se dbt). Nunca lança: entrada
 // impossível de analisar rende `kind: "other"` — fail-open, como os demais gates do FORGE.
 export function classifySql(content: string): SqlStatement[] {
-  const stripped = stripSqlNoise(content ?? "");
+  const { text: stripped, unterminated } = stripSqlNoiseEx(content ?? "");
   const slices = splitStatements(stripped);
   const out: SqlStatement[] = [];
   for (const s of slices) {
@@ -160,7 +216,7 @@ export function classifySql(content: string): SqlStatement[] {
     const kindM = /^\s*(?:__jinja__\s*)*([A-Za-z]+)/.exec(isWith ? afterWith : st);
     const kind: StatementKind = kindM ? (KIND_RE[kindM[1].toLowerCase()] ?? "other") : "other";
     const cteSet = new Set(ctes);
-    const { tables, aliases } = collectTables(st, cteSet);
+    const { tables, aliases } = collectTables(st, d, cteSet);
     let hasTopLevelWhere = false;
     const whereRe = /\bWHERE\b/gi;
     let wm: RegExpExecArray | null;
@@ -181,6 +237,7 @@ export function classifySql(content: string): SqlStatement[] {
       tables,
       ctes,
       aliases,
+      unterminated,
     });
   }
   return out;

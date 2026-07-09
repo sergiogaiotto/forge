@@ -241,16 +241,19 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         runSummary(); // só a forma completa "/sumário projeto" executa
         return;
       }
-      if (withArgs.cmd.id === "impacto") {
-        runImpact(withArgs.args); // a cauda É o argumento (nome do modelo)
+      // /impacto e /testes-dbt: a cauda só é argumento quando é UM token (nome de modelo válido);
+      // cauda multi-palavra ("/impacto o que quebra se eu mudar X?") é mensagem do dev e segue ao
+      // modelo — anti-sequestro (achado da revisão adversarial).
+      if (withArgs.cmd.id === "impacto" && /^[\w.-]+$/.test(withArgs.args)) {
+        runImpact(withArgs.args);
         return;
       }
       if (withArgs.cmd.id === "traduzir-sql") {
-        runTranslate(withArgs.args); // a cauda É o argumento (dialeto alvo)
+        runTranslate(withArgs.args); // a cauda É o argumento (dialeto alvo); inválido orienta sem apagar
         return;
       }
-      if (withArgs.cmd.id === "testes-dbt") {
-        runDbtTests(withArgs.args); // a cauda É o argumento (nome do modelo)
+      if (withArgs.cmd.id === "testes-dbt" && /^[\w.-]+$/.test(withArgs.args)) {
+        runDbtTests(withArgs.args);
         return;
       }
       // Cauda que NÃO é o argumento esperado ("/sumario o que ficou pendente?") é mensagem do dev —

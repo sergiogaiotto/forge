@@ -41,13 +41,29 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
     const style = findings.filter((f) => !SECURITY_RULES.has(f.rule));
     const results: ValidatorResult[] = [];
 
+    // String não-terminada = parte do SQL foi APAGADA da análise: o WHERE visto (ou não visto) pode
+    // ser artefato do descompasso — o gate NUNCA pode bloquear com base em análise parcial (achado da
+    // revisão adversarial: `\'` sem par tanto bloqueava UPDATE filtrado quanto liberava um sem WHERE).
+    const partialScan = stmts.some((s) => s.unterminated);
     if (security.length > 0) {
       results.push({
         id: "sql:seguranca",
         label: "SQL · segurança",
         status: "failed",
-        gate: ctx.mode === "conservative",
-        output: renderFindings(security),
+        gate: ctx.mode === "conservative" && !partialScan,
+        output:
+          (partialScan
+            ? "⚠ String não-terminada no SQL — análise PARCIAL (gate rebaixado para advisory; revise manualmente):\n"
+            : "") + renderFindings(security),
+      });
+    } else if (partialScan) {
+      results.push({
+        id: "sql:seguranca",
+        label: "SQL · segurança",
+        status: "skipped",
+        gate: false,
+        output: "",
+        reason: "String não-terminada no SQL — a análise de segurança ficou parcial; revise DELETE/UPDATE manualmente.",
       });
     }
     results.push(
@@ -62,7 +78,12 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
           }
     );
 
-    if (ctx.index && ctx.index.size() > 0) {
+    // Escopo do gate semântico: modelos dbt sempre; .sql avulso SÓ quando ao menos uma tabela resolve
+    // no manifest (senão é migração/DDL de outra base — acusar 'tabela-desconhecida' seria ruído puro,
+    // achado da revisão adversarial).
+    const anyResolves = () =>
+      stmts.some((s) => s.tables.some((t) => !s.ctes.includes(t) && !/^__\w+__$/.test(t) && ctx.index!.findTable(t)));
+    if (ctx.index && ctx.index.size() > 0 && (isDbt || anyResolves())) {
       const schemaFindings = checkAgainstSchema(stmts, ctx.index, (s) => s.line);
       const checked = stmts.reduce((n, s) => n + s.tables.filter((t) => !s.ctes.includes(t) && !/^__\w+__$/.test(t)).length, 0);
       results.push(
@@ -112,7 +133,12 @@ export function sqlEvidenceForReview(relPath: string, content: string, ctx: SqlA
     const { sql, hadJinja } = isDbt ? stripJinja(content) : { sql: content, hadJinja: false };
     const stmts = classifySql(sql);
     const findings = stmts.flatMap((s) => findAntipatterns(s, s.line, { isDbtModel: isDbt, hadJinja }));
-    if (ctx.index && ctx.index.size() > 0) findings.push(...checkAgainstSchema(stmts, ctx.index, (s) => s.line));
+    // Mesmo escopo do gate: schema só para modelos dbt ou quando alguma tabela resolve no manifest.
+    if (ctx.index && ctx.index.size() > 0) {
+      const idx = ctx.index;
+      const anyResolves = stmts.some((s) => s.tables.some((t) => !s.ctes.includes(t) && !/^__\w+__$/.test(t) && idx.findTable(t)));
+      if (isDbt || anyResolves) findings.push(...checkAgainstSchema(stmts, idx, (s) => s.line));
+    }
     return findings;
   } catch {
     return [];

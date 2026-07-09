@@ -34,7 +34,18 @@ export function stripJinja(sql: string): JinjaStripResult {
   out = out.replace(/\{\{-?\s*this\s*-?\}\}/gi, (m) => keepNewlines(m, "__this__"));
   // {{ config(...) }} é declaração do dbt, não SQL — some (um `__jinja__` no TOPO desancoraria o WITH).
   out = out.replace(/\{\{-?\s*config\s*\([\s\S]*?\)\s*-?\}\}/gi, (m) => keepNewlines(m, ""));
-  // Comentários {# … #} e tags {% … %} somem (config/macros/if — estrutura não-SQL).
+  // Blocos com CORPO não-statement ({% set x %}…{% endset %}, {% raw %}, {% comment %}, {% macro %},
+  // {% call %}): o conteúdo some JUNTO com as tags — senão um DELETE dentro de um {% set %} (padrão
+  // comum para pre/post-hook) vazaria para o nível de statement e dispararia o gate de segurança
+  // (achado da revisão adversarial). Bloco malformado (sem end) cai no strip genérico (fail-open).
+  // `set` em bloco NÃO tem `=` ({% set nome %}corpo{% endset %}); o inline ({% set x = 1 %}) fica de
+  // fora — casá-lo aqui faria o lazy engolir SQL legítimo até um endset distante.
+  out = out.replace(/\{%-?\s*set\s+\w+\s*-?%\}[\s\S]*?\{%-?\s*endset\s*-?%\}/gi, (m) => keepNewlines(m, ""));
+  for (const tag of ["raw", "comment", "macro", "call"]) {
+    const re = new RegExp(String.raw`\{%-?\s*${tag}\b[^%]*?%\}[\s\S]*?\{%-?\s*end${tag}\s*-?%\}`, "gi");
+    out = out.replace(re, (m) => keepNewlines(m, ""));
+  }
+  // Comentários {# … #} e tags {% … %} somem (config/if/for — estrutura não-SQL).
   out = out.replace(/\{#[\s\S]*?#\}/g, (m) => keepNewlines(m, ""));
   out = out.replace(/\{%-?[\s\S]*?-?%\}/g, (m) => keepNewlines(m, ""));
   // Qualquer outra expressão {{ … }} vira identificador neutro (num SELECT parece uma coluna — inócuo).

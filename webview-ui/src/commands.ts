@@ -162,6 +162,9 @@ export function buildSqlTranslateRequest(dialect: string): string {
   const d = dialect.trim().toLowerCase();
   return [
     `Traduza o SQL do ARQUIVO ATIVO (fornecido no contexto como "Arquivo aberto") para o dialeto ${d.toUpperCase()}.`,
+    "Pré-condições — verifique ANTES de traduzir:",
+    "- Se o contexto NÃO trouxer o bloco \"Arquivo aberto\", ou se o conteúdo dele não for SQL, diga isso e PARE — não invente um arquivo;",
+    "- Se o bloco \"Arquivo aberto\" contiver o marcador de truncamento (\"… (truncado)\"), NÃO traduza — avise que o arquivo excede o limite do contexto e peça para dividir.",
     "Regras INEGOCIÁVEIS de preservação semântica:",
     "1. O resultado deve retornar EXATAMENTE as mesmas linhas/colunas — traduza sintaxe, NUNCA \"otimize\" a lógica;",
     "2. Funções sem equivalente direto: use a construção idiomática do dialeto alvo e ADICIONE um comentário `-- TRADUÇÃO:` explicando a troca;",

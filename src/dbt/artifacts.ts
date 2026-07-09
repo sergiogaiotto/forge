@@ -16,13 +16,17 @@ export type DbtResourceType = "model" | "seed" | "snapshot" | "source" | "test" 
 export interface DbtNode {
   uniqueId: string;
   resourceType: DbtResourceType;
-  name: string; // nome do modelo (ou identifier da source)
-  relation: string; // schema.nome como aparece no SQL compilado (minúsculas)
+  name: string; // nome LÓGICO — o que {{ ref('…') }}/{{ source('…','…') }} usa
+  alias?: string; // nome FÍSICO quando difere do lógico (config alias / identifier de source)
+  relation: string; // schema.físico como aparece no SQL compilado (minúsculas)
   database?: string;
   schema?: string;
   originalFilePath?: string; // ex.: models/staging/stg_orders.sql (barras pra frente)
   materialized?: string;
   columns: DbtColumn[];
+  // Chaves de lookup ADICIONAIS (sources: "source_name.name", "source_name.identifier" — é assim que
+  // o strip de Jinja materializa um {{ source() }}).
+  extraLookup?: string[];
 }
 
 export interface DbtDownstream {
@@ -69,8 +73,10 @@ export class DbtIndex {
   readonly childMap = new Map<string, string[]>();
   readonly parentMap = new Map<string, string[]>();
   readonly generatedAt?: string; // metadata.generated_at do manifest
-  private readonly byLookup = new Map<string, DbtNode>(); // nome | schema.nome | db.schema.nome → nó relacional
+  private readonly byLookup = new Map<string, DbtNode>(); // nome | alias | schema.nome | db.schema.físico → nó relacional
   private readonly byPath = new Map<string, DbtNode>(); // original_file_path → nó
+  private relCache?: DbtNode[]; // cache de relationalNodes() — índice imutável após o parse
+  private readonly colSets = new Map<string, Set<string>>(); // uniqueId → Set de nomes de coluna
 
   constructor(generatedAt?: string) {
     this.generatedAt = generatedAt;
@@ -78,16 +84,32 @@ export class DbtIndex {
 
   addNode(n: DbtNode): void {
     this.nodes.set(n.uniqueId, n);
+    this.relCache = undefined;
     if (!REL_TYPES.has(n.resourceType)) return;
-    const keys = new Set<string>([n.name.toLowerCase(), n.relation]);
-    if (n.database && n.schema) keys.add(`${n.database}.${n.schema}.${n.name}`.toLowerCase());
+    const physical = n.alias ?? n.name;
+    const keys = new Set<string>([n.name.toLowerCase(), physical.toLowerCase(), n.relation, ...(n.extraLookup ?? [])]);
+    if (n.schema) keys.add(`${n.schema}.${n.name}`.toLowerCase());
+    if (n.database && n.schema) keys.add(`${n.database}.${n.schema}.${physical}`.toLowerCase());
     for (const k of keys) if (k && !this.byLookup.has(k)) this.byLookup.set(k, n);
     const p = normPath(n.originalFilePath);
     if (p) this.byPath.set(p.toLowerCase(), n);
   }
 
   relationalNodes(): DbtNode[] {
-    return [...this.nodes.values()].filter((n) => REL_TYPES.has(n.resourceType));
+    // Cacheado: chamado a cada geração/proposta (renderSchemaContext/suggestTable) — o índice é
+    // imutável após o parse, então varrer/realocar toda vez era desperdício (revisão adversarial).
+    if (!this.relCache) this.relCache = [...this.nodes.values()].filter((n) => REL_TYPES.has(n.resourceType));
+    return this.relCache;
+  }
+
+  // Set de colunas por nó, construído sob demanda (lookup O(1) no score lexical do schema-context).
+  columnSet(uniqueId: string): Set<string> {
+    let s = this.colSets.get(uniqueId);
+    if (!s) {
+      s = new Set((this.nodes.get(uniqueId)?.columns ?? []).map((c) => c.name));
+      this.colSets.set(uniqueId, s);
+    }
+    return s;
   }
 
   // Resolve um nome de tabela como aparece no SQL: completo, schema.tabela ou só o nome.
@@ -114,7 +136,9 @@ export class DbtIndex {
     const n = name.toLowerCase().trim();
     const node = this.byLookup.get(n);
     if (node && node.resourceType !== "source") return node;
-    return [...this.nodes.values()].find((x) => x.resourceType === "model" && x.name.toLowerCase() === n);
+    return this.relationalNodes().find(
+      (x) => x.resourceType === "model" && (x.name.toLowerCase() === n || x.alias?.toLowerCase() === n)
+    );
   }
 
   // Sugestão "você quis dizer": menor distância de edição entre os nomes conhecidos (≤ 2 ou prefixo).
@@ -208,13 +232,17 @@ export function parseDbtArtifacts(manifestJson: unknown, catalogJson?: unknown):
   for (const [uid, raw] of Object.entries(asRecord(manifest.nodes))) {
     const v = asRecord(raw);
     const rt = resourceType(v.resource_type);
-    const name = (str(v.alias) ?? str(v.name) ?? uid.split(".").pop() ?? uid).toLowerCase();
+    // name = nome LÓGICO (o que ref() usa); alias = nome físico quando difere (config alias).
+    const name = (str(v.name) ?? uid.split(".").pop() ?? uid).toLowerCase();
+    const alias = str(v.alias)?.toLowerCase();
+    const physical = alias ?? name;
     const schema = str(v.schema)?.toLowerCase();
     index.addNode({
       uniqueId: uid,
       resourceType: rt,
       name,
-      relation: schema ? `${schema}.${name}` : name,
+      alias: alias !== name ? alias : undefined,
+      relation: schema ? `${schema}.${physical}` : physical,
       database: str(v.database)?.toLowerCase(),
       schema,
       originalFilePath: normPath(str(v.original_file_path)),
@@ -224,16 +252,24 @@ export function parseDbtArtifacts(manifestJson: unknown, catalogJson?: unknown):
   }
   for (const [uid, raw] of Object.entries(asRecord(manifest.sources))) {
     const v = asRecord(raw);
-    const identifier = (str(v.identifier) ?? str(v.name) ?? uid.split(".").pop() ?? uid).toLowerCase();
-    const schema = (str(v.schema) ?? str(v.source_name))?.toLowerCase();
+    // name = nome LÓGICO do yml; identifier = tabela física; source_name = namespace do source().
+    // O strip de Jinja materializa {{ source('raw','orders') }} como "raw.orders" — registra as
+    // chaves LÓGICAS além das físicas (achado da revisão adversarial: identifier != name quebrava tudo).
+    const logical = (str(v.name) ?? uid.split(".").pop() ?? uid).toLowerCase();
+    const identifier = (str(v.identifier) ?? logical).toLowerCase();
+    const sourceName = str(v.source_name)?.toLowerCase();
+    const schema = (str(v.schema) ?? sourceName)?.toLowerCase();
+    const extraLookup = sourceName ? [`${sourceName}.${logical}`, `${sourceName}.${identifier}`] : [];
     index.addNode({
       uniqueId: uid,
       resourceType: "source",
-      name: identifier,
+      name: logical,
+      alias: identifier !== logical ? identifier : undefined,
       relation: schema ? `${schema}.${identifier}` : identifier,
       database: str(v.database)?.toLowerCase(),
       schema,
       columns: mergeColumns(uid, parseColumns(v.columns)),
+      extraLookup,
     });
   }
   for (const [uid, raw] of Object.entries(asRecord(manifest.exposures))) {
@@ -276,18 +312,27 @@ export function levenshtein(a: string, b: string, max: number): number | undefin
 
 // ---- blocos para o prompt / cartões ------------------------------------------------------------------
 
+// Nomes vindos do manifest entram em cartões markdown host-computados — remove os metacaracteres que
+// permitiriam injetar formatação/quebrar tabelas (backtick, pipe, colchetes; achado da revisão).
+export function mdSafe(s: string): string {
+  return (s ?? "").replace(/[`|[\]]/g, "").slice(0, 120);
+}
+
 // Seção "schema real" injetada no contexto da geração: top-K tabelas mais relevantes para a QUERY do
 // dev (score lexical por nome/coluna). Vazio quando nada casa — não gasta orçamento à toa.
+// Cap de tokens + Set de colunas por nó: roda a cada geração e não pode custar O(nós×tokens×colunas)
+// numa mensagem longa (revisão adversarial mediu até ~1s de bloqueio do host sem os caps).
 export function renderSchemaContext(index: DbtIndex, query: string, topK = 8): string {
-  const tokens = [...new Set((query.toLowerCase().match(/[a-z_][\w]{2,}/g) ?? []))];
+  const tokens = [...new Set((query.toLowerCase().match(/[a-z_][\w]{2,}/g) ?? []))].slice(0, 64);
   if (tokens.length === 0) return "";
   const scored = index
     .relationalNodes()
     .map((n) => {
       let score = 0;
+      const cols = index.columnSet(n.uniqueId);
       for (const t of tokens) {
         if (n.name.includes(t) || t.includes(n.name)) score += 3;
-        for (const c of n.columns) if (c.name === t) score += 1;
+        if (cols.has(t)) score += 1;
       }
       return { n, score };
     })
@@ -307,18 +352,20 @@ export function renderSchemaContext(index: DbtIndex, query: string, topK = 8): s
   ].join("\n");
 }
 
-// Cartão do /impacto: raio de explosão de um modelo via lineage do manifest.
+// Cartão do /impacto: raio de explosão de um modelo via lineage do manifest. Todos os nomes passam
+// por mdSafe — vêm do manifest do usuário e o cartão é markdown "confiável" (host-computado).
 export function renderImpactCard(index: DbtIndex, node: DbtNode): string {
   const down = index.downstream(node.uniqueId);
   const up = index.upstreamDirect(node.uniqueId);
+  const safe = mdSafe(node.name);
   const fmt = (ns: DbtNode[], cap = 12) =>
-    ns.length === 0 ? "—" : ns.slice(0, cap).map((n) => `\`${n.name}\``).join(", ") + (ns.length > cap ? ` … (+${ns.length - cap})` : "");
-  const head = `### Raio de explosão · \`${node.name}\``;
+    ns.length === 0 ? "—" : ns.slice(0, cap).map((n) => `\`${mdSafe(n.name)}\``).join(", ") + (ns.length > cap ? ` … (+${ns.length - cap})` : "");
+  const head = `### Raio de explosão · \`${safe}\``;
   if (down.transitive.length === 0 && down.tests === 0) {
     return [
       head,
       "",
-      `Nenhum modelo, teste ou exposure depende de \`${node.name}\` — mudança de impacto LOCAL.`,
+      `Nenhum modelo, teste ou exposure depende de \`${safe}\` — mudança de impacto LOCAL.`,
       "",
       `Upstream direto: ${fmt(up)}`,
       "",
@@ -333,10 +380,10 @@ export function renderImpactCard(index: DbtIndex, node: DbtNode): string {
     `| Downstream direto | ${down.direct.length} — ${fmt(down.direct)} |`,
     `| Downstream transitivo | ${down.transitive.length} modelo${down.transitive.length === 1 ? "" : "s"} (profundidade ${down.maxDepth}) |`,
     `| Testes impactados | ${down.tests} |`,
-    ...(down.exposures.length > 0 ? [`| Exposures | ${down.exposures.map((e) => `\`${e}\``).join(", ")} |`] : []),
+    ...(down.exposures.length > 0 ? [`| Exposures | ${down.exposures.map((e) => `\`${mdSafe(e)}\``).join(", ")} |`] : []),
     `| Upstream direto | ${fmt(up)} |`,
     "",
-    `Mudança em \`${node.name}\` pode quebrar ${down.transitive.length + down.tests} consumidor${down.transitive.length + down.tests === 1 ? "" : "es"} — revise os downstream diretos antes de aplicar (\`dbt build --select ${node.name}+\` valida a cadeia).`,
+    `Mudança em \`${safe}\` pode quebrar ${down.transitive.length + down.tests} consumidor${down.transitive.length + down.tests === 1 ? "" : "es"} — revise os downstream diretos antes de aplicar (\`dbt build --select ${safe}+\` valida a cadeia).`,
     "",
     freshness(index),
   ].join("\n");

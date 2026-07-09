@@ -86,20 +86,26 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
   }
 
   // ---- FROM a, b (join implícito / produto cartesiano) -------------------------------------------
+  // Cada vírgula é avaliada individualmente: vírgula seguida de relação CORRELACIONADA (LATERAL,
+  // UNNEST(…), TABLE(FLATTEN(…)), GENERATE_SERIES(…) ou qualquer função-relação `ident(`) é o idioma
+  // canônico de explodir arrays em BigQuery/Snowflake/Postgres — NÃO multiplica N×M e não pode virar
+  // achado de gate (falso-positivo crítico da revisão adversarial). Só vírgula "plana" conta.
+  const CORRELATED_AFTER_COMMA = /^\s*(LATERAL\b|UNNEST\s*\(|FLATTEN\s*\(|TABLE\s*\(|VALUES\s*\(|[A-Za-z_][\w$]*\s*\()/i;
   const fromRe = /\bFROM\s/gi;
   while ((m = fromRe.exec(s))) {
     const depth = d[m.index];
     const end = clauseEnd(s, d, m.index + m[0].length, depth);
     const span = s.slice(m.index, end);
     const spanD = depthMap(span);
-    let hasComma = false;
+    let flatComma = false;
     for (let i = 0; i < span.length; i++) {
       if (span[i] === "," && spanD[i] === 0) {
-        hasComma = true;
+        if (CORRELATED_AFTER_COMMA.test(span.slice(i + 1))) continue;
+        flatComma = true;
         break;
       }
     }
-    if (hasComma) {
+    if (flatComma) {
       if (stmt.hasTopLevelWhere || depth > 0) {
         add("join-implicito", "Join implícito (FROM a, b + WHERE) — prefira JOIN … ON explícito: a condição esquecida vira produto cartesiano.", "warn", "média", m.index);
       } else {

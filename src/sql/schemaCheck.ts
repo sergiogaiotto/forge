@@ -13,6 +13,9 @@ const NON_TABLE_PREFIX = new Set(["unnest", "lateral", "table", "values"]);
 export function checkAgainstSchema(stmts: SqlStatement[], index: DbtIndex, baseLineOf: (stmt: SqlStatement) => number): SqlFinding[] {
   const out: SqlFinding[] = [];
   if (index.size() === 0) return out;
+  // Dedupe da PROPOSTA inteira (não por statement): a mesma tabela desconhecida em N statements de
+  // uma migração viraria N achados idênticos — um basta.
+  const reportedTables = new Set<string>();
 
   for (const stmt of stmts) {
     const baseLine = baseLineOf(stmt);
@@ -25,6 +28,8 @@ export function checkAgainstSchema(stmts: SqlStatement[], index: DbtIndex, baseL
       if (cteSet.has(t) || /^__\w+__$/.test(t)) continue;
       if (index.findTable(t)) continue;
       unknownTables.add(t);
+      if (reportedTables.has(t)) continue;
+      reportedTables.add(t);
       const sug = index.suggestTable(t);
       out.push({
         rule: "tabela-desconhecida",

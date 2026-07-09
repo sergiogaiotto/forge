@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { levenshtein, parseDbtArtifacts, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
+import { levenshtein, mdSafe, parseDbtArtifacts, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
 import { parseTargetPath } from "../dbt/loader";
 import { classifySql } from "../sql/classify";
 import { analyzeSqlProposal, sqlEvidenceForReview } from "../sql/engine";
@@ -215,4 +215,86 @@ test("selectLineage: star marca lineage incompleto; renderLineage produz tabela"
   const [stmt2] = classifySql("SELECT o.order_id FROM stg_orders o");
   const txt = renderLineage(selectLineage(stmt2));
   assert.ok(txt.includes("| `order_id` | direta | stg_orders.order_id |"));
+});
+
+// ---- regressões da revisão adversarial -------------------------------------------------------------
+
+test("REGRESSÃO: model com config alias != name resolve pelos DOIS nomes", () => {
+  const manifest = {
+    nodes: {
+      "model.shop.stg_orders": {
+        resource_type: "model", name: "stg_orders", alias: "orders_stg", schema: "staging",
+        original_file_path: "models/staging/stg_orders.sql", columns: {},
+      },
+    },
+  };
+  const idx = parseDbtArtifacts(manifest);
+  assert.ok(idx.findTable("stg_orders"), "nome lógico (o que ref() usa)");
+  assert.ok(idx.findTable("orders_stg"), "alias físico (o que o SQL compilado usa)");
+  assert.ok(idx.findTable("staging.orders_stg"));
+  assert.ok(idx.findModelByName("stg_orders"));
+  assert.ok(idx.findModelByName("orders_stg"));
+});
+
+test("REGRESSÃO: source com identifier != name resolve pelas chaves lógicas e físicas", () => {
+  const manifest = {
+    sources: {
+      "source.shop.raw.orders": {
+        resource_type: "source", name: "orders", identifier: "ORDERS_V2", source_name: "raw",
+        schema: "landing_zone", columns: {},
+      },
+    },
+  };
+  const idx = parseDbtArtifacts(manifest);
+  assert.ok(idx.findTable("raw.orders"), "como o stripJinja materializa {{ source('raw','orders') }}");
+  assert.ok(idx.findTable("orders"), "nome lógico do yml");
+  assert.ok(idx.findTable("orders_v2"), "identifier físico");
+  assert.ok(idx.findTable("landing_zone.orders_v2"), "relation física");
+});
+
+test("REGRESSÃO: .sql avulso sem tabela no manifest NÃO ganha sql:schema (migração de app não é ruído)", () => {
+  const idx = parseDbtArtifacts(MANIFEST, CATALOG);
+  const migration = "CREATE TABLE app_users (id INT); INSERT INTO app_users (id) VALUES (1)";
+  const res = analyzeSqlProposal("db/migrations/V42__users.sql", migration, { mode: "conservative", index: idx });
+  assert.ok(!res.some((r) => r.id === "sql:schema"), "sem opinião sobre schema de outra base");
+  // mas .sql avulso que TOCA o manifest continua coberto
+  const adhoc = analyzeSqlProposal("consultas/x.sql", "SELECT * FROM stg_orders JOIN naoexiste ON 1=1", { mode: "conservative", index: idx });
+  assert.equal(adhoc.find((r) => r.id === "sql:schema")?.status, "failed");
+});
+
+test("REGRESSÃO: mdSafe remove metacaracteres de markdown dos nomes do manifest", () => {
+  assert.equal(mdSafe("dash_vendas`[x]|y"), "dash_vendasxy");
+  const manifest = {
+    nodes: {
+      "model.shop.a": { resource_type: "model", name: "a", schema: "s", columns: {} },
+      "model.shop.evil": { resource_type: "model", name: "ev`il|[link]", schema: "s", columns: {} },
+    },
+    child_map: { "model.shop.a": ["model.shop.evil"] },
+  };
+  const idx = parseDbtArtifacts(manifest);
+  const card = renderImpactCard(idx, idx.findModelByName("a")!);
+  assert.ok(!card.includes("ev`il"));
+  assert.ok(!card.includes("[link]"));
+});
+
+test("REGRESSÃO: lineage de UNION degrada a confiança (mapa reflete só o último branch)", () => {
+  const [stmt] = classifySql("SELECT a FROM t1 UNION ALL SELECT a FROM t2");
+  assert.equal(selectLineage(stmt).confidence, "baixa");
+});
+
+test("REGRESSÃO: alias reutilizado em subquery não liga coluna à tabela errada (envenenado → sem opinião)", () => {
+  const idx = parseDbtArtifacts(MANIFEST, CATALOG);
+  const sql = "SELECT o.valor_total FROM stg_orders o WHERE EXISTS (SELECT 1 FROM fct_pedidos o WHERE o.receita > 0)";
+  const findings = checkAgainstSchema(classifySql(sql), idx, (s) => s.line);
+  assert.ok(!findings.some((f) => f.rule === "coluna-desconhecida"));
+});
+
+test("REGRESSÃO: lineage não inventa coluna de nome de tipo (CAST/::/EXTRACT)", () => {
+  const [stmt] = classifySql("SELECT CAST(amount AS DECIMAL) AS amt, EXTRACT(YEAR FROM created_at) AS ano, qty::int AS qtd FROM orders");
+  const lin = selectLineage(stmt);
+  const all = lin.columns.flatMap((c) => c.sources);
+  assert.ok(all.includes("orders.amount"));
+  assert.ok(all.includes("orders.created_at"));
+  assert.ok(all.includes("orders.qty"));
+  assert.ok(!all.some((s) => /\.(decimal|year|int)$/.test(s)), `não pode inventar tipo como coluna: ${all.join(", ")}`);
 });

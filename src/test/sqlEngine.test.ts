@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { findAntipatterns, renderFindings } from "../sql/antipatterns";
 import { classifySql, normIdent } from "../sql/classify";
+import { analyzeSqlProposal } from "../sql/engine";
 import { looksLikeDbtModel, stripJinja } from "../sql/jinja";
 import { splitStatements, stripSqlNoise } from "../sql/lex";
 
@@ -211,4 +212,68 @@ test("SQL de dbt real (jinja) analisa de ponta a ponta sem lançar", () => {
   assert.ok(stmts[0].tables.includes("raw.customers"));
   const findings = stmts.flatMap((s) => findAntipatterns(s, s.line, { isDbtModel: true, hadJinja: r.hadJinja }));
   assert.ok(findings.some((f) => f.rule === "select-star-em-subquery" || f.rule === "select-star"));
+});
+
+// ---- regressões da revisão adversarial -------------------------------------------------------------
+
+test("REGRESSÃO: UNNEST/LATERAL/FLATTEN após vírgula é join correlacionado, NÃO produto cartesiano", () => {
+  assert.ok(!findRules("SELECT t.id, item FROM orders t, UNNEST(t.items) AS item").includes("produto-cartesiano"));
+  assert.ok(!findRules("SELECT * FROM raw_events t, LATERAL FLATTEN(input => t.payload) f").includes("produto-cartesiano"));
+  assert.ok(!findRules("SELECT * FROM contas a, LATERAL (SELECT 1) l").includes("produto-cartesiano"));
+  assert.ok(!findRules("SELECT * FROM datas d, GENERATE_SERIES(1, 10) g").includes("produto-cartesiano"));
+  // o caso REAL continua bloqueando; a vírgula "plana" antes da correlacionada também
+  assert.ok(findRules("SELECT * FROM a, b").includes("produto-cartesiano"));
+  assert.ok(findRules("SELECT * FROM a, b, UNNEST(x) u").includes("produto-cartesiano"));
+});
+
+test("REGRESSÃO: escape \' (MySQL/BigQuery/Spark) não desincroniza o scanner de string", () => {
+  const rules = findRules("UPDATE clientes SET nome = 'O\\'Brien' WHERE id = 1");
+  assert.ok(!rules.includes("update-sem-where"));
+  const del = findRules("DELETE FROM logs WHERE msg = 'can\\'t connect' AND id < 100");
+  assert.ok(!del.includes("delete-sem-where"));
+});
+
+test("REGRESSÃO: string não-terminada degrada o gate de segurança para advisory (análise parcial)", () => {
+  const stmts = classifySql("UPDATE t SET note = 'it's WHERE-free stuff'");
+  assert.ok(stmts.some((s) => s.unterminated));
+  const results = analyzeSqlProposal("scripts/x.sql", "UPDATE t SET note = 'it's WHERE-free stuff'", { mode: "conservative" });
+  assert.ok(!results.some((r) => r.gate === true), "análise parcial NUNCA pode bloquear o Aplicar");
+  assert.ok(results.some((r) => r.id === "sql:seguranca"), "mas o dev é avisado da análise parcial");
+});
+
+test("REGRESSÃO: {% set %}…{% endset %} não vaza DML para o nível de statement; inline set intocado", () => {
+  const model = "{% set cleanup %}DELETE FROM tmp{% endset %}\nSELECT a FROM {{ ref('m') }}";
+  const r = stripJinja(model);
+  assert.ok(!/DELETE/i.test(r.sql));
+  assert.ok(!findRules(r.sql, { isDbtModel: true }).includes("delete-sem-where"));
+  // inline set (com =) seguido de bloco set: o SQL entre eles NÃO pode ser engolido
+  const misto = stripJinja("{% set a = 1 %}\nSELECT * FROM x\n{% set b %}DELETE FROM t{% endset %}");
+  assert.ok(/SELECT \* FROM x/.test(misto.sql));
+  assert.ok(!/DELETE/i.test(misto.sql));
+});
+
+test("REGRESSÃO: EXTRACT(DAY FROM col)/SUBSTRING(x FROM 2)/TRIM(BOTH FROM y) não viram tabela fantasma", () => {
+  assert.deepEqual(classifySql("SELECT id FROM pedidos WHERE EXTRACT(DAY FROM criado_em) = 1")[0].tables, ["pedidos"]);
+  assert.deepEqual(classifySql("SELECT SUBSTRING(nome FROM 2) FROM clientes")[0].tables, ["clientes"]);
+  assert.deepEqual(classifySql("SELECT TRIM(BOTH FROM nome) FROM clientes")[0].tables, ["clientes"]);
+});
+
+test("REGRESSÃO: ; e parênteses dentro de identificador quotado não corrompem split/profundidade", () => {
+  const stmts = classifySql('UPDATE "tab;ela" SET x = 1 WHERE id = 2');
+  assert.equal(stmts.length, 1);
+  assert.equal(stmts[0].hasTopLevelWhere, true);
+  assert.ok(!findRules('UPDATE "tab;ela" SET x = 1 WHERE id = 2').includes("update-sem-where"));
+});
+
+test("REGRESSÃO: laço de vírgulas do FROM pula relação-função e continua varrendo", () => {
+  const [s] = classifySql("SELECT t.id, item FROM stg_orders t, UNNEST(t.items) AS item");
+  assert.deepEqual(s.tables, ["stg_orders"]);
+  const [m] = classifySql("SELECT * FROM a, UNNEST(x) u, b WHERE a.id = b.id");
+  assert.ok(m.tables.includes("a") && m.tables.includes("b"));
+  assert.ok(!m.tables.includes("unnest"));
+});
+
+test("REGRESSÃO: alias reutilizado para tabelas diferentes é envenenado (ninguém opina)", () => {
+  const [s] = classifySql("SELECT x.a FROM t1 x WHERE EXISTS (SELECT 1 FROM t2 x WHERE x.b = 1)");
+  assert.equal(s.aliases.get("x"), undefined);
 });

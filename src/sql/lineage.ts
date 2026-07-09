@@ -64,9 +64,22 @@ function finalSelectSpan(stripped: string): { span: string; tail: string } | nul
   return { span: stripped.slice(best.start, end), tail: stripped.slice(end) };
 }
 
+// Apaga da expressão os identificadores que são NOMES DE TIPO ou date-parts, não colunas — sem isto,
+// `CAST(x AS DECIMAL)` inventaria a coluna "decimal" e `EXTRACT(YEAR FROM x)` a coluna "year"
+// (achado da revisão adversarial). Filtro por CONTEXTO lexical, não por lista de nomes (year/date são
+// nomes de coluna legítimos em marts).
+function blankTypeContexts(expr: string): string {
+  return expr
+    .replace(/::\s*[A-Za-z_][\w$]*(\s*\(\s*\d+(\s*,\s*\d+)?\s*\))?/g, (m) => " ".repeat(m.length)) // x::int / x::numeric(10,2)
+    .replace(/\b(CAST|TRY_CAST|SAFE_CAST)\s*\(([^()]*?)\s+AS\s+[A-Za-z_][\w$]*(\s*\(\s*\d+(\s*,\s*\d+)?\s*\))?\s*\)/gi, (m, fn, inner) => `${fn}(${inner})`.padEnd(m.length)) // CAST(x AS DECIMAL(10,2))
+    .replace(/\b(EXTRACT|DATE_PART|DATEPART)\s*\(\s*[A-Za-z_][\w$]*\s+FROM\b/gi, (m) => m.replace(/\(\s*[A-Za-z_][\w$]*/, (p) => "(" + " ".repeat(p.length - 1))) // EXTRACT(YEAR FROM …
+    .replace(/\bINTERVAL\s+'[^']*'\s+[A-Za-z_][\w$]*/gi, (m) => " ".repeat(m.length)); // INTERVAL '1' DAY
+}
+
 // Referências de coluna dentro de uma expressão: identificadores (qualificados ou não) que não são
-// função (sem `(` em seguida) nem keyword/número.
-function columnRefs(expr: string): { qualifier?: string; column: string }[] {
+// função (sem `(` em seguida) nem keyword/número/nome-de-tipo.
+function columnRefs(rawExpr: string): { qualifier?: string; column: string }[] {
+  const expr = blankTypeContexts(rawExpr);
   const out: { qualifier?: string; column: string }[] = [];
   const re = /(?:([A-Za-z_][\w$]*)\s*\.\s*)?([A-Za-z_][\w$]*)\b(?!\s*\(|\s*\.)/g;
   let m: RegExpExecArray | null;
@@ -131,7 +144,19 @@ export function selectLineage(stmt: SqlStatement): LineageResult {
   for (const [name, entry] of resolved) {
     columns.push({ output: name, sources: entry.sources, transform: entry.direct ? "direta" : "expressao" });
   }
-  const confidence = star ? "baixa" : stmt.ctes.length > 0 ? "média" : "alta";
+  // UNION/EXCEPT/INTERSECT no nível 0: o mapa reflete só o ÚLTIMO branch — sinaliza a incompletude
+  // degradando a confiança (achado da revisão adversarial).
+  const dTop = depthMap(s);
+  let hasSetOp = false;
+  const setOpRe = /\b(UNION|EXCEPT|INTERSECT|MINUS)\b/gi;
+  let so: RegExpExecArray | null;
+  while ((so = setOpRe.exec(s))) {
+    if (dTop[so.index] === 0) {
+      hasSetOp = true;
+      break;
+    }
+  }
+  const confidence = star || hasSetOp ? "baixa" : stmt.ctes.length > 0 ? "média" : "alta";
   return { columns, star, confidence };
 }
 
@@ -151,12 +176,15 @@ function lineageOfQuery(
   const final = precomputed ?? finalSelectSpan(query);
   if (!final) return out;
 
-  // aliases LOCAIS desta query (o FROM/JOIN que vem depois do select list)
+  // aliases LOCAIS desta query (o FROM/JOIN que vem depois do select list). Só matches no NÍVEL 0 do
+  // tail: um FROM em subquery/função (EXTRACT(DAY FROM col) no WHERE) não é relação local desta query.
   const localAliases = new Map<string, string>();
   const relRe = /\b(FROM|JOIN)\s+((?:[A-Za-z_][\w$]*\s*\.\s*)*[A-Za-z_][\w$]*)(?:\s+(?:AS\s+)?([A-Za-z_][\w$]*))?/gi;
+  const tailD = depthMap(final.tail);
   let rm: RegExpExecArray | null;
   const localTables: string[] = [];
   while ((rm = relRe.exec(final.tail))) {
+    if (tailD[rm.index] !== 0) continue;
     const table = rm[2].replace(/\s+/g, "").toLowerCase();
     if (/^__\w+__$/.test(table)) continue;
     localTables.push(table);
