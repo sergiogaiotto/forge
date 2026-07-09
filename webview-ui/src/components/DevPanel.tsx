@@ -160,6 +160,24 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       case "testes-dbt":
         runDbtTests(""); // sem argumento = modelo do arquivo ativo
         break;
+      case "conexoes":
+        runData("conexoes");
+        break;
+      case "executar-sql":
+        runData("executar-sql");
+        break;
+      case "schema-db":
+        runData("schema-db");
+        break;
+      case "paridade":
+        dispatch({ kind: "pushLocal", text: "Uso: `/paridade tabela_a tabela_b` — opcionalmente `conexao:tabela` em cada lado (paridade entre warehouses)." });
+        break;
+      case "custo":
+        runData("custo");
+        break;
+      case "auditoria-pii":
+        runData("auditoria-pii");
+        break;
     }
   };
 
@@ -203,6 +221,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     }
     dispatch({ kind: "pushUser", text: `[/traduzir-sql] arquivo ativo → ${d}` });
     post({ type: "chat/send", text: buildSqlTranslateRequest(d) });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
+  };
+
+  // Comandos de DADOS (Ondas 3/4): host executa (conexões/SQL/schema/paridade/custo/PII) e responde
+  // com data/card — nenhum LLM no caminho; governança do motor no host.
+  const runData = (cmd: "conexoes" | "executar-sql" | "schema-db" | "paridade" | "custo" | "auditoria-pii", args?: string) => {
+    dispatch({ kind: "pushUser", text: `[/${cmd}]${args ? " " + args : ""}` });
+    post({ type: "data/command", cmd, args });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
   };
@@ -254,6 +281,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       }
       if (withArgs.cmd.id === "testes-dbt" && /^[\w.-]+$/.test(withArgs.args)) {
         runDbtTests(withArgs.args);
+        return;
+      }
+      // dados: conexão é token único; /paridade aceita exatamente dois tokens (tabelas, com : opcional)
+      if ((withArgs.cmd.id === "executar-sql" || withArgs.cmd.id === "schema-db" || withArgs.cmd.id === "custo") && /^[\w.-]+$/.test(withArgs.args)) {
+        runData(withArgs.cmd.id, withArgs.args);
+        return;
+      }
+      if (withArgs.cmd.id === "paridade" && /^[\w.:-]+\s+[\w.:-]+$/.test(withArgs.args.trim())) {
+        runData("paridade", withArgs.args.trim());
         return;
       }
       // Cauda que NÃO é o argumento esperado ("/sumario o que ficou pendente?") é mensagem do dev —

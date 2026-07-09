@@ -52,6 +52,52 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     acceptsArgs: true, // cauda = dialeto alvo (bigquery, snowflake, postgres, spark, oracle…)
   },
   {
+    id: "conexoes",
+    label: "/conexoes",
+    hint: "Lista e testa as conexões de warehouse (Oracle, PostgreSQL, BigQuery, DuckDB, S3/OCI)",
+    icon: "plug",
+    aliases: ["connections", "warehouses"],
+  },
+  {
+    id: "executar-sql",
+    label: "/executar-sql",
+    hint: "Executa o .sql ativo na conexão (SELECT direto; escrita confirma; DROP/TRUNCATE nunca)",
+    icon: "terminal",
+    aliases: ["run-sql", "rodar-sql"],
+    acceptsArgs: true, // cauda = id da conexão; sem cauda usa a default
+  },
+  {
+    id: "schema-db",
+    label: "/schema-db",
+    hint: "Indexa o schema REAL do warehouse (grounding: entra no prompt e no gate semântico)",
+    icon: "database",
+    aliases: ["schema-warehouse"],
+    acceptsArgs: true, // cauda = id da conexão
+  },
+  {
+    id: "paridade",
+    label: "/paridade",
+    hint: "Compara duas tabelas por agregados (compliance-safe) — intra ou entre warehouses",
+    icon: "git-compare",
+    aliases: ["parity", "data-diff"],
+    acceptsArgs: true, // "tabela_a tabela_b" (opcional conexao:tabela em cada lado)
+  },
+  {
+    id: "custo",
+    label: "/custo",
+    hint: "Custo: prévia da consulta ativa (dry-run/EXPLAIN) ou top consultas dos últimos 7 dias",
+    icon: "activity",
+    aliases: ["cost", "finops"],
+    acceptsArgs: true, // cauda = id da conexão
+  },
+  {
+    id: "auditoria-pii",
+    label: "/auditoria-pii",
+    hint: "Auditoria LGPD por nome de coluna no schema indexado (dbt + warehouse) — 100% local",
+    icon: "users",
+    aliases: ["pii", "lgpd"],
+  },
+  {
     id: "testes-dbt",
     label: "/testes-dbt",
     hint: "Gera testes dbt (schema.yml) para um modelo, com as colunas REAIS do manifest",

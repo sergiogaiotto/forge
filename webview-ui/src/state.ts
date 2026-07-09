@@ -490,6 +490,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "impact/report":
       // /impacto: o raio de explosão (host-computado do manifest dbt) vira cartão na thread.
       return pushLocalMessage(state, msg.markdown);
+    case "data/card":
+      // Comandos de dados (Ondas 3/4): card host-computado (conexões/execução/paridade/custo/PII).
+      return pushLocalMessage(state, msg.markdown);
     case "profile/roleCard":
       return { ...state, roleCard: msg.card };
     case "chat/summarized":

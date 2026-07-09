@@ -80,6 +80,14 @@ import { renderFindings } from "../sql/antipatterns";
 import { classifySql } from "../sql/classify";
 import { stripJinja } from "../sql/jinja";
 import { renderLineage, selectLineage } from "../sql/lineage";
+import { WarehouseService } from "../warehouse/WarehouseService";
+import { decideSqlRun } from "../warehouse/governance";
+import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
+import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
+import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
+import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
+import { renderPiiCard, scanIndexForPii } from "../util/piiScan";
+import { SqlRunResult, WarehouseConnection } from "../warehouse/types";
 import { evaluateDodGate } from "../util/dodCheck";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
@@ -164,6 +172,11 @@ export class Controller {
   // dela (um fs.stat barato), em vez de degradar o grounding para o resto da sessão (revisão adversarial).
   private dbtLocation: DbtProjectLocation | null = null;
   private dbtInflight: Promise<DbtIndex | undefined> | null = null; // single-flight (propostas chegam em paralelo)
+  // Onda 3: serviço de warehouse (CLI tradicional + MCP) e snapshots de schema vivo por conexão —
+  // persistidos no globalStorage e fundidos ao índice dbt no grounding (getGroundingIndex).
+  private warehouseSvc: WarehouseService | null = null;
+  private whSnapshots = new Map<string, DbtIndex>();
+  private whSnapshotsLoaded = false;
   private readonly runService: RunService;
   private readonly previewService: PreviewService;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -344,8 +357,9 @@ export class Controller {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   }
 
-  // Remove diretórios de validação órfãos (.forge/val-*) deixados por um host encerrado antes do
-  // finally do SkillValidator — restaura o auto-limpeza que o os.tmpdir dava de graça. Best-effort.
+  // Remove temp dirs órfãos deixados por um host encerrado antes do finally: `.forge/val-*` (validação)
+  // e `.forge/wh-*` (warehouse — o wrapper Oracle contém a senha em claro, então limpar é questão de
+  // segurança, não só higiene). Restaura o auto-limpeza que o os.tmpdir dava de graça. Best-effort.
   private async sweepValidatorTemp(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) return;
@@ -354,7 +368,7 @@ export class Controller {
       const entries = await fs.readdir(dir);
       await Promise.all(
         entries
-          .filter((e) => e.startsWith("val-"))
+          .filter((e) => e.startsWith("val-") || e.startsWith("wh-"))
           .map((e) => fs.rm(path.join(dir, e), { recursive: true, force: true }).catch(() => undefined))
       );
     } catch {
@@ -1429,6 +1443,9 @@ export class Controller {
       case "impact/request":
         await this.reportImpact(msg.target);
         break;
+      case "data/command":
+        await this.dispatchDataCommand(msg.cmd, msg.args);
+        break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui, framework: msg.framework });
         break;
@@ -1995,7 +2012,7 @@ export class Controller {
       // Motor SQL determinístico (dados, Onda 1): analisa propostas .sql in-process (anti-padrões +
       // segurança + schema dbt) no mesmo canal dos validadores de skill. Cobre chat, TDD e Modo Projeto.
       sqlAnalyzer: async (relPath, content) =>
-        analyzeSqlProposal(relPath, content, { mode: this.config.sqlGate(), index: await this.getDbtIndex() }),
+        analyzeSqlProposal(relPath, content, { mode: this.config.sqlGate(), index: await this.getGroundingIndex() }),
       // Modo Projeto: à medida que cada bloco de arquivo FECHA no streaming, marca "gerado" um a um,
       // em vez de tudo em lote no fim. A reconciliação final (complete/failed) segue autoritativa.
       onFileClosed:
@@ -2921,6 +2938,197 @@ export class Controller {
     }
   }
 
+  // ---- warehouse (Onda 3/4) ------------------------------------------------------------------------
+
+  private warehouse(): WarehouseService {
+    if (!this.warehouseSvc) {
+      this.warehouseSvc = new WarehouseService(this.secrets, () => this.config.warehouse(), () => this.workspaceRoot());
+    }
+    return this.warehouseSvc;
+  }
+
+  // Índice de GROUNDING: manifest dbt + snapshots de warehouse vivos, fundidos — alimenta prompt,
+  // gate semântico, /auditoria-pii e paridade. Snapshot persiste no globalStorage entre sessões.
+  private async getGroundingIndex(): Promise<DbtIndex | undefined> {
+    if (!this.whSnapshotsLoaded) {
+      this.whSnapshotsLoaded = true;
+      try {
+        const dir = this.context.globalStorageUri.fsPath;
+        for (const f of await fs.readdir(dir).catch(() => [] as string[])) {
+          if (!/^wh-schema-.+\.json$/.test(f)) continue;
+          const snap = parseSnapshot(await fs.readFile(path.join(dir, f), "utf8"));
+          if (snap) this.whSnapshots.set(snap.connectionId, snapshotToIndex(snap));
+        }
+      } catch (err) {
+        log.warn("warehouse: snapshots não carregados (fail-open).", err);
+      }
+    }
+    const dbt = await this.getDbtIndex();
+    const all = [...(dbt ? [dbt] : []), ...this.whSnapshots.values()];
+    if (all.length === 0) return undefined;
+    return all.length === 1 ? all[0] : mergeIndexes(all);
+  }
+
+  // Executa SQL numa conexão respeitando a governança do MOTOR nos DOIS caminhos: CLI tradicional
+  // (WarehouseService) e MCP (catálogo do admin — que ainda passa pelo ToolApprovalGate próprio).
+  // `internal` (metadados/agregados: schema-db, paridade, custo) pula a máscara LGPD (corromperia os
+  // números — count de 8 dígitos virava ▇) e eleva o cap de linhas.
+  private async runOnConnection(conn: WarehouseConnection, sql: string, internal?: { skipMask?: boolean; rowCapOverride?: number }): Promise<SqlRunResult | { refused: string }> {
+    if (conn.mcp) {
+      const decision = decideSqlRun(sql, conn);
+      if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
+      if (decision.verdict === "confirm") {
+        const pick = await vscode.window.showWarningMessage(`FORGE · conexão "${conn.id}" (MCP): ${decision.reason}`, { modal: true, detail: sql.slice(0, 600) }, "Executar escrita");
+        if (pick !== "Executar escrita") return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+      }
+      const started = Date.now();
+      const r = await this.mcp.callTool(conn.mcp.server, conn.mcp.tool, { [conn.mcp.sqlArg]: sql });
+      // MESMO pós-processamento do caminho CLI: cap de linhas + máscara LGPD (o ramo MCP deixava PII
+      // crua no chat apesar do rodapé "valores mascarados" — achado da revisão adversarial).
+      const { output, truncated } = sanitizeWarehouseOutput(r.content, internal?.rowCapOverride ?? this.config.warehouse().rowCap, internal?.skipMask);
+      return { ok: r.ok, exitCode: r.ok ? 0 : 1, output, truncated, durationMs: Date.now() - started, command: `mcp:${conn.mcp.server}/${conn.mcp.tool}` };
+    }
+    return this.warehouse().runSql(conn.id, sql, internal);
+  }
+
+  private dataCard(markdown: string): void {
+    this.post({ type: "data/card", markdown });
+  }
+
+  // Despacho dos comandos de dados da paleta (Ondas 3/4). Tudo fail-open: erro vira card explicativo.
+  async dispatchDataCommand(cmd: string, args?: string): Promise<void> {
+    try {
+      switch (cmd) {
+        case "conexoes": {
+          const conns = this.warehouse().connections();
+          if (conns.length === 0) {
+            this.dataCard("### Conexões\n\nNenhuma conexão configurada. O admin (ou você) declara em `forge.warehouse.connections` — ex.: Oracle 19c/26ai/Exadata/ADW (`kind: oracle`, SQLcl/sqlplus), PostgreSQL (`psql`), BigQuery (`bq`), DuckDB local, S3/OCI Object Storage. Senhas ficam no SecretStorage (pedidas no primeiro uso).");
+            return;
+          }
+          const lines: string[] = ["### Conexões", "", "| id | tipo | destino | acesso | teste |", "|---|---|---|---|---|"];
+          for (const c of conns.slice(0, 8)) {
+            const r = await this.warehouse().testConnection(c);
+            const status = "refused" in r ? `⚠ ${r.refused.slice(0, 80)}` : r.ok ? "✅ ok" : `❌ ${r.output.slice(0, 60)}`;
+            lines.push(`| \`${c.id}\` | ${c.kind}${c.mcp ? " (mcp)" : ""} | ${(c.connect ?? "-").replace(/:[^@/:]+@/, ":***@")} | ${c.readonly === false ? "leitura+escrita" : "somente leitura"} | ${status} |`);
+          }
+          lines.push("", "_Escrita exige `readonly:false` NA CONEXÃO + confirmação por execução; DROP/TRUNCATE nunca executam._");
+          this.dataCard(lines.join("\n"));
+          return;
+        }
+        case "executar-sql": {
+          const editor = vscode.window.activeTextEditor;
+          if (!editor || !/\.sql$/i.test(editor.document.fileName)) {
+            this.dataCard("### Executar SQL\n\nAbra um arquivo `.sql` no editor (a seleção, se houver, é o que executa) e rode `/executar-sql [conexão]`.");
+            return;
+          }
+          const sql = editor.selection && !editor.selection.isEmpty ? editor.document.getText(editor.selection) : editor.document.getText();
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard(`### Executar SQL\n\nConexão ${args?.trim() ? `\`${args.trim()}\` não existe` : "não configurada"} — veja \`/conexoes\`.`);
+            return;
+          }
+          const r = await this.runOnConnection(conn, sql);
+          if ("refused" in r) {
+            this.dataCard(`### Executar SQL · \`${conn.id}\`\n\n${r.refused}`);
+            return;
+          }
+          this.dataCard(renderResultCard(`Resultado · \`${conn.id}\``, r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: this.config.warehouse().rowCap }));
+          // auto-cura: erro real do warehouse vira ANEXO — a próxima mensagem do dev já carrega o contexto
+          if (!r.ok) this.addAttachment(`erro ${conn.id}`, "search", `Erro ao executar no warehouse ${conn.id}:\n${r.output}`);
+          return;
+        }
+        case "custo": {
+          const editor = vscode.window.activeTextEditor;
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard("### Custo\n\nNenhuma conexão configurada — veja `/conexoes`.");
+            return;
+          }
+          if (editor && /\.sql$/i.test(editor.document.fileName)) {
+            // prévia de custo da CONSULTA ativa (dry-run/EXPLAIN) — antes de rodar
+            const sql = editor.selection && !editor.selection.isEmpty ? editor.document.getText(editor.selection) : editor.document.getText();
+            const r = await this.warehouse().costPreview(conn.id, sql);
+            this.dataCard("refused" in r ? `### Custo (prévia) · \`${conn.id}\`\n\n${r.refused}` : renderResultCard(`Custo da consulta (prévia, sem executar) · \`${conn.id}\``, r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: 500 }));
+            return;
+          }
+          // sem .sql ativo: relatório FinOps (top consultas por custo, últimos 7 dias)
+          const sql = topQueriesSql(conn.kind, conn.schemas?.[0]);
+          if (typeof sql !== "string") {
+            this.dataCard(`### Custo · \`${conn.id}\`\n\n${sql.error}`);
+            return;
+          }
+          const r = await this.runOnConnection(conn, sql);
+          this.dataCard("refused" in r ? `### Custo · \`${conn.id}\`\n\n${r.refused}` : renderFinopsCard(conn.id, conn.kind, r.output));
+          return;
+        }
+        case "schema-db": {
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard("### Schema do warehouse\n\nNenhuma conexão configurada — veja `/conexoes`.");
+            return;
+          }
+          const inv = columnsInventorySql(conn.kind, conn.schemas ?? []);
+          if (typeof inv !== "string") {
+            this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n${inv.error}`);
+            return;
+          }
+          const r = await this.runOnConnection(conn, inv, { skipMask: true, rowCapOverride: 50000 });
+          if ("refused" in r || !r.ok) {
+            this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n${"refused" in r ? r.refused : "Falha no inventário:\n```\n" + r.output.slice(0, 1200) + "\n```"}`);
+            return;
+          }
+          const rows = parseInventoryCsv(r.output);
+          const snap: WarehouseSnapshot = { connectionId: conn.id, kind: conn.kind, takenAt: new Date().toISOString(), rows };
+          const index = snapshotToIndex(snap);
+          this.whSnapshots.set(conn.id, index);
+          try {
+            await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true });
+            await fs.writeFile(path.join(this.context.globalStorageUri.fsPath, `wh-schema-${conn.id}.json`), serializeSnapshot(snap), "utf8");
+          } catch (err) {
+            log.warn("warehouse: snapshot não persistido (segue em memória).", err);
+          }
+          this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n✅ **${index.size()} tabelas** indexadas (${rows.length} colunas). O schema real agora entra no prompt e no gate semântico — tabela/coluna fantasma vira achado.\n\n_⚠ O snapshot da amostra foi capado em ${this.config.warehouse().rowCap} linhas? Não — inventário usa o cap de 50k colunas do SQL. Rode de novo após DDLs relevantes._`);
+          return;
+        }
+        case "paridade": {
+          const parsed = parseParityArgs(args ?? "");
+          if ("error" in parsed) {
+            this.dataCard(`### Paridade de dados\n\n${parsed.error}`);
+            return;
+          }
+          const index = await this.getGroundingIndex();
+          const side = async (s: { conn?: string; table: string }) => {
+            const conn = this.warehouse().resolve(s.conn || undefined);
+            if (!conn) return { error: `Conexão ${s.conn ? `\`${s.conn}\`` : "default"} não existe.` };
+            const cols = index?.findTable(s.table)?.columns.map((c) => c.name) ?? [];
+            const r = await this.runOnConnection(conn, profileSql(conn.kind, s.table, cols), { skipMask: true, rowCapOverride: 5000 });
+            if ("refused" in r) return { error: r.refused };
+            if (!r.ok) return { error: `Perfil de \`${s.table}\` falhou:\n\`\`\`\n${r.output.slice(0, 800)}\n\`\`\`` };
+            return { profile: parseProfileCsv(r.output) };
+          };
+          const [l, rgt] = [await side(parsed.left), await side(parsed.right)];
+          if ("error" in l || "error" in rgt) {
+            this.dataCard(`### Paridade de dados\n\n${("error" in l ? l.error : "") || ""}${"error" in rgt ? "\n" + rgt.error : ""}`);
+            return;
+          }
+          this.dataCard(renderParityCard(parsed.left.table, parsed.right.table, compareProfiles(l.profile, rgt.profile)));
+          return;
+        }
+        case "auditoria-pii": {
+          const index = await this.getGroundingIndex();
+          const findings = index ? scanIndexForPii(index) : [];
+          this.dataCard(renderPiiCard(findings, index?.size() ?? 0));
+          return;
+        }
+        default:
+          this.dataCard(`Comando de dados desconhecido: \`${cmd}\`.`);
+      }
+    } catch (err) {
+      log.warn(`Comando de dados /${cmd} falhou (fail-open).`, err);
+      this.dataCard(`### /${cmd}\n\nFalhou: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // /impacto [modelo]: raio de explosão determinístico via lineage do manifest (host-computado, sem
   // LLM) + lineage de coluna do arquivo do modelo quando legível. O cartão volta como impact/report.
   async reportImpact(target?: string): Promise<void> {
@@ -3003,7 +3211,7 @@ export class Controller {
     // Schema REAL do projeto dbt (anti-alucinação): top-K tabelas relevantes para a query, com colunas
     // e tipos do manifest/catalog — o modelo consulta em vez de "lembrar" nomes. Vazio quando nada casa.
     try {
-      const index = await this.getDbtIndex();
+      const index = await this.getGroundingIndex();
       if (index) {
         const schemaBlock = renderSchemaContext(index, query);
         if (schemaBlock) parts.push(schemaBlock);
@@ -3848,7 +4056,7 @@ export class Controller {
       if (!ws) return "";
       const paths = [...new Set([...diff.matchAll(/^\+\+\+ b\/(.+\.sql)\s*$/gim)].map((m) => m[1].trim()))].slice(0, 6);
       if (paths.length === 0) return "";
-      const index = await this.getDbtIndex();
+      const index = await this.getGroundingIndex();
       const sections: string[] = [];
       for (const rel of paths) {
         // Contenção no workspace: os caminhos vêm do TEXTO do diff (linhas `+++ b/…` podem ser conteúdo
