@@ -8,26 +8,34 @@ import { cosine } from "../util/vector";
 import { Bm25Index } from "./Bm25Index";
 import { chunkFile } from "./chunker";
 import { EmbeddingClient } from "./EmbeddingClient";
+import { canReuse, FileMeta, parseSnapshot, serializeSnapshot, snapshotFileName, vectorsCompatible } from "./indexPersistence";
 import { IndexedChunk, RagMode, RetrievalHit } from "./types";
 
 const MAX_CHUNKS = 4000; // teto de segurança de memória/custo de embeddings
 
 // Índice do codebase (RF-041). Recupera trechos relevantes por embeddings
 // in-network e, na ausência deles, por BM25 lexical (RF-079). Reindexação
-// incremental em mudanças de arquivo. Sem dependência de internet (RNF-016).
+// incremental em mudanças de arquivo. Persistido no globalStorage (Fase 3): o cold-start reconcilia
+// por mtime e só re-embeda o que mudou. Sem dependência de internet (RNF-016).
 export class CodebaseIndex {
   private byFile = new Map<string, IndexedChunk[]>();
+  private fileMeta = new Map<string, FileMeta>(); // mtime+size por arquivo (para o snapshot)
   private bm25: Bm25Index | undefined;
   private mode: RagMode = "lexical";
   private ready = false;
   private building = false;
   private capped = false;
+  private cappedNotified = false;
   private onChange: (() => void) | undefined;
 
   constructor(
     private readonly egress: EgressEnforcer,
     private readonly getConfig: () => RagConfig,
-    private readonly getWorkspaceRoot: () => string | undefined
+    private readonly getWorkspaceRoot: () => string | undefined,
+    // Diretório de persistência (globalStorage). undefined = sem persistência (comportamento antigo).
+    private readonly getStorageDir: () => string | undefined = () => undefined,
+    // Aviso ao usuário quando o teto de chunks é atingido (antes só ia para o log). Opcional.
+    private readonly notify: (msg: string) => void = () => undefined
   ) {}
 
   /** Notificado quando o índice fica pronto ou muda de modo (atualiza a UI). */
@@ -81,27 +89,103 @@ export class CodebaseIndex {
     this.building = true;
     this.ready = false;
     this.byFile.clear();
+    this.fileMeta.clear();
     this.capped = false;
+    this.cappedNotified = false;
     try {
+      // Snapshot persistido: reusa os chunks (com vetores) dos arquivos que NÃO mudaram; só re-indexa
+      // (e depois re-embeda) os que mudaram/são novos. Se o modelo de embeddings mudou, os vetores são
+      // incompatíveis e tudo é re-embedado (reconciliação por conteúdo continua valendo).
+      const snap = await this.loadSnapshot(root);
+      const vecOk = snap ? vectorsCompatible(snap, cfg.embeddingModel, cfg.embeddingDimensions) : false;
+      let reused = 0;
       const files = await this.listFiles(cfg);
       for (const rel of files) {
         if (this.chunkCount() >= MAX_CHUNKS) {
           this.capped = true;
           break;
         }
-        await this.indexOneFile(root, rel, cfg);
+        const cur = await this.statMeta(root, rel);
+        const persisted = snap?.files[rel];
+        if (cur && vecOk && canReuse(persisted, cur)) {
+          this.byFile.set(rel, persisted!.chunks);
+          this.fileMeta.set(rel, cur);
+          reused++;
+        } else {
+          await this.indexOneFile(root, rel, cfg);
+        }
       }
-      await this.rebuildRetrieval();
-      if (this.capped) {
-        log.warn(`RAG: teto de ${MAX_CHUNKS} trechos atingido; parte do codebase não foi indexada.`);
-      }
-      log.info(`RAG pronto: ${this.byFile.size} arquivos, ${this.chunkCount()} trechos, modo ${this.mode}.`);
+      await this.rebuildRetrieval(); // embeda só os chunks SEM vetor (os reusados já têm)
+      if (this.capped) this.warnCapped();
+      await this.persist(root, cfg);
+      log.info(`RAG pronto: ${this.byFile.size} arquivos (${reused} reusados do cache), ${this.chunkCount()} trechos, modo ${this.mode}.`);
     } catch (err) {
       log.warn("RAG: falha ao indexar codebase", err);
     } finally {
       this.building = false;
       this.ready = true;
       this.onChange?.();
+    }
+  }
+
+  private warnCapped(): void {
+    const msg = `RAG: teto de ${MAX_CHUNKS} trechos atingido — parte do codebase NÃO foi indexada (a recuperação de contexto fica incompleta). Restrinja forge.rag.include ou aumente o filtro de exclusão.`;
+    log.warn(msg);
+    if (!this.cappedNotified) {
+      this.cappedNotified = true;
+      this.notify(msg); // aviso VISÍVEL ao dev (antes era só log — o "trunca em silêncio" da auditoria)
+    }
+  }
+
+  // mtime+size de um arquivo (para reconciliar com o snapshot). undefined se ilegível.
+  private async statMeta(root: string, rel: string): Promise<FileMeta | undefined> {
+    try {
+      const st = await fs.stat(path.join(root, rel));
+      return { mtimeMs: st.mtimeMs, size: st.size };
+    } catch {
+      return undefined;
+    }
+  }
+
+  // ---- persistência ---------------------------------------------------------
+
+  private snapshotPath(root: string): string | undefined {
+    const dir = this.getStorageDir();
+    return dir ? path.join(dir, snapshotFileName(root)) : undefined;
+  }
+
+  private async loadSnapshot(root: string) {
+    const p = this.snapshotPath(root);
+    if (!p) return null;
+    try {
+      const snap = parseSnapshot(await fs.readFile(p, "utf8"));
+      // Snapshot de OUTRO workspace no mesmo arquivo (colisão de hash improvável) → descarta.
+      return snap && snap.workspaceRoot === root ? snap : null;
+    } catch {
+      return null; // ausente/corrompido → rebuild do zero
+    }
+  }
+
+  private async persist(root: string, cfg: RagConfig): Promise<void> {
+    const p = this.snapshotPath(root);
+    if (!p) return;
+    try {
+      const files = new Map<string, { meta: FileMeta; chunks: IndexedChunk[] }>();
+      for (const [rel, chunks] of this.byFile) {
+        const meta = this.fileMeta.get(rel);
+        if (meta) files.set(rel, { meta, chunks });
+      }
+      const json = serializeSnapshot({
+        workspaceRoot: root,
+        embeddingModel: this.mode === "embeddings" ? cfg.embeddingModel : "",
+        embeddingDims: this.mode === "embeddings" ? cfg.embeddingDimensions : 0,
+        mode: this.mode,
+        files,
+      });
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, json, "utf8");
+    } catch (err) {
+      log.warn("RAG: falha ao persistir o índice (segue em memória).", err);
     }
   }
 
@@ -125,26 +209,36 @@ export class CodebaseIndex {
       const stat = await fs.stat(abs);
       if (stat.size > cfg.maxFileSizeKb * 1024) return;
       const content = await fs.readFile(abs, "utf8");
-      const chunks = chunkFile(rel, content) as IndexedChunk[];
-      if (chunks.length) this.byFile.set(rel, chunks);
+      const chunks = chunkFile(rel, content) as IndexedChunk[]; // chunks NOVOS não têm vetor ainda
+      if (chunks.length) {
+        this.byFile.set(rel, chunks);
+        this.fileMeta.set(rel, { mtimeMs: stat.mtimeMs, size: stat.size });
+      }
     } catch {
       /* arquivo ilegível/binário — ignora */
     }
   }
 
-  /** Recalcula vetores (embeddings) ou o índice BM25 a partir dos trechos atuais. */
+  /** Recalcula vetores (embeddings) ou o índice BM25 a partir dos trechos atuais. O embedding é
+   *  INCREMENTAL: só os chunks SEM vetor são embedados (os reusados do snapshot já têm) — evita
+   *  re-embedar o codebase inteiro a cada build/save (o custo recorrente que a auditoria apontou). */
   private async rebuildRetrieval(): Promise<void> {
     const all = this.allChunks();
     const embedder = this.embedder();
     if (embedder?.available()) {
+      const missing = all.filter((c) => !c.vector || c.vector.length === 0);
       try {
-        const vectors = await embedder.embed(all.map((c) => `${c.symbol ?? ""}\n${c.text}`));
-        all.forEach((c, i) => (c.vector = vectors[i]));
+        if (missing.length > 0) {
+          const vectors = await embedder.embed(missing.map((c) => `${c.symbol ?? ""}\n${c.text}`));
+          missing.forEach((c, i) => (c.vector = vectors[i]));
+        }
         this.mode = "embeddings";
         this.bm25 = undefined;
         return;
       } catch (err) {
         log.warn("RAG: embeddings indisponíveis — caindo para BM25 lexical (RF-079).", err);
+        // limpa vetores parciais para não misturar modelos/dims no modo lexical
+        for (const c of all) c.vector = undefined;
       }
     }
     this.mode = "lexical";
@@ -175,6 +269,7 @@ export class CodebaseIndex {
     if (!root) return;
     const rel = toRel(root, uri.fsPath);
     if (this.byFile.delete(rel)) {
+      this.fileMeta.delete(rel);
       await this.rebuildRetrieval();
       this.onChange?.();
     }

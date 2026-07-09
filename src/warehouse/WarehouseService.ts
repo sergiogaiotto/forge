@@ -5,7 +5,6 @@
 // (LGPD) a saída antes de qualquer exibição. Senha: SecretStorage, pedida uma vez por conexão.
 // Fail-open: CLI ausente vira mensagem de instalação, nunca exceção para cima.
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,38 +12,12 @@ import * as vscode from "vscode";
 import { SecretsStore } from "../secrets/SecretsStore";
 import { maskDataSample } from "../util/piiScan";
 import { classifySql } from "../sql/classify";
+import { resolveExecutable, unsafeField } from "./exec";
 import { decideSqlRun } from "./governance";
 import { buildCostPlan, buildRunPlan, buildTestPlan, CliPlan, isPlanError, PlanError, sanitizeWarehouseOutput } from "./sqlRunners";
 import { SqlRunResult, WarehouseConnection, WarehouseSettings } from "./types";
 
 const secretKeyFor = (connId: string) => `forge.warehouse.${connId}`;
-
-// Metacaracteres de shell PROIBIDOS em qualquer valor vindo do settings de conexão (defesa contra RCE
-// mesmo com shell:false, e contra strings de conexão malformadas). A validação roda ANTES de qualquer
-// spawn — um workspace malicioso não pode injetar comando via forge.warehouse.connections.
-const SHELL_METACHARS = /[&|;<>^`$\n\r\0]|\$\(|\|\|/;
-
-function unsafeField(v: string | undefined): boolean {
-  return typeof v === "string" && SHELL_METACHARS.test(v);
-}
-
-// Resolve o binário REAL no PATH (inclui shims .cmd/.bat/.exe do Windows) para spawnar SEM shell:true —
-// a razão de o shell existia era executar esses shims; resolvendo o caminho, o Node quota os args e
-// nenhum metacaractere é interpretado (correção do RCE crítico da revisão adversarial).
-function resolveExecutable(tool: string): string | null {
-  if (tool.includes("/") || tool.includes("\\")) return existsSync(tool) ? tool : null;
-  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""];
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const candidate = path.join(dir, tool + ext.toLowerCase());
-      if (existsSync(candidate)) return candidate;
-      const upper = path.join(dir, tool + ext);
-      if (existsSync(upper)) return upper;
-    }
-  }
-  return null;
-}
 
 // Prefixo dos temp dirs deste serviço — a varredura de órfãos do startup remove os que sobrarem de um
 // crash (o wrapper Oracle contém a senha em claro; deixá-lo órfão no .forge/ do workspace é risco).

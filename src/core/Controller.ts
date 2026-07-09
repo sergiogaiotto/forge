@@ -204,7 +204,13 @@ export class Controller {
       })
     );
     this.mcp = new McpManager(this.registry, this.egress, this.approvalGate, this.auditor, this.secrets);
-    this.rag = new CodebaseIndex(this.egress, () => this.config.rag(), () => this.workspaceRoot());
+    this.rag = new CodebaseIndex(
+      this.egress,
+      () => this.config.rag(),
+      () => this.workspaceRoot(),
+      () => this.context.globalStorageUri.fsPath, // persistência do índice (Fase 3): reusa vetores entre sessões
+      (msg) => this.post({ type: "notice", level: "warn", message: msg }) // aviso VISÍVEL de teto atingido
+    );
     this.rag.setOnChange(() => void this.postState()); // atualiza o indicador de RAG ao vivo
     // Diagnóstico LOCAL (P3): log estruturado sempre-ligado em globalStorage/logs, redigido, independente
     // do opt-in do Langfuse. Recebe o MESMO ObsEvent via o tee em Observability (antes do gate de egress).
