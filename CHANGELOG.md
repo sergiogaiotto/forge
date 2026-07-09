@@ -9,8 +9,9 @@ All notable changes to FORGE are documented here. Format based on
 "corporate solid" no FORGE não é virar agente autônomo, e sim fechar os gaps de governança,
 observabilidade e confiabilidade do gerador governado. Três fases, cada uma com revisão adversarial
 multi-agente antes do merge (PRs #129–#133), que confirmou e corrigiu defeitos reais de segurança
-(bypass de revogação, SSRF por prefixo de hostname, vazamento de captura no relay, EINVAL de spawn no
-Windows). 809 testes (eram 762 na 2.7.0).
+(bypass de revogação, SSRF por prefixo de hostname, vazamento de captura no relay) e um defeito
+funcional de produção no Windows (EINVAL ao spawnar shims `.bat`/`.cmd`). 810 testes (eram 762 na
+2.7.0).
 
 ### Security
 - **Revogação enforçada no gateway** (#129): `gateway/revocations.mjs` (puro, testável) com cache por
@@ -53,6 +54,9 @@ Windows). 809 testes (eram 762 na 2.7.0).
   `buildSpawn` agora roteia shims por shell com caminho+args quotados manualmente (seguro: `unsafeField`
   já rejeita metacaracteres nos settings); `.exe`/POSIX seguem `shell:false`. O teste de spawn exercita
   um shim `.cmd` REAL (teste com `node.exe` mascarava o bug) e prova que metacaractere é literal.
+- **Links do changelog/readme embutidos no `.vsix`**: o `vsce package` reescrevia links relativos sem
+  a rota de arquivo do GitLab (`/-/blob/<ref>/`), gerando 404 na página da extensão; o
+  `baseContentUrl`/`baseImagesUrl` agora apontam para `/-/blob/main` e `/-/raw/main`.
 - **Drift de dimensão no cache de vetores do RAG** (#133): o rebuild verifica HOMOGENEIDADE de
   comprimento entre cache e endpoint (re-embeda tudo se divergem — dims da config `0=default` não é
   confiável) e o cosine retorna 0 para dimensões diferentes (não trunca por `Math.min` → score espúrio).

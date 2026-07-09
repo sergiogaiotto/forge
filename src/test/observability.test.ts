@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Observability } from "../obs/Observability";
 import { buildIngestion, mask, maskUserId } from "../obs/langfuseMap";
-import { IngestionEvent, ObsConfig, ObsSink } from "../obs/types";
+import { IngestionEvent, ObsConfig, ObsSink, resolveObsMode } from "../obs/types";
 
 const NOW = "2026-06-28T12:00:00.000Z";
 const cfg = (over: Partial<ObsConfig> = {}): ObsConfig => ({
@@ -16,6 +16,18 @@ const cfg = (over: Partial<ObsConfig> = {}): ObsConfig => ({
   pricing: {},
   currency: "R$",
   ...over,
+});
+
+test("REGRESSÃO resolveObsMode: legado enabled=true sem mode explícito ⇒ direct (o default 'off' do contributes não pode matar o legado)", () => {
+  // upgrade da 2.7.0: dev com langfuse.enabled=true e sem mode definido NÃO perde a observabilidade
+  assert.equal(resolveObsMode(undefined, true), "direct");
+  assert.equal(resolveObsMode(undefined, false), "off");
+  // valor explícito do usuário sempre prevalece sobre o legado
+  assert.equal(resolveObsMode("off", true), "off");
+  assert.equal(resolveObsMode("gateway", false), "gateway");
+  assert.equal(resolveObsMode("direct", false), "direct");
+  // valor inválido explícito é fail-safe (não liga nada, nem resgata o legado)
+  assert.equal(resolveObsMode("banana", true), "off");
 });
 
 test("mask: full passa cru, masked redige PII/segredos, metadata-only some", () => {

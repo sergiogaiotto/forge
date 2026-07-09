@@ -637,7 +637,7 @@
     "keygen:build-exe": "node admin-cli/build-exe.mjs",
     "license:issue": "node admin-cli/forge-admin.mjs issue",
     "license:revoke": "node admin-cli/forge-admin.mjs revoke",
-    "package": "npm run build && vsce package --allow-missing-repository --skip-license --baseContentUrl https://git.interno.claro.com.br/data-platform/forge --baseImagesUrl https://git.interno.claro.com.br/data-platform/forge",
+    "package": "npm run build && vsce package --allow-missing-repository --skip-license --baseContentUrl https://git.interno.claro.com.br/data-platform/forge/-/blob/main --baseImagesUrl https://git.interno.claro.com.br/data-platform/forge/-/raw/main",
     "publish:vsce": "vsce publish",
     "publish:ovsx": "ovsx publish",
     "vscode:prepublish": "npm run build"

@@ -229,6 +229,39 @@ O que escolher em `LANGFUSE_CAPTURE` (política de conteúdo, importante para LG
 - **masked** — registra, mas **mascara** dados sensíveis (e-mails, tokens, números longos);
 - **metadata-only** — registra só metadados (sem o conteúdo do código).
 
+### Eventos de workflow do cliente — `forge.observability.mode`
+
+A geração é rastreada pelo gateway (acima). Mas os eventos de **workflow** — proposta aplicada ou
+descartada, quality gate, execução, revisão — acontecem **só no cliente** e nunca passam pelo proxy
+de geração. O destino deles é governado pelo setting (distribua junto com as managed settings):
+
+```jsonc
+"forge.observability.mode": "gateway"   // off (padrão) | direct | gateway
+```
+
+- **off** (padrão) — nenhum evento de workflow sai da máquina do dev;
+- **gateway** (recomendado em produção) — os eventos vão ao **gateway** (`POST /obs/ingest`,
+  autenticado pela sessão da licença, com revogação e rate limit) e ele encaminha ao Langfuse com a
+  `secretKey` **só no servidor**. O gateway **não confia no cliente**: re-aplica a SUA política de
+  captura (`LANGFUSE_CAPTURE` prevalece), carimba a identidade da sessão e amostra por trace;
+- **direct** — o cliente envia direto ao Langfuse com as chaves do próprio dev (uso pessoal/PoC — a
+  `secretKey` vive no cliente; evite em produção).
+
+> Retrocompat: o setting antigo `forge.observability.langfuse.enabled: true` sem `mode` definido
+> equivale a `direct`.
+
+**Custo por geração (FinOps).** Sem tabela de preços, **nenhum custo é emitido** — o FORGE não
+fabrica números (o HubGPU é self-hosted; o custo interno é decisão sua). Para ver R$ por geração no
+Langfuse, defina o preço **por 1 milhão de tokens** (a chave casa por substring do modelo; a mais
+específica vence):
+
+```jsonc
+"forge.observability.pricing": {
+  "gpt-oss-120b": { "input": 2.50, "output": 10.00 }
+},
+"forge.observability.currency": "R$"
+```
+
 **Identidade do dev (quem rodou cada geração).** A identidade principal é o **e-mail**, gravado como
 **`userId`** do trace no Langfuse — assim você filtra o uso por pessoa. Como o e-mail é obtido:
 
@@ -242,10 +275,11 @@ O que escolher em `LANGFUSE_CAPTURE` (política de conteúdo, importante para LG
 > `subject` para vários devs) — assim cada pessoa informa o próprio e-mail e a atribuição no Langfuse
 > fica individual.
 
-O login do SO e o `subject`/hash da licença também vão nos metadados do trace. A captura só acontece
-**quando a inferência passa pelo gateway** (provedor apontando para o gateway, ou o gateway como
-proxy); em acesso direto ao HubGPU não há trace. Para conformidade (LGPD), trate o e-mail como dado
-pessoal e ajuste a retenção no Langfuse conforme sua política.
+O login do SO e o `subject`/hash da licença também vão nos metadados do trace. A captura da
+**geração** acontece quando a inferência passa **pelo gateway** (provedor apontando para o gateway,
+ou o gateway como proxy) — em acesso direto ao HubGPU não há trace de geração; os eventos de
+**workflow** do cliente seguem o `forge.observability.mode` acima. Para conformidade (LGPD), trate o
+e-mail como dado pessoal e ajuste a retenção no Langfuse conforme sua política.
 
 > 🛡️ Se o Langfuse cair, o FORGE **não trava**: ele descarta/enfileira os registros e segue gerando
 > ("fail-open"). A observabilidade nunca atrapalha o usuário.
@@ -308,9 +342,15 @@ Por segurança, o FORGE **nega qualquer conexão externa** a menos que você lib
 de endereços internos permitidos:
 ```jsonc
 "forge.egress.allowExternal": false,                       // mantenha false em produção
-"forge.egress.allowedHosts": ["hub-gpus.claro.com.br", "gateway.interno"]
+"forge.egress.allowedHosts": ["hub-gpus.claro.com.br", "gateway.interno"],
+"forge.egress.trustInNetwork": true                        // false = endurecido (ver abaixo)
 ```
 Tudo que estiver fora dessa lista (e não for endereço de rede interna) é **bloqueado e registrado**.
+
+Com **`forge.egress.trustInNetwork: false`**, endereços de rede interna (LAN, `.internal`, IP
+privado) **deixam de ser liberados automaticamente** — só loopback (a própria máquina) passa sem
+allowlist; todo o resto precisa estar em `allowedHosts`. Use em ambientes que exigem defesa contra
+exfiltração/SSRF **dentro** da rede. O padrão `true` mantém o comportamento clássico.
 
 ### MCP (ferramentas internas governadas)
 MCP permite que o FORGE use ferramentas da empresa (ex.: consultar o Oracle). Você define o
@@ -420,9 +460,12 @@ As licenças antigas deixam de validar (a chave embutida mudou).
 - [ ] Chave privada com **backup seguro** e fora de qualquer repositório.
 - [ ] Extensão **reconstruída** após o `keygen` (chave pública atual embutida).
 - [ ] Gateway no ar, **atrás de TLS/mTLS** interno, com `forge.license.mode=gateway`.
-- [ ] `forge.egress.allowExternal = false` e `allowedHosts` só com endereços internos.
+- [ ] `forge.egress.allowExternal = false` e `allowedHosts` só com endereços internos (avalie
+      `trustInNetwork: false` para endurecer o intra-rede).
 - [ ] Langfuse configurado com **`secretKey` apenas no gateway** e política de `CAPTURE` definida
       (LGPD).
+- [ ] `forge.observability.mode = "gateway"` distribuído aos devs (eventos de workflow governados;
+      e `pricing` definido se quiser custo em R$ nos traces).
 - [ ] Catálogo de **skills versionado** e revisado; **MCP** com allowlist e aprovação.
 - [ ] Endpoint de **embeddings** acessível (ou ciência de que cairá para lexical).
 - [ ] Processo de **emissão/revogação** de licenças documentado.
