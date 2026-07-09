@@ -59,3 +59,26 @@ test("trustInNetwork:false ainda libera host de LAN explicitamente na allowlist"
   assert.equal(e.isAllowed("https://oracle.internal/mcp"), true);
   assert.equal(e.isAllowed("https://outro.internal/mcp"), false);
 });
+
+// REGRESSÃO (revisão adversarial): hostname público que só COMEÇA com prefixo de IP NÃO é in-network.
+test("REGRESSÃO: hostname público com prefixo de IP não burla o deny-by-default (default e endurecido)", () => {
+  const def = new EgressEnforcer({ allowExternal: false, allowedHosts: [] }, silent); // trustInNetwork default
+  for (const bad of [
+    "http://127.0.0.1.attacker.com/exfil",
+    "http://127.attacker.com/steal",
+    "http://10.evil.com/steal",
+    "http://192.168.evil.com/steal",
+    "http://169.254.evil.com/",
+    "http://172.16.evil.com/",
+  ]) {
+    assert.equal(def.isAllowed(bad), false, `${bad} é público — não pode contar como in-network`);
+  }
+  // IPs LITERAIS legítimos continuam in-network no default
+  assert.equal(def.isAllowed("http://127.0.0.1:11434/"), true);
+  assert.equal(def.isAllowed("http://10.0.0.5/legit"), true);
+
+  // no modo endurecido, o mesmo host público-com-prefixo-loopback continua bloqueado
+  const hard = new EgressEnforcer({ allowExternal: false, allowedHosts: [], trustInNetwork: false }, silent);
+  assert.equal(hard.isAllowed("http://127.0.0.1.attacker.com/exfil"), false);
+  assert.equal(hard.isAllowed("http://127.0.0.1:8787/"), true, "IP loopback real segue liberado");
+});

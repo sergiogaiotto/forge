@@ -50,10 +50,16 @@ const CFG = {
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const sessions = new Map(); // token -> { subject, org, expiresAt }
-// Revogação enforçada em activate/renew/proxy (cache por mtime). Um subject revogado perde o acesso
-// no próximo request, sem esperar o gateway reiniciar.
-const revocation = createRevocationChecker(CFG.revocationsPath, {
-  onError: (e) => logLine("warn", "revocations.json ilegível — mantendo última lista boa", { error: e.message }),
+// Revogação enforçada em activate/renew/proxy (cache por assinatura mtime+size). Um subject revogado
+// perde o acesso no próximo request, sem esperar o gateway reiniciar. Um JSON ilegível ANTES de
+// qualquer lista boa (cold-start) é logado em ERROR — a revogação ainda não está garantida; depois de
+// uma lista boa, um erro é só WARN (mantém a última lista conhecida).
+let revocation;
+revocation = createRevocationChecker(CFG.revocationsPath, {
+  onError: (e) =>
+    revocation && revocation.isReady()
+      ? logLine("warn", "revocations.json ilegível — mantendo última lista boa", { error: e.message })
+      : logLine("error", "revocations.json ILEGÍVEL no cold-start — revogação NÃO garantida até corrigir o arquivo", { error: e.message }),
 });
 const rateBuckets = new Map(); // key -> { tokens, updatedAt }
 const traceQueue = [];

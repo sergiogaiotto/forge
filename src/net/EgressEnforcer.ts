@@ -5,6 +5,8 @@
 //
 // Mantido livre do logger baseado no VSCode para ser testável em unidade em Node puro;
 // o chamador injeta um sink de warn.
+import { isIP } from "node:net";
+
 export interface EgressPolicy {
   allowExternal: boolean;
   allowedHosts: string[];
@@ -44,12 +46,18 @@ export class EgressEnforcer {
   private isInNetwork(host: string): boolean {
     // IPv6 vem entre colchetes de `new URL(...).hostname` (ex.: "[::1]") — normaliza para casar o regex.
     const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-    // Loopback é sempre liberado (tooling local), independente de trustInNetwork.
-    if (h === "localhost" || h === "ip6-localhost" || LOOPBACK_IP.test(h)) return true;
+    if (h === "localhost" || h === "ip6-localhost") return true;
+    // CRÍTICO: os regex de faixa só valem para IP LITERAL. Sem esta guarda, um hostname público como
+    // `127.0.0.1.attacker.com` ou `10.evil.com` casaria `^127\.`/`^10\.` por PREFIXO de string e seria
+    // tratado como in-network — furando o deny-by-default e o modo trustInNetwork:false (achado da
+    // revisão adversarial: SSRF/exfiltração via settings de egress). isIP()==0 ⇒ não é IP ⇒ não é faixa.
+    const literalIp = isIP(h) !== 0;
+    // Loopback é sempre liberado (tooling local), independente de trustInNetwork — mas só IP real.
+    if (literalIp && LOOPBACK_IP.test(h)) return true;
     // LAN/privado só quando o admin confia na rede (padrão). Com trustInNetwork:false, exige allowlist.
     if (this.policy.trustInNetwork === false) return false;
     if (h.endsWith(".local") || h.endsWith(".internal")) return true;
-    if (PRIVATE_LAN_IP.test(h)) return true;
+    if (literalIp && PRIVATE_LAN_IP.test(h)) return true;
     return false;
   }
 
