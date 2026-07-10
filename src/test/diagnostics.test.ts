@@ -18,6 +18,30 @@ test("toDiagnosticRecord: generation.start carrega metadados e MASCARA o userId 
   assert.match(String(r.userId), /^u_[0-9a-f]{12}$/);
 });
 
+test("toDiagnosticRecord: permission.decision persiste os metadados da decisão no trail local (sem o detail)", () => {
+  const e: ObsEvent = { type: "permission.decision", kind: "sql.write", action: 'conexão "dw": DELETE', scope: "write", outcome: "approved", via: "dialog", subject: "dw" };
+  const r = toDiagnosticRecord(e, TS, "masked");
+  assert.equal(r.type, "permission.decision");
+  assert.equal(r.kind, "sql.write");
+  assert.equal(r.action, 'conexão "dw": DELETE');
+  assert.equal(r.scope, "write");
+  assert.equal(r.outcome, "approved");
+  assert.equal(r.via, "dialog");
+  assert.equal(r.subject, "dw");
+  assert.equal(r.detail, undefined); // o conteúdo (SQL) NÃO entra no trail
+});
+
+test("renderDiagnosticsBundle: resumo lista escritas de permissão aprovadas e conta bloqueios", () => {
+  const recs = [
+    toDiagnosticRecord({ type: "permission.decision", kind: "sql.write", action: 'conexão "dw": UPDATE', scope: "write", outcome: "approved", via: "dialog", subject: "dw" }, TS, "masked"),
+    toDiagnosticRecord({ type: "permission.decision", kind: "contract.unverified", action: "Aplicar com contrato não verificado", scope: "write", outcome: "blocked", via: "policy" }, TS, "masked"),
+    toDiagnosticRecord({ type: "permission.decision", kind: "mcp.tool", action: "MCP srv.query", scope: "read", outcome: "auto", via: "auto" }, TS, "masked"),
+  ];
+  const md = renderDiagnosticsBundle(recs, {});
+  assert.match(md, /Decisões de permissão: 3 \(escritas aprovadas: 1 · bloqueios: 1\)/);
+  assert.match(md, /⚠ escrita aprovada \[sql\.write·dialog\]: conexão "dw": UPDATE/);
+});
+
 test("toDiagnosticRecord: generation.end MASCARA segredos no input/output", () => {
   const e: ObsEvent = {
     type: "generation.end",

@@ -65,7 +65,15 @@ export class Observability {
       this.last = ctx;
       orphan = true;
     }
-    if (!ctx.sampled) return;
+    // Eventos de AUDITORIA (decisão de permissão) são ISENTOS de amostragem — uma escrita aprovada não
+    // pode sumir do Langfuse porque a geração à qual anexaria caiu no sampleRate. Se o trace herdado não
+    // foi amostrado, promove a decisão a um trace PRÓPRIO (orphan) para sempre aterrissar.
+    const isAudit = e.type === "permission.decision";
+    if (!ctx.sampled) {
+      if (!isAudit) return;
+      ctx = { traceId: this.id(), sampled: true };
+      orphan = true;
+    }
 
     const nowIso = this.now();
     const events = orphan ? [orphanTrace(this.id(), ctx.traceId, nowIso, cfg.environment)] : [];

@@ -266,7 +266,8 @@ export class Controller {
     this.permissions = new PermissionService(
       this.permissionAuditor,
       (rec) => this.obs.record({ type: "permission.decision", kind: rec.kind, action: rec.action, scope: rec.scope, outcome: rec.outcome, via: rec.via, subject: rec.subject }),
-      async (message, detail, confirmLabel) => vscode.window.showWarningMessage(message, { modal: true, detail }, confirmLabel)
+      async (message, detail, confirmLabel) => vscode.window.showWarningMessage(message, { modal: true, detail }, confirmLabel),
+      (m) => log.info(m)
     );
     this.previewService = new PreviewService({
       workspaceRoot: () => this.workspaceRoot(),
@@ -3050,8 +3051,12 @@ export class Controller {
 
   private warehouse(): WarehouseService {
     if (!this.warehouseSvc) {
-      this.warehouseSvc = new WarehouseService(this.secrets, () => this.config.warehouse(), () => this.workspaceRoot(), (action, subject, sqlPreview) =>
-        this.permissions.confirm({ kind: "sql.write", action, subject, scope: "write", detail: sqlPreview }, { confirmLabel: "Executar escrita" })
+      this.warehouseSvc = new WarehouseService(
+        this.secrets,
+        () => this.config.warehouse(),
+        () => this.workspaceRoot(),
+        (action, subject, sqlPreview) => this.permissions.confirm({ kind: "sql.write", action, subject, scope: "write", detail: sqlPreview }, { confirmLabel: "Executar escrita" }),
+        (action, subject) => this.permissions.note({ kind: "sql.write", action, subject, scope: "write" }, "blocked", "policy")
       );
     }
     return this.warehouseSvc;
@@ -3086,7 +3091,10 @@ export class Controller {
   private async runOnConnection(conn: WarehouseConnection, sql: string, internal?: { skipMask?: boolean; rowCapOverride?: number }): Promise<SqlRunResult | { refused: string }> {
     if (conn.mcp) {
       const decision = decideSqlRun(sql, conn);
-      if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
+      if (decision.verdict === "blocked") {
+        this.permissions.note({ kind: "sql.write", action: `conexão "${conn.id}" (MCP): ${decision.reason}`, subject: conn.id, scope: "write" }, "blocked", "policy");
+        return { refused: `⛔ ${decision.reason}` };
+      }
       if (decision.verdict === "confirm") {
         // Permission model unificado: mesma confirmação do caminho CLI (antes era um modal DUPLICADO
         // aqui) — decisão registrada no trail + Langfuse.
@@ -3976,7 +3984,12 @@ export class Controller {
               addAndInstall,
               "Instalar só o que está listado"
             );
-            if (pick === addAndInstall) {
+            // Decisão de permissão de ESCRITA (reescreve o requirements.txt do dev + instala pacotes
+            // inferidos do código — inclusive gerado por LLM; um import errado/typosquat vira instalação).
+            // Entra no trail unificado com a lista de pacotes (o dev decidiu conscientemente).
+            const addOk = pick === addAndInstall;
+            this.permissions.note({ kind: "env.dependency", action: `Adicionar ao requirements.txt e instalar: ${merged.added.join(", ")}`, subject: "requirements.txt", scope: "write", detail: merged.added.join(", ") }, addOk ? "approved" : "denied", "webview");
+            if (addOk) {
               await fs.writeFile(reqPath, merged.content, "utf8");
               this.post({ type: "notice", level: "info", message: `requirements.txt incrementado: ${merged.added.join(", ")}.` });
             }

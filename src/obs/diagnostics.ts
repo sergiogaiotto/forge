@@ -58,6 +58,10 @@ export function toDiagnosticRecord(e: ObsEvent, nowIso: string, capture: Capture
       return { ...base, filePath: e.filePath, label: e.label, ok: e.ok, exitCode: e.exitCode, durationMs: e.durationMs };
     case "profile.roleSet":
       return { ...base, role: e.role };
+    case "permission.decision":
+      // Trail de auditoria LOCAL (sempre-ligado, independe do Langfuse opt-in): persiste os metadados da
+      // decisão. O detail (SQL/args) NÃO entra — é trilha, não corpo (o conteúdo segue a captura da geração).
+      return { ...base, kind: e.kind, action: e.action, scope: e.scope, outcome: e.outcome, via: e.via, subject: e.subject };
     case "review.done":
     case "profile.ruleAdded":
       return base;
@@ -72,6 +76,11 @@ export function renderDiagnosticsBundle(records: DiagnosticRecord[], manifest: R
   const count = (t: string) => records.filter((r) => r.type === t).length;
   const errors = records.filter((r) => r.type === "generation.end" && r.error);
   const gateFails = records.filter((r) => r.type === "validation.result" && r.gateOk === false);
+  // Decisões de permissão (trail unificado): escritas APROVADAS e BLOQUEIOS são o que interessa numa
+  // auditoria pós-incidente ("quem aprovou qual escrita?").
+  const perms = records.filter((r) => r.type === "permission.decision");
+  const permWritesApproved = perms.filter((r) => r.scope === "write" && r.outcome === "approved");
+  const permBlocked = perms.filter((r) => r.outcome === "blocked");
   // P3: params da geração mais RECENTE (config efetiva) e agregação dos spans de fase (onde o tempo vai).
   const lastGen = [...records].reverse().find((r) => r.type === "generation.start");
   const num = (v: unknown) => (typeof v === "number" ? String(v) : "?");
@@ -104,6 +113,13 @@ export function renderDiagnosticsBundle(records: DiagnosticRecord[], manifest: R
   lines.push(`- Erros de geração: ${errors.length}`);
   lines.push(`- Reprovações de gate: ${gateFails.length}`);
   lines.push(`- Propostas criadas: ${count("proposal.created")} · aplicadas: ${count("proposal.applied")} · descartadas: ${count("proposal.discarded")}`);
+  lines.push(`- Decisões de permissão: ${perms.length} (escritas aprovadas: ${permWritesApproved.length} · bloqueios: ${permBlocked.length})`);
+  if (permWritesApproved.length > 0) {
+    // Lista as escritas aprovadas (o evento de auditoria mais sensível) — action + via, sem o conteúdo.
+    for (const r of permWritesApproved.slice(-20)) {
+      lines.push(`  - ⚠ escrita aprovada [${String(r.kind ?? "?")}·${String(r.via ?? "?")}]: ${String(r.action ?? "?")}`);
+    }
+  }
   if (lastGen) {
     lines.push(
       `- Última geração (params efetivos): reasoningEffort=${lastGen.reasoningEffort ?? "?"} · maxOutputTokens=${num(lastGen.maxOutputTokens)} · inputBudgetTokens=${num(lastGen.inputBudgetTokens)} · systemPromptTokens=${num(lastGen.systemPromptTokens)}`

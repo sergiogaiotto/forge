@@ -6,7 +6,7 @@
 // vira evento obs (`permission.decision`) — visível no Langfuse pelos sinks existentes.
 // PURO (sem vscode): o diálogo nativo é injetado pelo Controller; testável de ponta a ponta.
 
-export type PermissionKind = "mcp.tool" | "sql.write" | "proposal.force" | "contract.unverified";
+export type PermissionKind = "mcp.tool" | "sql.write" | "proposal.force" | "contract.unverified" | "env.dependency";
 export type PermissionOutcome = "auto" | "approved" | "denied" | "blocked";
 // Por onde a decisão foi tomada: "policy" (bloqueio do admin, sem prompt), "auto" (auto-approve
 // somente-leitura), "dialog" (modal nativo do host) ou "webview" (botão/card do painel).
@@ -78,15 +78,20 @@ export type PermissionDialog = (message: string, detail: string, confirmLabel: s
 export class PermissionService {
   constructor(
     private readonly auditor: PermissionAuditor,
-    // Hook de observabilidade: o Controller emite o `permission.decision` (Langfuse) para CADA registro.
+    // Hook de observabilidade: o Controller emite o `permission.decision` (Langfuse + diagnóstico local)
+    // para CADA registro.
     private readonly emit: (rec: PermissionRecord) => void,
-    private readonly dialog: PermissionDialog
+    private readonly dialog: PermissionDialog,
+    // Log imediato de cada decisão (output channel do FORGE) — consumidor síncrono do trail, paridade com
+    // o McpAuditor. Injetado (o módulo é puro). Default noop.
+    private readonly logInfo: (msg: string) => void = () => undefined
   ) {}
 
   // Registra uma decisão tomada em OUTRA superfície (card webview do MCP, botão "Aplicar assim mesmo",
   // bloqueio de política já aplicado) — mantém o trail único sem forçar todas as UX para o modal.
   note(req: PermissionRequest, outcome: PermissionOutcome, via: PermissionVia): void {
     const rec = this.auditor.record({ ...req, detail: req.detail ? previewDetail(req.detail) : undefined, outcome, via });
+    this.logInfo(`[permissão] ${rec.kind} ${rec.scope} · ${rec.action} → ${rec.outcome} (${rec.via})`);
     this.emit(rec);
   }
 

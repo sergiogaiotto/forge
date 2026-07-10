@@ -376,12 +376,25 @@ Regras aplicadas automaticamente:
 - Credenciais vêm do **cofre** (SecretStorage/gateway), nunca embutidas na extensão.
 
 **Trail unificado de permissões.** Toda decisão de permissão — aprovação/negação de ferramenta MCP
-(inclusive auto-approve), confirmação de **escrita SQL** no warehouse, *"Aplicar assim mesmo,
-revisei"* por cima de um gate reprovado e a confirmação/bloqueio de **contrato não verificado** do
-Modo Projeto — entra num registro único de auditoria e, com a observabilidade ligada (seção 8), vira
-o evento **`permission.decision`** no Langfuse. Escrita **aprovada** pelo dev aparece como `WARNING`
-no trace, para saltar aos olhos na análise; o conteúdo (SQL/argumentos) não vai ao trace — só os
-metadados da decisão.
+(inclusive auto-approve), confirmação **e bloqueio** de **escrita SQL** no warehouse, *"Aplicar assim
+mesmo, revisei"* por cima de um gate reprovado, a confirmação/bloqueio de **contrato não verificado**
+do Modo Projeto e o *"Adicionar e instalar"* de dependências detectadas no código — entra num
+registro único de auditoria. Esse registro:
+
+- é **gravado localmente sempre** (log de diagnóstico redigido, seção 15) — aparece no *bundle* que o
+  dev exporta, com um resumo das **escritas aprovadas** e a contagem de **bloqueios**, mesmo sem
+  Langfuse;
+- **e**, com a observabilidade ligada (seção 8), vira o evento **`permission.decision`** no Langfuse.
+
+Escrita **aprovada** pelo dev aparece como `WARNING` no trace, para saltar aos olhos na análise. O
+conteúdo (SQL/argumentos) **não** vai ao trace nem ao log — só os metadados da decisão (tipo, ação,
+alvo, desfecho). Como é evento de auditoria, **não** está sujeito ao `sampleRate` do Langfuse (uma
+escrita aprovada nunca é descartada por amostragem).
+
+> Uma escrita via **conexão MCP** passa por **dois** gates independentes — a governança do motor SQL
+> (é uma escrita? precisa confirmar?) e a aprovação da ferramenta MCP (esta chamada de ferramenta é
+> permitida?) — então gera **duas** decisões no trail, correlacionáveis pelo `subject` (a conexão).
+> É esperado: são controles distintos.
 
 ---
 
