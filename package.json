@@ -1,7 +1,7 @@
 {
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
-  "description": "Geração de código assistida por IA para times de dados e IA. Multi-provedor (HubGPU/OpenAI/Anthropic), Skills governadas, perfil de projeto, quality gates, licença Ed25519, observabilidade e MCP in-network.",
+  "description": "%ext.description%",
   "version": "2.9.0",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
@@ -40,7 +40,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Alguns settings do FORGE definem comandos que ele executa localmente (conexões de warehouse, catálogo MCP, comandos de run/test) ou DESTINOS DE REDE para onde ele envia dados (gateway, embeddings do RAG, Langfuse). Em um workspace não confiável esses settings são ignorados até você confiar na pasta — evitando que um repositório malicioso injete comando ou redirecione o egress para um host arbitrário.",
+      "description": "%capabilities.untrustedWorkspaces%",
       "restrictedConfigurations": [
         "forge.warehouse.connections",
         "forge.warehouse.default",
@@ -231,7 +231,7 @@
         "forge.gateway.url": {
           "type": "string",
           "default": "",
-          "markdownDescription": "URL do **gateway in-network** que valida a licença, faz proxy da inferência e emite traces. Vazio = modo local (validação client-side apenas; ver `forge.license.mode`)."
+          "markdownDescription": "%config.gateway.url.md%"
         },
         "forge.license.mode": {
           "type": "string",
@@ -240,32 +240,32 @@
             "local"
           ],
           "default": "local",
-          "markdownDescription": "`gateway`: validação autoritativa server-side (recomendado em produção). `local`: apenas verificação Ed25519 no cliente (dev/PoC)."
+          "markdownDescription": "%config.license.mode.md%"
         },
         "forge.skills.managedDir": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Diretório do catálogo de skills **gerido pelo admin**. Vazio = usa o catálogo empacotado com a extensão."
+          "markdownDescription": "%config.skills.managedDir.md%"
         },
         "forge.skills.retrievalThreshold": {
           "type": "number",
           "default": 15,
-          "markdownDescription": "Acima deste número de skills habilitadas, o discovery passa a selecionar top-K por relevância (RF-037)."
+          "markdownDescription": "%config.skills.retrievalThreshold.md%"
         },
         "forge.skills.topK": {
           "type": "number",
           "default": 8,
-          "markdownDescription": "Número de skills injetadas no discovery quando o retrieval por relevância está ativo."
+          "markdownDescription": "%config.skills.topK.md%"
         },
         "forge.skills.templates": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "No Modo Projeto, materializa como forge-file o **scaffold determinístico** (`.tmpl`) declarado no frontmatter das skills ativadas — fora do LLM, em gap-fill (nunca sobrescreve o que o LLM gerou). As propostas herdam o gate. Desligue para não materializar scaffold de skill."
+          "markdownDescription": "%config.skills.templates.md%"
         },
         "forge.egress.allowExternal": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Permitir egress para a internet pública. **Padrão: false** (deny-by-default, RNF-014). Não altere sem aprovação de segurança."
+          "markdownDescription": "%config.egress.allowExternal.md%"
         },
         "forge.egress.allowedHosts": {
           "type": "array",
@@ -275,17 +275,17 @@
           "default": [
             "hub-gpus.claro.com.br"
           ],
-          "markdownDescription": "Hosts in-network permitidos (provedor, gateway, Langfuse, MCP, licença). Qualquer destino fora desta lista é bloqueado e registrado."
+          "markdownDescription": "%config.egress.allowedHosts.md%"
         },
         "forge.egress.trustInNetwork": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Liberar automaticamente hosts **in-network de LAN** (`.internal`, `.local`, IPs privados 10.x/192.168.x/172.16-31.x) sem que constem na `allowedHosts`. **Padrão: true** (retrocompatível — conveniente numa rede corporativa fechada). Defina **false** para **defesa em profundidade**: com `false`, só o **loopback** (`localhost`/`127.x`/`::1`) é liberado automaticamente e qualquer host de LAN precisa estar explicitamente em `forge.egress.allowedHosts` — evita que um settings (ex.: `forge.rag.embeddings.url`, `forge.gateway.url`) redirecione o egress para um host interno arbitrário (defesa contra exfiltração/SSRF intra-rede). Este setting é ignorado em workspace não confiável."
+          "markdownDescription": "%config.egress.trustInNetwork.md%"
         },
         "forge.mcp.catalog": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Catálogo de MCP servers **gerido pelo admin** (managed setting). Cada item segue o schema `McpServerEntry`.",
+          "markdownDescription": "%config.mcp.catalog.md%",
           "items": {
             "type": "object",
             "properties": {
@@ -333,18 +333,18 @@
         "forge.validation.gateBlocksApply": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Quando uma skill define um validador como *gate*, falha na validação bloqueia o **Aplicar** do diff (RF-039)."
+          "markdownDescription": "%config.validation.gateBlocksApply.md%"
         },
         "forge.gate.definitionOfDone": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Gate de **definição de pronto** (P2) no **Modo Projeto**: quando o projeto foi gerado por completo mas falta **manifesto de dependências** (requirements.txt / pyproject.toml), **qualquer teste** (test_*.py / tests/) ou um **README com \"## Como rodar\"**, bloqueia o **Aplicar** de todos os arquivos (bloqueio + aviso, sem auto-reparo). Determinístico e conservador — só acusa ausência real. Desligue (`false`) para projetos onde teste/README não se aplicam. Respeita o `forge.validation.gateBlocksApply` mestre."
+          "markdownDescription": "%config.gate.definitionOfDone.md%"
         },
         "forge.gate.blockUnverifiedContract": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
-          "markdownDescription": "Política do admin (**Modo Projeto**, projetos **Python**): enquanto o **contrato cross-file NÃO foi verificado** (o mypy não rodou — sem venv/mypy; ou o gate inteiro não pôde rodar), **BLOQUEIA sem escape** o Aplicar tudo, o \"Forçar bloqueados\" **e o Aplicar de cada cartão** do projeto. O caminho de saída é **Preparar ambiente** (cria o venv) e **Re-verificar contrato** (o gate instala o mypy no venv e re-verifica as MESMAS propostas, sem regenerar). Escopo `machine`: valor em `.vscode/settings.json` do repositório é **ignorado** (workspace não desliga a política); deliberadamente **não** respeita o mestre `forge.validation.gateBlocksApply` (que é sobrescritível por workspace). Em rede sem PyPI, disponibilize um mirror interno (`pip config set global.index-url …`) antes de ligar — sem mypy instalável, projetos Python ficam bloqueados. Default `false` (confirmação explícita, comportamento clássico)."
+          "markdownDescription": "%config.gate.blockUnverifiedContract.md%"
         },
         "forge.gate.security": {
           "type": "string",
@@ -354,12 +354,12 @@
             "off"
           ],
           "enumDescriptions": [
-            "Só achados de severidade ALTA E confiança ALTA do bandit bloqueiam o Aplicar; o resto é advisory (padrão).",
-            "Roda o bandit e mostra os achados, mas NUNCA bloqueia o Aplicar.",
-            "Não roda o gate de segurança."
+            "%config.gate.security.enum.0%",
+            "%config.gate.security.enum.1%",
+            "%config.gate.security.enum.2%"
           ],
           "default": "conservative",
-          "markdownDescription": "Gate de **segurança** (P2) no **Modo Projeto**: roda o **bandit** (SAST) sobre o projeto gerado — pega senha/segredo hardcoded, `eval`/`exec` de input, cripto fraca, `yaml.load` inseguro, etc. (análise por AST; **não executa** o código). `conservative` (padrão): só severidade **ALTA + confiança ALTA** bloqueia o Aplicar (pouquíssimo falso-positivo); o resto é advisory. `advisory`: nunca bloqueia. `off`: não roda. bandit ausente → consultivo (fail-open); se estiver no venv do workspace, é instalado best-effort. Respeita o `forge.validation.gateBlocksApply` mestre."
+          "markdownDescription": "%config.gate.security.md%"
         },
         "forge.gate.sql": {
           "type": "string",
@@ -369,67 +369,67 @@
             "off"
           ],
           "enumDescriptions": [
-            "Só achados de SEGURANÇA do SQL (DELETE/UPDATE sem WHERE, DROP/TRUNCATE, produto cartesiano) bloqueiam o Aplicar; anti-padrões e schema (dbt) são advisory (padrão).",
-            "Analisa e mostra os achados no cartão da proposta, mas NUNCA bloqueia o Aplicar.",
-            "Não roda o motor SQL."
+            "%config.gate.sql.enum.0%",
+            "%config.gate.sql.enum.1%",
+            "%config.gate.sql.enum.2%"
           ],
           "default": "conservative",
-          "markdownDescription": "Motor **SQL determinístico** (dados): analisa toda proposta `.sql` **in-process** (sem instalar nada) — classificação de statements, ~16 regras de **anti-padrão** com confiança declarada (SELECT *, produto cartesiano, `NOT IN` + NULL, predicado não-sargável, CTE morta, LIMIT em modelo dbt…), e **validação de schema** contra o `target/manifest.json` do projeto dbt quando existir (tabela/coluna inexistente vira achado com sugestão). Modelos dbt com Jinja (`{{ ref() }}`) são analisados nativamente. `conservative` (padrão): só os achados de **segurança** bloqueiam o Aplicar; o resto é advisory. Respeita o `forge.validation.gateBlocksApply` mestre."
+          "markdownDescription": "%config.gate.sql.md%"
         },
         "forge.warehouse.connections": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Conexões de **warehouse** (Onda 3 — dados): o FORGE executa SQL pelos **CLIs que você já usa** (caminho tradicional) ou via **MCP** do catálogo. Cada item: `{ id, kind: oracle|postgres|bigquery|duckdb|s3|oci-os, connect, readonly?, tool?, walletDir?, schemas?, mcp? }`. Exemplos — Oracle 19c/26ai/Exadata: `{ \"id\": \"dw\", \"kind\": \"oracle\", \"connect\": \"user@DWPROD\" }` (SQLcl/sqlplus; senha no SecretStorage, pedida no 1º uso); **ADW**: adicione `walletDir` (vira TNS_ADMIN); PostgreSQL: `connect` = URI do psql; BigQuery: `connect` = projeto GCP (auth do gcloud), `schemas` = datasets; S3/OCI Object Storage: `kind: s3|oci-os` (aws/oci CLI). **Governança do motor**: SELECT roda direto; escrita exige `readonly:false` NA conexão + confirmação por execução; DROP/TRUNCATE **nunca** executam. Amostras são capadas e mascaradas (LGPD) antes de qualquer exibição."
+          "markdownDescription": "%config.warehouse.connections.md%"
         },
         "forge.warehouse.default": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Conexão usada pelos comandos de dados quando nenhum `id` é informado (vazio = a primeira da lista)."
+          "markdownDescription": "%config.warehouse.default.md%"
         },
         "forge.warehouse.rowCap": {
           "type": "number",
           "default": 50,
-          "markdownDescription": "Máximo de **linhas** exibidas de um SELECT (amostra — LGPD: o chat nunca carrega um dataset). 1–500."
+          "markdownDescription": "%config.warehouse.rowCap.md%"
         },
         "forge.warehouse.timeoutSeconds": {
           "type": "number",
           "default": 60,
-          "markdownDescription": "Timeout (s) de cada execução no warehouse via CLI."
+          "markdownDescription": "%config.warehouse.timeoutSeconds.md%"
         },
         "forge.project.reconcileDependencies": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Reconciliação de **dependências** (P4) no **Modo Projeto**: depois do gate, confere se o `requirements.txt` gerado declara os pacotes que o código de fato **importa** e acrescenta os **ausentes** à proposta do manifesto (idempotente; preserva pins/comentários; **conservador** — nunca adiciona pacote ambíguo, filtra stdlib e módulos locais). Complementa o gate de definição de pronto (que garante que o manifesto **existe**; este garante que está **correto**). Projetos só-`pyproject.toml` ficam de fora (editar TOML é frágil). Desligue (`false`) para não auto-editar a proposta do manifesto."
+          "markdownDescription": "%config.project.reconcileDependencies.md%"
         },
         "forge.rag.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Habilita a recuperação de contexto do codebase (RAG) por busca semântica/lexical (RF-041)."
+          "markdownDescription": "%config.rag.enabled.md%"
         },
         "forge.rag.embeddings.url": {
           "type": "string",
           "default": "https://hub-gpus.claro.com.br/embed06b/v1",
-          "markdownDescription": "Base do endpoint **in-network** de embeddings OpenAI-compatible (termina em `/v1`). **Não inclua `/embeddings`** — esse sufixo é adicionado pelo client. Ex.: `https://hub-gpus.claro.com.br/embed06b/v1`. Vazio = recuperação **lexical** (BM25), sem embeddings (RF-079)."
+          "markdownDescription": "%config.rag.embeddings.url.md%"
         },
         "forge.rag.embeddings.model": {
           "type": "string",
           "default": "Qwen/Qwen3-Embedding-0.6B",
-          "markdownDescription": "Modelo de embeddings (hub interno Claro). Ex.: `Qwen/Qwen3-Embedding-0.6B`."
+          "markdownDescription": "%config.rag.embeddings.model.md%"
         },
         "forge.rag.embeddings.dimensions": {
           "type": "number",
           "default": 0,
-          "markdownDescription": "Densidade do vetor (MRL/Matryoshka). **0 = padrão do modelo** (1024 no Qwen3-Embedding-0.6B). Mudar a densidade exige reindexação do codebase (FORGE: Reindexar codebase)."
+          "markdownDescription": "%config.rag.embeddings.dimensions.md%"
         },
         "forge.rag.maxChunks": {
           "type": "number",
           "default": 20,
-          "markdownDescription": "Número máximo de trechos do codebase injetados no contexto por geração. Com o orçamento de contexto dinâmico (janela real do modelo), vale injetar mais referências; o excedente que não couber no orçamento é cortado automaticamente."
+          "markdownDescription": "%config.rag.maxChunks.md%"
         },
         "forge.rag.maxFileSizeKb": {
           "type": "number",
           "default": 512,
-          "markdownDescription": "Arquivos maiores que isto (KB) são ignorados na indexação."
+          "markdownDescription": "%config.rag.maxFileSizeKb.md%"
         },
         "forge.rag.include": {
           "type": "array",
@@ -450,7 +450,7 @@
             "**/*.yml",
             "**/*.toml"
           ],
-          "markdownDescription": "Globs de arquivos incluídos na indexação do codebase."
+          "markdownDescription": "%config.rag.include.md%"
         },
         "forge.rag.exclude": {
           "type": "array",
@@ -470,150 +470,158 @@
             "**/.forge/**",
             "**/.env"
           ],
-          "markdownDescription": "Globs de arquivos/pastas excluídos da indexação. Inclui `.env` por padrão. O casamento é por substring do caminho (após remover `**/` e `/**`); evite padrões que casem código legítimo (ex.: `secret` excluiria `credential_service.py`)."
+          "markdownDescription": "%config.rag.exclude.md%"
         },
         "forge.telemetry.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Telemetria de produto opt-in (distinta da observabilidade do admin via gateway/Langfuse)."
+          "markdownDescription": "%config.telemetry.enabled.md%"
         },
         "forge.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Log de **diagnóstico local** (P3): grava um NDJSON estruturado e sempre **redigido** (segredos/PII mascarados) em `globalStorage/logs`, além de um buffer em memória. Alimenta o comando **FORGE: Exportar diagnóstico** (bundle para anexar a um relato de bug). Sempre-ligado e **100% local** — distinto da observabilidade do Langfuse, que é opt-in e sai da máquina. Desligue (`false`) para não gravar nada em disco."
+          "markdownDescription": "%config.diagnostics.enabled.md%"
         },
         "forge.identity.requireEmail": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Exige que o dev informe o **e-mail** no setup inicial (vira o `userId` do trace no Langfuse). Use `true` quando as licenças são compartilhadas/genéricas. Mesmo com `false`, o e-mail é solicitado se o `subject` da licença não for um e-mail válido."
+          "markdownDescription": "%config.identity.requireEmail.md%"
         },
         "forge.provider.maxOutput": {
           "type": "number",
           "default": 0,
-          "markdownDescription": "Override do **teto de tokens de saída** por geração. **0 = usa o catálogo de modelos** (ex.: 32k para gpt-oss-120b). Defina manualmente apenas se o gateway HubGPU/vLLM aceitar um teto diferente. Valores muito altos podem ser recusados pelo gateway (HTTP 400)."
+          "markdownDescription": "%config.provider.maxOutput.md%"
         },
         "forge.provider.maxContextWindow": {
           "type": "number",
           "default": 0,
-          "markdownDescription": "Janela de contexto **real servida pelo gateway** (`--max-model-len` do vLLM). **0 = usa a capacidade do modelo** do catálogo (ex.: 128k para gpt-oss-120b). Defina este valor se o HubGPU servir o modelo com uma janela **menor** que a nominal, para o orçamento de contexto não estourar (HTTP 400)."
+          "markdownDescription": "%config.provider.maxContextWindow.md%"
         },
         "forge.run.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Permite **executar** o código gerado pelo painel (botão Executar / comando). A execução é local; o egress deny-by-default continua valendo."
+          "markdownDescription": "%config.run.enabled.md%"
         },
         "forge.run.timeoutSeconds": {
           "type": "number",
           "default": 120,
-          "markdownDescription": "Tempo máximo (s) de execução antes de abortar."
+          "markdownDescription": "%config.run.timeoutSeconds.md%"
         },
         "forge.env.timeoutSeconds": {
           "type": "number",
           "default": 900,
-          "markdownDescription": "Tempo máximo (s) do **Preparar ambiente** (venv + pip install) — instalações pesadas em cache frio passam fácil do timeout de execução normal."
+          "markdownDescription": "%config.env.timeoutSeconds.md%"
         },
         "forge.run.commands": {
           "type": "object",
           "default": {},
-          "markdownDescription": "Sobrescreve os comandos de execução por extensão. Ex.: `{ \".py\": \"python {file}\" }`. `{file}` é o caminho do arquivo. Mesclado sobre os padrões."
+          "markdownDescription": "%config.run.commands.md%"
         },
         "forge.test.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Habilita o **Modo TDD** e o comando **Rodar testes**."
+          "markdownDescription": "%config.test.enabled.md%"
         },
         "forge.test.command": {
           "type": "string",
           "default": "pytest -q",
-          "markdownDescription": "Comando da suíte de testes, executado na raiz do workspace (ex.: `pytest -q`, `pytest tests/`, `npm test`)."
+          "markdownDescription": "%config.test.command.md%"
         },
         "forge.test.autoInstall": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Quando o **pytest não está instalado** no ambiente, instala automaticamente no venv antes de rodar (sem perguntar). Desligado = pergunta antes."
+          "markdownDescription": "%config.test.autoInstall.md%"
         },
         "forge.search.server": {
           "type": "string",
           "default": "",
-          "markdownDescription": "ID do **MCP server de busca interna** (presente em `forge.mcp.catalog`). Quando definido, habilita **Buscar (rede interna)** no menu de contexto — busca governada (egress/aprovação/auditoria), **sem internet pública**. Vazio = busca desabilitada."
+          "markdownDescription": "%config.search.server.md%"
         },
         "forge.search.tool": {
           "type": "string",
           "default": "search",
-          "markdownDescription": "Nome da ferramenta MCP de busca exposta pelo `forge.search.server`."
+          "markdownDescription": "%config.search.tool.md%"
         },
         "forge.search.queryArg": {
           "type": "string",
           "default": "query",
-          "markdownDescription": "Nome do argumento que recebe o texto da busca na ferramenta MCP."
+          "markdownDescription": "%config.search.queryArg.md%"
         },
         "forge.project.managedProfile": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Caminho para um **perfil de projeto gerido pelo admin** (markdown — padrões/convenções da organização). Quando definido, é injetado em todo prompt como camada de **menor precedência**: o `.forge/project.md` do workspace ainda tem a palavra final. Vazio = sem camada admin."
+          "markdownDescription": "%config.project.managedProfile.md%"
         },
         "forge.ocr.tesseractPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Caminho do executável `tesseract` para o **OCR ao colar um print**. Vazio = **auto-detecção** (PATH + locais padrão de instalação, inclusive por-usuário em `%LOCALAPPDATA%`). Defina se o tesseract estiver num local não-padrão/**portable** — assim não precisa de admin nem instalar em `Program Files`. Sem tesseract, o OCR só mostra um aviso; o resto do FORGE funciona normal."
+          "markdownDescription": "%config.ocr.tesseractPath.md%"
         },
         "forge.ocr.tessdataPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Pasta `tessdata` com os idiomas do OCR (ex.: `eng.traineddata`, `por.traineddata`). Vazio = usa o `tessdata` padrão do tesseract. Aponte para uma pasta **gravável do usuário** para adicionar o `por` **sem admin**."
+          "markdownDescription": "%config.ocr.tessdataPath.md%"
         },
         "forge.observability.mode": {
           "type": "string",
-          "enum": ["off", "direct", "gateway"],
+          "enum": [
+            "off",
+            "direct",
+            "gateway"
+          ],
           "enumDescriptions": [
-            "Observabilidade desligada (nada sai do cliente).",
-            "Cliente → Langfuse direto (a secretKey vive no cliente). Modo pessoal/PoC.",
-            "Cliente → GATEWAY → Langfuse (o gateway detém a secretKey server-side; o Admin governa amostragem/captura). Modo corporativo recomendado."
+            "%config.observability.mode.enum.0%",
+            "%config.observability.mode.enum.1%",
+            "%config.observability.mode.enum.2%"
           ],
           "default": "off",
-          "markdownDescription": "Destino da **observabilidade** (geração + workflow: skill, aplicar/descartar, gate, execução, testes, revisão). `gateway` é o **relay governado** — os eventos vão pelo gateway autenticados pelo token de sessão, e a **secretKey do Langfuse nunca existe no cliente** (fecha o gap de governança). `direct` mantém o modo legado (chaves no cliente). Sem definir, o legado `forge.observability.langfuse.enabled=true` equivale a `direct`."
+          "markdownDescription": "%config.observability.mode.md%"
         },
         "forge.observability.currency": {
           "type": "string",
           "default": "R$",
-          "markdownDescription": "Rótulo da moeda usado no custo estimado (só um rótulo — ex.: `R$`, `US$`). Ver `forge.observability.pricing`."
+          "markdownDescription": "%config.observability.currency.md%"
         },
         "forge.observability.pricing": {
           "type": "object",
           "default": {},
-          "markdownDescription": "**Preços por modelo** para o custo estimado (FinOps) que aparece no trace do Langfuse. Chave = trecho do `modelId` (a mais específica vence); valor = `{ \"input\": <preço por 1M tokens de entrada>, \"output\": <por 1M de saída> }`. Ex.: `{ \"claude-sonnet\": { \"input\": 18, \"output\": 90 }, \"gpt-oss\": { \"input\": 0, \"output\": 0 } }`. **Vazio (padrão) = nenhum custo é emitido** — o FORGE não fabrica preço (o HubGPU é self-hosted; o custo é decisão da organização).",
+          "markdownDescription": "%config.observability.pricing.md%",
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "input": { "type": "number" },
-              "output": { "type": "number" }
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              }
             }
           }
         },
         "forge.observability.langfuse.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "**(Legado)** Habilita a observabilidade **direta** (cliente → Langfuse). Prefira `forge.observability.mode` (`direct`/`gateway`). Mantido para retrocompatibilidade: com este `true` e sem `mode` definido, o modo efetivo é `direct`. A secretKey fica no cliente — para governança do Admin use o `gateway`."
+          "markdownDescription": "%config.observability.langfuse.enabled.md%"
         },
         "forge.observability.langfuse.baseUrl": {
           "type": "string",
           "default": "https://cloud.langfuse.com",
-          "markdownDescription": "Base do Langfuse (ex.: `https://cloud.langfuse.com`, `https://us.cloud.langfuse.com` ou seu self-hosted). O host precisa estar em `forge.egress.allowedHosts`."
+          "markdownDescription": "%config.observability.langfuse.baseUrl.md%"
         },
         "forge.observability.langfuse.publicKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Public key do projeto Langfuse (`pk-lf-…`). A secret key fica no SecretStorage (comando `FORGE: Configurar observabilidade (Langfuse)`)."
+          "markdownDescription": "%config.observability.langfuse.publicKey.md%"
         },
         "forge.observability.langfuse.env": {
           "type": "string",
           "default": "development",
-          "markdownDescription": "Valor de `environment` nos traces (ex.: `development`, `production`)."
+          "markdownDescription": "%config.observability.langfuse.env.md%"
         },
         "forge.observability.langfuse.sampleRate": {
           "type": "number",
           "default": 1,
-          "markdownDescription": "Fração de gerações amostradas (0 a 1). 1.0 = todas."
+          "markdownDescription": "%config.observability.langfuse.sampleRate.md%"
         },
         "forge.observability.langfuse.capture": {
           "type": "string",
@@ -623,7 +631,7 @@
             "metadata-only"
           ],
           "default": "masked",
-          "markdownDescription": "Quanto do prompt/saída capturar: `full` (cru), `masked` (redige segredos/PII — padrão) ou `metadata-only` (sem conteúdo)."
+          "markdownDescription": "%config.observability.langfuse.capture.md%"
         }
       }
     }
