@@ -174,11 +174,20 @@ MODO TDD (test-first) — OBRIGATÓRIO nesta tarefa:
   );
 }
 
+// Diretiva de idioma do REVISOR — a revisão é prosa livre user-visível, então segue a setting
+// (achado da revisão adversarial do PR 10: forçar pt aqui contradizia a política declarada).
+// pt-BR byte-idêntico ao texto histórico.
+const REVIEW_LANGUAGE_DIRECTIVE: Record<OutputLanguage, string> = {
+  "pt-BR": `IDIOMA (OBRIGATÓRIO): toda a revisão — incluindo o raciocínio — deve estar em português do
+Brasil (pt-BR). Nunca escreva em inglês.`,
+  en: `LANGUAGE (MANDATORY): the entire review — including the reasoning — must be in English, even
+though these instructions are written in Portuguese.`,
+};
+
 // Prompt do revisor de código (RF: "CodeRabbit soberano" — roda no HubGPU
-// in-network, o código não sai da rede). Revisão multi-lente, em pt-BR.
+// in-network, o código não sai da rede). Revisão multi-lente, no idioma de saída ativo.
 export function buildReviewPrompt(): string {
-  return `IDIOMA (OBRIGATÓRIO): toda a revisão — incluindo o raciocínio — deve estar em português do
-Brasil (pt-BR). Nunca escreva em inglês.
+  return `${REVIEW_LANGUAGE_DIRECTIVE[activeOutputLanguage]}
 
 Você é o FORGE Review, um revisor de código sênior da Claro. Revise o diff fornecido com rigor,
 sob múltiplas lentes, e seja específico (cite arquivo:linha).
@@ -335,6 +344,9 @@ export function buildBlueprintSystemPrompt(
     '[{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase","deps":["outro/arquivo.ext"]}]',
     'Se a sua saída precisar ser um OBJETO JSON, use exatamente {"files": [ ...o array acima... ]}.',
     `Inclua o manifesto de dependências (${MANIFEST[language]}), os testes do núcleo e um README.md.`,
+    // O "purpose" de cada arquivo aparece no card de aprovação do blueprint (user-visível) — em en,
+    // instrui o idioma explicitamente; em pt-BR nada muda (o modelo já responde pt pelo contexto).
+    ...(activeOutputLanguage === "en" ? ['Escreva o valor de cada "purpose" em INGLÊS (o plano é exibido a um usuário de língua inglesa).'] : []),
     "Nada de prosa, comentários ou cercas fora do JSON.",
   ].join("\n");
 }
@@ -544,8 +556,10 @@ CONTINUE EXATAMENTE do ponto onde parou. Regras estritas:
 // /resumir: compacta o histórico da conversa num sumário técnico que substitui os turnos no host.
 // One-shot estruturado (structuredRuntime: esforço low + temperature 0) — formato importa.
 export function buildSummarizeSystemPrompt(): string {
+  // O cartão do /resumir é user-visível na thread — o idioma do sumário segue a setting.
+  const lang = activeOutputLanguage === "en" ? "inglês" : "pt-BR";
   return [
-    "Você é o FORGE. Resuma a conversa a seguir num SUMÁRIO TÉCNICO compacto (máx. ~300 palavras), em pt-BR,",
+    `Você é o FORGE. Resuma a conversa a seguir num SUMÁRIO TÉCNICO compacto (máx. ~300 palavras), em ${lang},`,
     "preservando o que importa para CONTINUAR o trabalho: decisões tomadas, arquivos criados/alterados (caminhos),",
     "erros encontrados e como foram resolvidos, pendências abertas e o objetivo em curso.",
     "Responda APENAS com o sumário em markdown (bullets curtos) — sem saudação, sem comentários sobre a tarefa.",

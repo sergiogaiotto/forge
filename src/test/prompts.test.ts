@@ -12,6 +12,7 @@ import {
   buildProjectPrompt,
   buildProjectRepairPrompt,
   buildReviewPrompt,
+  buildSummarizeSystemPrompt,
   buildTailContinuation,
   buildTddPrompt,
   frameworkInstruction,
@@ -179,11 +180,21 @@ test("outputLanguage=en troca a diretiva de idioma; o resto do corpus (protocolo
     assert.match(p, /PROIBIDO/);
     // os wrappers herdam a diretiva (TDD/projeto compõem sobre o base)
     assert.match(buildTddPrompt("x"), /ALWAYS respond in English/);
+    // builders FORA do base com saída user-visível também seguem a setting (achados da revisão):
+    // revisão (prosa livre), /resumir (cartão na thread) e blueprint (purpose no card de aprovação)
+    const rev = buildReviewPrompt();
+    assert.match(rev, /must be in English/);
+    assert.ok(!rev.includes("Nunca escreva em inglês"));
+    assert.match(buildSummarizeSystemPrompt(), /em inglês,/);
+    assert.match(buildBlueprintSystemPrompt("python", "hexagonal"), /"purpose" em INGLÊS/);
   } finally {
     setOutputLanguage("pt-BR");
   }
-  // de volta ao default: diretiva pt-BR intacta
+  // de volta ao default: diretivas pt-BR byte-idênticas às históricas
   assert.match(buildBasePrompt("x"), /responda SEMPRE em português do Brasil \(pt-BR\)/);
+  assert.match(buildReviewPrompt(), /Nunca escreva em inglês/);
+  assert.match(buildSummarizeSystemPrompt(), /em pt-BR,/);
+  assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("INGLÊS"));
 });
 
 test("prompt base proíbe elipses/omissões para forçar o arquivo completo", () => {
