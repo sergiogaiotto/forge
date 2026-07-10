@@ -7,9 +7,11 @@
 // interpolação nomeada depois não confunde o `one{…}`/`other{…}` com uma variável. Limitação conhecida:
 // não há {var} nomeada DENTRO do bloco plural (use #); cobre o caso comum (PR de fundação). PURO.
 export function formatMessage(template: string, params: Record<string, string | number> = {}): string {
-  // 1) plural: {v, plural, one{...} other{...}} — one/other sem chaves aninhadas.
+  // 1) plural: {v, plural, one{...} other{...}} — one/other sem chaves aninhadas. O `\s*` antes de cada
+  // `{` tolera a forma CANÔNICA do ICU (`one {…}` com espaço), que é a que as ferramentas de tradução e
+  // a doc do ICU emitem — sem isso, colar ICM idiomático vazaria o template cru ao usuário.
   let out = template.replace(
-    /\{(\w+),\s*plural,\s*one\{([^{}]*)\}\s*other\{([^{}]*)\}\}/g,
+    /\{\s*(\w+)\s*,\s*plural\s*,\s*one\s*\{([^{}]*)\}\s*other\s*\{([^{}]*)\}\s*\}/g,
     (_full, v: string, one: string, other: string) => {
       const n = Number(params[v] ?? 0);
       const chosen = n === 1 ? one : other;

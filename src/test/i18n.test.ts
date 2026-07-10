@@ -37,6 +37,14 @@ test("formatMessage: mini-ICU plural one/other com # substituído", () => {
   );
 });
 
+test("formatMessage: aceita a forma CANÔNICA do ICU com espaços (one {…}) além da compacta (one{…})", () => {
+  // forma idiomática que ferramentas de tradução emitem — não pode vazar o template cru
+  assert.equal(formatMessage("{count, plural, one {# item} other {# itens}}", { count: 1 }), "1 item");
+  assert.equal(formatMessage("{ count , plural , one {# item} other {# itens} }", { count: 5 }), "5 itens");
+  // a forma compacta segue funcionando (retrocompat)
+  assert.equal(formatMessage("{count, plural, one{# item} other{# itens}}", { count: 1 }), "1 item");
+});
+
 test("t: usa o locale ativo; en traduz; fallback pt-BR quando a chave falta no en", () => {
   setLocaleForTest("en");
   assert.equal(t("app.loading"), "Loading FORGE…");
@@ -70,9 +78,10 @@ test("package.nls: todo %chave% do package.json existe em package.nls.json E pac
   const pkg = fs.readFileSync(path.join(repo, "package.json"), "utf8");
   const nlsPt = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.json"), "utf8")) as Record<string, string>;
   const nlsEn = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.en.json"), "utf8")) as Record<string, string>;
-  // Chave nls do projeto tem NAMESPACE (ponto): "cmd.focus". Exclui env vars em exemplos (%LOCALAPPDATA%,
-  // all-caps sem ponto) que também usam a sintaxe %…%.
-  const used = [...new Set([...pkg.matchAll(/%([a-z][\w]*\.[\w.]+)%/g)].map((m) => m[1]))];
+  // Chave nls começa em minúscula (namespace com ou sem ponto: "cmd.focus" ou "signOut"). O anchor [a-z]
+  // exclui env vars em exemplos (%LOCALAPPDATA%, all-caps) que também usam a sintaxe %…% — mas pega
+  // chaves SEM ponto (o guard não pode depender só da convenção cmd.*).
+  const used = [...new Set([...pkg.matchAll(/%([a-z][\w.]*)%/g)].map((m) => m[1]))];
   assert.ok(used.length >= 19, `esperado >=19 chaves nls em uso, achei ${used.length}`);
   for (const k of used) {
     assert.ok(k in nlsPt, `chave %${k}% usada no package.json mas ausente em package.nls.json`);
