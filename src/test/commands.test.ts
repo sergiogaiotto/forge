@@ -16,19 +16,91 @@ import {
   SLASH_COMMANDS,
   slashFullFormTail,
   slashWithArgs,
+  commandHint,
+  commandLabel,
+  COMMAND_EN,
+  matchesFullForm,
   SQL_DIALECTS,
 } from "../../webview-ui/src/commands";
+import { setLocaleForTest } from "../../webview-ui/src/i18n";
 
-// REFACTOR pré-i18n: a forma completa "/sumário projeto" deriva o tail esperado do PRÓPRIO label, então
+// REFACTOR pré-i18n: a forma completa "/sumário projeto" deriva o tail esperado do label RESOLVIDO, então
 // traduzir o label mantém a comparação em sincronia (nada de literal pt-BR hardcoded no controle).
 test("slashFullFormTail: deriva a cauda do label; traduzir o label move o tail junto (sem literal fixo)", () => {
+  assert.equal(slashFullFormTail("/sumário projeto"), "projeto"); // pt-BR
+  assert.equal(slashFullFormTail("/x"), ""); // uma palavra → sem cauda
+  assert.equal(slashFullFormTail("/summary project"), "project"); // label traduzido → tail acompanha
+  assert.equal(slashFullFormTail("/Sumário Projeto"), "projeto"); // normaliza acento/caixa
+});
+
+test("commandLabel/commandHint: pt-BR usa a fonte do array; en usa o override (id/aliases nunca mudam)", () => {
+  const limpar = SLASH_COMMANDS.find((c) => c.id === "limpar")!;
+  setLocaleForTest("pt-BR");
+  assert.equal(commandLabel(limpar), "/limpar");
+  assert.equal(commandHint(limpar), "Limpa a conversa DE VERDADE (histórico e anexos do host)");
+  setLocaleForTest("en");
+  assert.equal(commandLabel(limpar), "/clear"); // label en bate com o alias "clear" (matching continua)
+  assert.match(commandHint(limpar), /^Clear the conversation/);
+  // o id e os aliases (matching) NÃO mudam com o locale
+  assert.equal(limpar.id, "limpar");
+  assert.ok((limpar.aliases ?? []).includes("clear"));
+  setLocaleForTest("pt-BR");
+});
+
+// GUARD: o matching usa id/aliases, NÃO o label. Se um label traduzido não casa um id/alias, o usuário
+// vê o comando na paleta mas digitá-lo dá "comando desconhecido". Todo label (pt-BR E en) DEVE ser
+// executável via exactSlashCommand — para os de UMA palavra (os de duas, como "/sumário projeto", casam
+// pela cauda em slashWithArgs, coberto à parte).
+test("guard: todo label (pt-BR e en) de uma palavra é executável (casa id/alias no matching)", () => {
+  for (const loc of ["pt-BR", "en"] as const) {
+    setLocaleForTest(loc);
+    for (const c of SLASH_COMMANDS) {
+      const label = commandLabel(c);
+      if (/\s/.test(label.trim())) continue; // formas de duas palavras casam pela cauda (slashWithArgs)
+      const resolved = exactSlashCommand(label);
+      assert.ok(resolved, `[${loc}] label "${label}" (id ${c.id}) não é executável — falta id/alias`);
+      assert.equal(resolved!.id, c.id, `[${loc}] label "${label}" casa o comando ERRADO (${resolved!.id} != ${c.id})`);
+    }
+  }
+  setLocaleForTest("pt-BR");
+});
+
+// GUARD: todo comando DEVE ter tradução en (label+hint) em COMMAND_EN — senão o usuário en vê pt-BR em
+// SILÊNCIO (o fallback ?? cru não é erro de compilação, e o guard de matching não pega, pois o label pt
+// ainda casa o id pt). Este teste é a rede contra "traduzir esqueceu o comando novo".
+test("guard: COMMAND_EN cobre TODOS os comandos (label+hint), sem tradução en faltando", () => {
+  for (const c of SLASH_COMMANDS) {
+    const en = COMMAND_EN[c.id];
+    assert.ok(en, `comando "${c.id}" sem entrada em COMMAND_EN — usuário en veria pt-BR`);
+    assert.ok(en.label && en.label.startsWith("/"), `COMMAND_EN["${c.id}"].label inválido`);
+    assert.ok(en.hint && en.hint.length > 0, `COMMAND_EN["${c.id}"].hint vazio`);
+  }
+  // sem entrada órfã (id em COMMAND_EN que não existe em SLASH_COMMANDS)
+  const ids = new Set(SLASH_COMMANDS.map((c) => c.id));
+  for (const id of Object.keys(COMMAND_EN)) assert.ok(ids.has(id), `COMMAND_EN tem "${id}" que não existe em SLASH_COMMANDS`);
+});
+
+test("matchesFullForm: a forma de DUAS palavras executa em QUALQUER locale (pt e en, sem depender do ativo)", () => {
   const sumario = SLASH_COMMANDS.find((c) => c.id === "sumario")!;
-  assert.equal(slashFullFormTail(sumario), "projeto"); // "/sumário projeto" → "projeto"
-  // um label de uma palavra → sem cauda
-  assert.equal(slashFullFormTail({ id: "x", label: "/x", hint: "", icon: "" }), "");
-  // se o label fosse traduzido, o tail acompanha (prova a invariância à tradução)
-  assert.equal(slashFullFormTail({ id: "s", label: "/summary project", hint: "", icon: "" }), "project");
-  assert.equal(slashFullFormTail({ id: "s", label: "/Sumário Projeto", hint: "", icon: "" }), "projeto"); // normaliza acento/caixa
+  for (const loc of ["pt-BR", "en"] as const) {
+    setLocaleForTest(loc);
+    assert.ok(matchesFullForm(sumario, "projeto"), `[${loc}] "/sumário projeto" deveria casar`);
+    assert.ok(matchesFullForm(sumario, "project"), `[${loc}] "/summary project" deveria casar`);
+    assert.ok(!matchesFullForm(sumario, "o que ficou pendente"), `[${loc}] cauda arbitrária NÃO casa (anti-sequestro)`);
+  }
+  setLocaleForTest("pt-BR");
+});
+
+test("renderHelp: usa o label/hint do locale ativo e o frame traduzido", () => {
+  setLocaleForTest("en");
+  const en = renderHelp();
+  assert.match(en, /Command palette/);
+  assert.match(en, /\/clear/); // label en
+  assert.match(en, /Type `\/` in the chat/);
+  setLocaleForTest("pt-BR");
+  const pt = renderHelp();
+  assert.match(pt, /Paleta de comandos/);
+  assert.match(pt, /\/limpar/);
 });
 
 test("normalizeSlash: remove acentos e baixa a caixa (/Sumário ≡ /sumario)", () => {

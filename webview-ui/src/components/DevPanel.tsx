@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
+import { t } from "../i18n";
 import { atMentionToken, filterMentions, replaceMention } from "../mentions";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
@@ -20,7 +21,7 @@ import {
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
-import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashFullFormTail, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
+import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, commandHint, commandLabel, exactSlashCommand, matchesFullForm, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, MAX_OUTPUT_PRESETS, maxOutputLabel, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -154,7 +155,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         // dialeto é obrigatório — orienta sem apagar o rascunho
         dispatch({
           kind: "pushLocal",
-          text: `Informe o dialeto alvo: \`/traduzir-sql <dialeto>\` — um de: ${SQL_DIALECTS.map((d) => `\`${d}\``).join(", ")}.`,
+          text: t("cmd.translateSql.prompt", { dialects: SQL_DIALECTS.map((d) => `\`${d}\``).join(", ") }),
         });
         break;
       case "testes-dbt":
@@ -170,7 +171,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         runData("schema-db");
         break;
       case "paridade":
-        dispatch({ kind: "pushLocal", text: "Uso: `/paridade tabela_a tabela_b` — opcionalmente `conexao:tabela` em cada lado (paridade entre warehouses)." });
+        dispatch({ kind: "pushLocal", text: t("cmd.parity.usage") });
         break;
       case "custo":
         runData("custo");
@@ -189,7 +190,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         break;
       case "git-commit":
         // mensagem é obrigatória — orienta sem apagar o rascunho
-        dispatch({ kind: "pushLocal", text: 'Informe a mensagem: `/git-commit "sua mensagem de commit"`. Commita os arquivos rastreados modificados (com confirmação).' });
+        dispatch({ kind: "pushLocal", text: t("cmd.gitCommit.prompt") });
         break;
     }
   };
@@ -276,7 +277,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       if (cmd) {
         runSlash(cmd);
       } else {
-        dispatch({ kind: "pushLocal", text: `Comando desconhecido: \`${text}\` — digite \`/\` para ver a paleta ou \`/ajuda\`.` });
+        dispatch({ kind: "pushLocal", text: t("cmd.unknown", { text }) });
       }
       return;
     }
@@ -286,8 +287,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         runDiagram(withArgs.args); // a cauda É o argumento (tema)
         return;
       }
-      if (withArgs.cmd.id === "sumario" && normalizeSlash(withArgs.args) === slashFullFormTail(withArgs.cmd)) {
-        runSummary(); // só a forma completa do label ("/sumário projeto") executa — tail derivado do label
+      if (withArgs.cmd.id === "sumario" && matchesFullForm(withArgs.cmd, withArgs.args)) {
+        runSummary(); // a forma completa ("/sumário projeto" ~ "/summary project") executa em qualquer locale
         return;
       }
       // /impacto e /testes-dbt: a cauda só é argumento quando é UM token (nome de modelo válido);
@@ -654,8 +655,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                   }}
                 >
                   <Icon name={c.icon} size={13} />
-                  <span className="slash-label">{c.label}</span>
-                  <span className="slash-hint">{c.hint}</span>
+                  <span className="slash-label">{commandLabel(c)}</span>
+                  <span className="slash-hint">{commandHint(c)}</span>
                 </div>
               ))}
             </div>
