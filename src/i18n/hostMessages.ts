@@ -18,7 +18,8 @@ export type HostMessageKey =
   | "preset.note.anthropic"
   | "rag.test.disabled"
   | "rag.test.lexical"
-  | "rag.test.ok";
+  | "rag.test.ok"
+  | "search.label";
 
 export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string>>> = {
   "pt-BR": {
@@ -34,6 +35,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "rag.test.disabled": "RAG desabilitado.",
     "rag.test.lexical": "Sem endpoint de embeddings — recuperação lexical (BM25).",
     "rag.test.ok": "Embeddings OK ({dims} dims).",
+    "search.label": "Buscar (rede interna)",
   },
   en: {
     "dialog.skillsReindexed": "FORGE: skills reindexed.",
@@ -48,5 +50,6 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "rag.test.disabled": "RAG disabled.",
     "rag.test.lexical": "No embeddings endpoint — lexical retrieval (BM25).",
     "rag.test.ok": "Embeddings OK ({dims} dims).",
+    "search.label": "Search (internal network)",
   },
 };

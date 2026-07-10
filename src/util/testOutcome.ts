@@ -31,17 +31,5 @@ export function pytestOutcome(exitCode: number | null, output: string): TestOutc
   }
 }
 
-export function testOutcomeLabel(o: TestOutcome, exitCode: number | null): string {
-  switch (o) {
-    case "passed":
-      return "testes verdes";
-    case "failed":
-      return "testes falharam";
-    case "no-tests":
-      return "nenhum teste coletado";
-    case "env-missing":
-      return "pytest ausente no ambiente";
-    default:
-      return `erro do pytest (exit ${exitCode ?? "?"})`;
-  }
-}
+// O RÓTULO exibido do outcome mora na webview (DevPanel.outcomeLabel, via t() — rótulo é apresentação
+// e traduz por locale). Aqui fica só a SEMÂNTICA (outcome), compartilhada e pura.
