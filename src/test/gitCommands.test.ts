@@ -7,9 +7,11 @@ import {
   parseLog,
   parseStatusPorcelain,
   renderDiffCard,
+  renderGitError,
   renderLogCard,
   renderStatusCard,
   sanitizeCommitMessage,
+  unquoteGitPath,
 } from "../git/gitCommands";
 
 test("isWriteOp: só commit é escrita (status/diff/log são leitura)", () => {
@@ -21,7 +23,7 @@ test("isWriteOp: só commit é escrita (status/diff/log são leitura)", () => {
 
 test("buildGitArgs: --no-pager sempre; a mensagem de commit é um ARG separado (nunca string de shell)", () => {
   assert.deepEqual(buildGitArgs("status"), ["--no-pager", "status", "--porcelain=v1", "--branch"]);
-  assert.deepEqual(buildGitArgs("diff"), ["--no-pager", "diff", "HEAD"]);
+  assert.deepEqual(buildGitArgs("diff"), ["--no-pager", "diff", "--no-textconv", "HEAD"]);
   // a mensagem — mesmo com metacaracteres — vai como um único elemento do array (shell:false a torna literal)
   const args = buildGitArgs("commit", { message: "fix: $(rm -rf /) && echo pwned" });
   assert.deepEqual(args, ["commit", "-a", "-m", "fix: $(rm -rf /) && echo pwned"]);
@@ -90,4 +92,46 @@ test("renderDiffCard: vazio vira aviso; conteúdo vira bloco diff (com cap)", ()
 test("renderLogCard: escapa '|' do assunto na tabela", () => {
   const card = renderLogCard([{ hash: "abc", author: "Ana", when: "hoje", subject: "a | b" }]);
   assert.match(card, /a \\\| b/);
+});
+
+test("unquoteGitPath: desfaz aspas + escapes; octal vira UTF-8; path cru passa igual", () => {
+  assert.equal(unquoteGitPath("simples.ts"), "simples.ts"); // sem aspas = cru
+  assert.equal(unquoteGitPath('"my file.ts"'), "my file.ts"); // espaço → aspas
+  assert.equal(unquoteGitPath('"caf\\303\\251.ts"'), "café.ts"); // octal UTF-8 (quotepath=true)
+  assert.equal(unquoteGitPath('"an\\303\\241lise.py"'), "análise.py");
+  assert.equal(unquoteGitPath('"a\\"b.ts"'), 'a"b.ts'); // aspas escapada
+  assert.equal(unquoteGitPath('"tab\\tfim.ts"'), "tab\tfim.ts"); // tab escapado
+});
+
+test("parseStatusPorcelain: nomes não-ASCII e com espaço são DESQUOTADOS na entrada", () => {
+  const s = parseStatusPorcelain('## main\n M "caf\\303\\251.ts"\nA  "my file.ts"\n');
+  assert.equal(s.entries[0].path, "café.ts");
+  assert.equal(s.entries[1].path, "my file.ts");
+  const card = renderStatusCard(s);
+  assert.match(card, /`café\.ts`/);
+  assert.match(card, /`my file\.ts`/);
+});
+
+test("parseStatusPorcelain: rename é separado em origPath → path (não uma string 'a -> b')", () => {
+  const s = parseStatusPorcelain("## main\nR  velho.ts -> novo.ts\n");
+  assert.equal(s.entries[0].path, "novo.ts");
+  assert.equal(s.entries[0].origPath, "velho.ts");
+  assert.equal(commitTargets(s).length, 1);
+  assert.deepEqual(commitTargets(s), ["novo.ts"]);
+  assert.match(renderStatusCard(s), /velho\.ts → novo\.ts/);
+});
+
+test("commitTargets: typechange (worktree 'T') É incluído — git commit -a o sela (furo de governança fechado)", () => {
+  const s = parseStatusPorcelain("## main\n T link.ts\n M outro.ts\n");
+  const t = commitTargets(s);
+  assert.ok(t.includes("link.ts"), "typechange deve entrar na lista autorizada (git commit -a o sela)");
+  assert.ok(t.includes("outro.ts"));
+  assert.equal(t.length, 2); // dialogo autoriza 2, git sela 2 — sem N vs N+1
+});
+
+test("renderGitError: nomeia a operação CERTA (erro de status NÃO diz 'commit')", () => {
+  assert.match(renderGitError("status", "not a git repository"), /### Git · status/);
+  assert.match(renderGitError("diff", ""), /### Git · diff/);
+  assert.match(renderGitError("log", "erro"), /### Git · log/);
+  assert.doesNotMatch(renderGitError("status", "x"), /commit/);
 });

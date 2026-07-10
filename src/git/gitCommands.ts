@@ -25,7 +25,9 @@ export function buildGitArgs(op: GitOp, params: { message?: string; logCount?: n
     case "status":
       return ["--no-pager", "status", "--porcelain=v1", "--branch"];
     case "diff":
-      return ["--no-pager", "diff", "HEAD"];
+      // --no-textconv: NÃO roda drivers de textconv (comando lido de .gitattributes/.git/config do repo)
+      // — defesa em profundidade contra execução de código de um repo hostil na op de "leitura".
+      return ["--no-pager", "diff", "--no-textconv", "HEAD"];
     case "log": {
       const n = Math.min(Math.max(params.logCount ?? 15, 1), 100);
       return ["--no-pager", "log", "-n", String(n), `--pretty=format:%h${LOG_SEP}%an${LOG_SEP}%ar${LOG_SEP}%s`];
@@ -41,6 +43,41 @@ export interface GitStatusEntry {
   index: string; // X (staged)
   worktree: string; // Y (working tree)
   path: string;
+  origPath?: string; // origem, quando renomeado/copiado ("R  orig -> dest")
+}
+
+// Desfaz o C-quoting do git (git envolve em "..." e escapa quando o path tem espaço, aspas, controle ou
+// — com core.quotepath=true — byte não-ASCII em octal \ddd). Sem isto, "café.ts"/"my file.ts" apareciam
+// como lixo na card E na confirmação de commit (produto pt-BR: ç/á/ã são comuns). Reconstrói os bytes e
+// decodifica UTF-8. PURO.
+export function unquoteGitPath(raw: string): string {
+  if (raw.length < 2 || raw[0] !== '"' || raw[raw.length - 1] !== '"') return raw;
+  const inner = raw.slice(1, -1);
+  const bytes: number[] = [];
+  const esc: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (c !== "\\") {
+      for (const b of Buffer.from(c, "utf8")) bytes.push(b);
+      continue;
+    }
+    const n = inner[i + 1];
+    if (n >= "0" && n <= "7") {
+      let oct = "";
+      let j = i + 1;
+      while (j < inner.length && oct.length < 3 && inner[j] >= "0" && inner[j] <= "7") oct += inner[j++];
+      bytes.push(parseInt(oct, 8) & 0xff);
+      i = j - 1;
+      continue;
+    }
+    if (n !== undefined && n in esc) {
+      bytes.push(esc[n]);
+      i++;
+      continue;
+    }
+    bytes.push(92); // escape desconhecido → mantém o backslash literal
+  }
+  return Buffer.from(bytes).toString("utf8");
 }
 export interface GitStatus {
   branch: string;
@@ -79,22 +116,33 @@ export function parseStatusPorcelain(output: string): GitStatus {
     }
     // "XY path" — X e Y são um caractere cada; o path começa na coluna 3.
     if (line.length >= 4) {
-      status.entries.push({ index: line[0], worktree: line[1], path: line.slice(3) });
+      const index = line[0];
+      const worktree = line[1];
+      const rawPath = line.slice(3);
+      // Rename/cópia: "R  orig -> dest" (cada lado pode estar quotado). O alvo é o dest.
+      if ((index === "R" || index === "C" || worktree === "R" || worktree === "C") && rawPath.includes(" -> ")) {
+        const [orig, dest] = rawPath.split(" -> ");
+        status.entries.push({ index, worktree, path: unquoteGitPath(dest ?? rawPath), origPath: unquoteGitPath(orig ?? "") });
+      } else {
+        status.entries.push({ index, worktree, path: unquoteGitPath(rawPath) });
+      }
     }
   }
   return status;
 }
 
-// Arquivos que um `git commit -a` REALMENTE incluiria: rastreados com modificação no worktree (M/D) ou
-// já staged (index != ' ' e != '?'). Untracked ('??') NÃO entram. É a lista mostrada na confirmação —
-// o dev vê exatamente o que será selado antes de confirmar.
+// Arquivos que um `git commit -a` REALMENTE incluiria: rastreados com QUALQUER mudança já staged (index
+// != ' '/'?') ou no worktree (worktree != ' '/'?' — cobre M, D, T[ypechange], R, C, não só M/D). Untracked
+// ('??') NÃO entram. É a lista mostrada na confirmação — o dev vê exatamente o que será selado. A regra
+// abrangente é deliberada: `git commit -a` == `git add -u`, que estagia typechange/rename também — omitir
+// 'T' fazia o dialogo autorizar N e o git selar N+1 (furo de governança, achado da revisão).
 export function commitTargets(status: GitStatus): string[] {
   const out: string[] = [];
   for (const e of status.entries) {
     if (e.index === "?" && e.worktree === "?") continue; // untracked
     const staged = e.index !== " " && e.index !== "?";
-    const worktreeModified = e.worktree === "M" || e.worktree === "D";
-    if (staged || worktreeModified) out.push(e.path);
+    const worktreeChanged = e.worktree !== " " && e.worktree !== "?";
+    if (staged || worktreeChanged) out.push(e.path);
   }
   return out;
 }
@@ -134,7 +182,10 @@ export function renderStatusCard(status: GitStatus): string {
     return lines.join("\n");
   }
   lines.push("", "| arquivo | estado |", "|---|---|");
-  for (const e of status.entries.slice(0, 50)) lines.push(`| \`${e.path}\` | ${fileLabel(e)} |`);
+  for (const e of status.entries.slice(0, 50)) {
+    const shown = e.origPath ? `${e.origPath} → ${e.path}` : e.path;
+    lines.push(`| \`${shown}\` | ${fileLabel(e)} |`);
+  }
   if (status.entries.length > 50) lines.push(`| … | e mais ${status.entries.length - 50} |`);
   const targets = commitTargets(status);
   lines.push("", `_${targets.length} arquivo(s) rastreado(s) entrariam num \`/git-commit\` (novos exigem \`git add\` antes)._`);
@@ -176,4 +227,12 @@ export function renderCommitResult(ok: boolean, output: string): string {
   return ok
     ? "### Git · commit\n\n✅ Commit criado.\n\n```\n" + body + "\n```"
     : "### Git · commit\n\n❌ Falhou.\n\n```\n" + body + "\n```";
+}
+
+// Erro de uma operação de git (leitura ou commit) — o cabeçalho nomeia a operação CERTA (antes os erros
+// de status/diff/log reusavam o card de "commit", que mentia sobre a ação).
+const OP_LABEL: Record<GitOp, string> = { status: "status", diff: "diff", log: "log", commit: "commit" };
+export function renderGitError(op: GitOp, output: string): string {
+  const msg = output.trim().slice(0, 2000) || "git indisponível ou esta pasta não é um repositório.";
+  return `### Git · ${OP_LABEL[op]}\n\n❌ ${msg}`;
 }
