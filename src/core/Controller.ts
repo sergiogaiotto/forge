@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { createProvider } from "../api/ProviderFactory";
-import { DEFAULT_TIMEOUT_SECONDS, PROVIDER_PRESETS } from "../api/presets";
+import { DEFAULT_TIMEOUT_SECONDS, localizedProviderPresets } from "../api/presets";
 import { buildAuthHeaders, ProviderRuntimeConfig } from "../api/types";
 import { ChatMessage } from "../api/types";
 import { probeServedContextWindow } from "../util/servedWindow";
@@ -1393,7 +1393,7 @@ export class Controller {
         embeddingModel: ragCfg.embeddingModel,
         dimensions: ragCfg.embeddingDimensions,
       },
-      presets: PROVIDER_PRESETS,
+      presets: localizedProviderPresets(),
       telemetryEnabled: this.config.telemetryEnabled(),
       version: "1.0.0",
       uiPanel: this.uiPanel,

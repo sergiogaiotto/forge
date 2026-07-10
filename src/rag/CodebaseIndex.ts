@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { RagConfig } from "../config/ManagedConfig";
+import { hostT } from "../i18n";
 import { EgressEnforcer } from "../net/EgressEnforcer";
 import { log } from "../util/logger";
 import { cosine } from "../util/vector";
@@ -50,16 +51,16 @@ export class CodebaseIndex {
   /** Teste de conexão do embedding (como o botão "Testar" do hub interno). */
   async testEmbeddings(): Promise<{ ok: boolean; mode: RagMode; dims?: number; latencyMs?: number; message: string }> {
     const cfg = this.getConfig();
-    if (!cfg.enabled) return { ok: true, mode: "lexical", message: "RAG desabilitado." };
+    if (!cfg.enabled) return { ok: true, mode: "lexical", message: hostT("rag.test.disabled") };
     const embedder = this.embedder();
     if (!embedder?.available()) {
-      return { ok: true, mode: "lexical", message: "Sem endpoint de embeddings — recuperação lexical (BM25)." };
+      return { ok: true, mode: "lexical", message: hostT("rag.test.lexical") };
     }
     const started = Date.now();
     try {
       const [v] = await embedder.embed(["ping de verificação do FORGE"]);
       const dims = v?.length ?? 0;
-      return { ok: dims > 0, mode: "embeddings", dims, latencyMs: Date.now() - started, message: `Embeddings OK (${dims} dims).` };
+      return { ok: dims > 0, mode: "embeddings", dims, latencyMs: Date.now() - started, message: hostT("rag.test.ok", { dims }) };
     } catch (err) {
       return { ok: false, mode: "lexical", message: (err as Error).message };
     }
