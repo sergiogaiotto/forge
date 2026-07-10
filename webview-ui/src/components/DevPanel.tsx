@@ -2034,11 +2034,13 @@ function RoleCardView({ card, onDismiss, onOpenSkill }: { card: RoleCard; onDism
 
 // Heurística conservadora: mensagens em tom de diretiva (proibição/preferência) são candidatas a
 // virar regra do projeto. Evita perguntas e tarefas longas; foca em "nunca/sempre/evite/prefira…"
-// (e nos equivalentes en — o usuário en escreve diretivas em inglês).
+// (e nos equivalentes en — o usuário en escreve diretivas em inglês). "prefer" exige espaço em seguida:
+// \b é ASCII em regex JS, então "prefer" + "ê" fecharia boundary e "Preferências…" (pt) dispararia
+// o banner por engano (achado da revisão adversarial do PR 7).
 function looksLikeRule(text: string): boolean {
   const s = text.trim();
   if (!s || s.length > 200 || s.includes("?")) return false;
-  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use|never|always|avoid|prefer|standardiz|do not use|don'?t use)\b/i.test(s);
+  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use|never|always|avoid|prefer(?=\s)|standardiz|do not use|don'?t use)\b/i.test(s);
 }
 
 // "Promover correção a regra": quando a última mensagem do usuário soa como diretiva, oferece
