@@ -12,7 +12,13 @@ export type HostMessageKey =
   | "notice.openFolder.rules"
   | "notice.rule.exists"
   | "notice.charterSaved"
-  | "notice.noBlueprint";
+  | "notice.noBlueprint"
+  | "preset.note.hubgpu"
+  | "preset.note.openai"
+  | "preset.note.anthropic"
+  | "rag.test.disabled"
+  | "rag.test.lexical"
+  | "rag.test.ok";
 
 export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string>>> = {
   "pt-BR": {
@@ -22,6 +28,12 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.rule.exists": "Essa regra já está no perfil do projeto.",
     "notice.charterSaved": "Charter salvo em .forge/project.md (injetado em todo prompt).",
     "notice.noBlueprint": "Nenhum blueprint aprovado. Planeje o projeto primeiro.",
+    "preset.note.hubgpu": "O proxy autentica por outra via (rede / SSO).",
+    "preset.note.openai": "Requer API key da OpenAI (egress externo deve estar liberado).",
+    "preset.note.anthropic": "Formato Messages nativo. Requer API key Anthropic.",
+    "rag.test.disabled": "RAG desabilitado.",
+    "rag.test.lexical": "Sem endpoint de embeddings — recuperação lexical (BM25).",
+    "rag.test.ok": "Embeddings OK ({dims} dims).",
   },
   en: {
     "dialog.skillsReindexed": "FORGE: skills reindexed.",
@@ -30,5 +42,11 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.rule.exists": "This rule is already in the project profile.",
     "notice.charterSaved": "Charter saved to .forge/project.md (injected into every prompt).",
     "notice.noBlueprint": "No approved blueprint. Plan the project first.",
+    "preset.note.hubgpu": "The proxy authenticates by other means (network / SSO).",
+    "preset.note.openai": "Requires an OpenAI API key (external egress must be allowed).",
+    "preset.note.anthropic": "Native Messages format. Requires an Anthropic API key.",
+    "rag.test.disabled": "RAG disabled.",
+    "rag.test.lexical": "No embeddings endpoint — lexical retrieval (BM25).",
+    "rag.test.ok": "Embeddings OK ({dims} dims).",
   },
 };

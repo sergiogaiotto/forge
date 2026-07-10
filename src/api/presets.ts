@@ -1,7 +1,10 @@
+import { hostT, HostMessageKey } from "../i18n";
 import { ProviderPreset } from "../shared/protocol";
 
 // RF-022: presets prontos para uso do HubGPU mais as entradas de provedor genéricas exibidas
-// no assistente de onboarding.
+// no assistente de onboarding. A `note` (exibida sob o campo API Key) NÃO vive aqui: é uma string
+// user-visível, então mora no catálogo do host (hostMessages) e é resolvida por locale no momento
+// do post — ver localizedProviderPresets (o array módulo-nível avaliaria ANTES do setHostLocale).
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "hubgpu-120b",
@@ -10,7 +13,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://hub-gpus.claro.com.br/gpt120/v1",
     modelId: "openai/gpt-oss-120b",
     apiKeyDefault: "not-needed",
-    note: "O proxy autentica por outra via (rede / SSO).",
   },
   {
     id: "hubgpu-20b",
@@ -19,7 +21,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://hub-gpus.claro.com.br/gpt20/v1",
     modelId: "openai/gpt-oss-20b",
     apiKeyDefault: "not-needed",
-    note: "O proxy autentica por outra via (rede / SSO).",
   },
   {
     id: "openai",
@@ -27,16 +28,28 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     type: "openai",
     baseUrl: "https://api.openai.com/v1",
     modelId: "gpt-4o",
-    note: "Requer API key da OpenAI (egress externo deve estar liberado).",
   },
   {
     id: "anthropic",
     label: "Anthropic Claude",
     type: "anthropic",
     modelId: "claude-sonnet-4-6",
-    note: "Formato Messages nativo. Requer API key Anthropic.",
   },
 ];
+
+const PRESET_NOTE_KEY: Record<string, HostMessageKey> = {
+  "hubgpu-120b": "preset.note.hubgpu",
+  "hubgpu-20b": "preset.note.hubgpu",
+  openai: "preset.note.openai",
+  anthropic: "preset.note.anthropic",
+};
+
+// Presets com a note resolvida no locale ATIVO do host — é o que o Controller posta no state
+// (protocolo transporta string pronta; a webview nunca re-chaveia).
+export function localizedProviderPresets(): ProviderPreset[] {
+  const key = (id: string): HostMessageKey | undefined => PRESET_NOTE_KEY[id];
+  return PROVIDER_PRESETS.map((p) => (key(p.id) ? { ...p, note: hostT(key(p.id)!) } : p));
+}
 
 export const DEFAULT_TIMEOUT_SECONDS = 300;
 

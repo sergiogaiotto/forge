@@ -243,6 +243,37 @@ test("renderSummarized: cartão explica a compactação e traz o resumo (concord
   assert.match(renderSummarized(1, "x"), /1 turno virou/);
 });
 
+// PR6 (i18n): os cards da paleta traduzem o frame via t() e o "/limpar" citado na prosa vira o LABEL
+// resolvido do comando — um usuário en lê "/clear" e digita exatamente o que leu (nunca o literal pt).
+test("cards da paleta em en: frame traduzido, plurais ICU e /clear no lugar de /limpar", () => {
+  setLocaleForTest("en");
+  const ctx = renderContextReport(REPORT);
+  assert.match(ctx, /Context window/);
+  assert.match(ctx, /History \(3 turns\)/);
+  assert.match(ctx, /Pending attachments \(1\)/);
+  assert.match(ctx, /98 indexed chunks/);
+  assert.ok(ctx.includes("`/clear`"));
+  assert.ok(!ctx.includes("/limpar"));
+  const ctx1 = renderContextReport({ ...REPORT, historyTurns: 1, ragChunks: 1 });
+  assert.match(ctx1, /History \(1 turn\)/);
+  assert.match(ctx1, /1 indexed chunk \(/);
+  const tok = renderTokensReport({ lastIn: 1200, lastOut: 300, sessionIn: 5000, sessionOut: 900 });
+  assert.match(tok, /Token usage/);
+  assert.match(tok, /Last generation/);
+  assert.match(renderTokensReport(null), /No generation in this session yet/);
+  const sum = renderSummarized(7, "- x");
+  assert.match(sum, /7 turns became/);
+  assert.ok(sum.includes("`/clear`"));
+  assert.match(renderSummarized(1, "x"), /1 turn became/);
+  setLocaleForTest("pt-BR");
+});
+
+test("cards da paleta em pt-BR: singular do ICU (1 turno / 1 chunk indexado)", () => {
+  const ctx1 = renderContextReport({ ...REPORT, historyTurns: 1, ragChunks: 1 });
+  assert.match(ctx1, /Histórico \(1 turno\)/);
+  assert.match(ctx1, /1 chunk indexado \(/);
+});
+
 // ---- comandos de dados (Ondas 1 e 2) --------------------------------------------------------------
 
 test("/impacto, /traduzir-sql e /testes-dbt: registrados, com cauda como argumento", () => {
