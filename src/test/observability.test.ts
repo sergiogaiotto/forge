@@ -30,6 +30,17 @@ test("REGRESSÃO resolveObsMode: legado enabled=true sem mode explícito ⇒ dir
   assert.equal(resolveObsMode("banana", true), "off");
 });
 
+test("permission.decision: aprovação de ESCRITA vira WARNING no trace (salta aos olhos); leitura/auto vira DEFAULT", () => {
+  const opts = { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked" as const, environment: "test" };
+  const [ev] = buildIngestion({ type: "permission.decision", kind: "sql.write", action: "escrita confirmada", scope: "write", outcome: "approved", via: "dialog", subject: "dw" }, opts);
+  assert.equal(ev.type, "event-create");
+  assert.equal((ev.body as any).level, "WARNING");
+  assert.equal((ev.body as any).metadata.kind, "sql.write");
+  assert.equal((ev.body as any).metadata.outcome, "approved");
+  const [ev2] = buildIngestion({ type: "permission.decision", kind: "mcp.tool", action: "srv.tool", scope: "read", outcome: "auto", via: "auto" }, opts);
+  assert.equal((ev2.body as any).level, "DEFAULT");
+});
+
 test("mask: full passa cru, masked redige PII/segredos, metadata-only some", () => {
   assert.equal(mask("contato a@b.com", "full"), "contato a@b.com");
   const m = mask("email a@b.com chave sk-abcdefghijklmnopqr", "masked")!;

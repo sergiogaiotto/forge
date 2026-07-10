@@ -135,8 +135,12 @@ export function orphanTrace(id: string, traceId: string, nowIso: string, environ
 }
 
 function eventObservation(e: ObsEvent, o: BuildOpts): IngestionEvent {
-  // WARNING: gate reprovado, OU um Aplicar FORÇADO por cima do gate (override consciente — auditável).
-  const gateFail = (e.type === "validation.result" && !e.gateOk) || (e.type === "proposal.applied" && e.forced === true);
+  // WARNING: gate reprovado, um Aplicar FORÇADO por cima do gate (override consciente — auditável), OU
+  // uma permissão de ESCRITA aprovada pelo dev (escrita confirmada/forçada deve saltar aos olhos na análise).
+  const gateFail =
+    (e.type === "validation.result" && !e.gateOk) ||
+    (e.type === "proposal.applied" && e.forced === true) ||
+    (e.type === "permission.decision" && e.scope === "write" && e.outcome === "approved");
   return {
     id: o.id(),
     type: "event-create",
@@ -171,6 +175,10 @@ function eventMeta(e: ObsEvent): Record<string, unknown> {
       return { filePath: e.filePath, label: e.label, ok: e.ok, exitCode: e.exitCode, durationMs: e.durationMs };
     case "profile.roleSet":
       return { role: e.role };
+    case "permission.decision":
+      // O detail (SQL/args) NÃO vai ao trace — só metadados da decisão (o conteúdo segue a política de
+      // captura da geração; aqui é trilha de auditoria, não corpo).
+      return { kind: e.kind, action: e.action, scope: e.scope, outcome: e.outcome, via: e.via, subject: e.subject };
     case "review.done":
     case "profile.ruleAdded":
       return {};

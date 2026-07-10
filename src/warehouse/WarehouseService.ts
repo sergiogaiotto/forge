@@ -27,7 +27,11 @@ export class WarehouseService {
   constructor(
     private readonly secrets: SecretsStore,
     private readonly settings: () => WarehouseSettings,
-    private readonly workspaceRoot: () => string | undefined
+    private readonly workspaceRoot: () => string | undefined,
+    // Permission model unificado: a confirmação de ESCRITA é injetada (PermissionService no Controller)
+    // — um modal só para os caminhos CLI e MCP, decisão auditada e visível no Langfuse. Fallback local
+    // (auto-nega) só para construção fora do Controller (testes antigos).
+    private readonly confirmWrite: (action: string, subject: string, sqlPreview: string) => Promise<boolean> = async () => false
   ) {}
 
   connections(): WarehouseConnection[] {
@@ -87,12 +91,8 @@ export class WarehouseService {
     const decision = decideSqlRun(sql, conn);
     if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
     if (decision.verdict === "confirm") {
-      const pick = await vscode.window.showWarningMessage(
-        `FORGE · conexão "${conn.id}": ${decision.reason}`,
-        { modal: true, detail: sql.slice(0, 600) },
-        "Executar escrita"
-      );
-      if (pick !== "Executar escrita") return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+      const ok = await this.confirmWrite(`conexão "${conn.id}": ${decision.reason}`, conn.id, sql);
+      if (!ok) return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
     }
     const rowCap = opts?.rowCapOverride ?? this.settings().rowCap;
     const plan = buildRunPlan(conn, sql, { password: await this.passwordFor(conn), rowCap });

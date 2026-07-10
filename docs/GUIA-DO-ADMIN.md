@@ -375,6 +375,14 @@ Regras aplicadas automaticamente:
 - Toda chamada é **auditada** (registrada).
 - Credenciais vêm do **cofre** (SecretStorage/gateway), nunca embutidas na extensão.
 
+**Trail unificado de permissões.** Toda decisão de permissão — aprovação/negação de ferramenta MCP
+(inclusive auto-approve), confirmação de **escrita SQL** no warehouse, *"Aplicar assim mesmo,
+revisei"* por cima de um gate reprovado e a confirmação/bloqueio de **contrato não verificado** do
+Modo Projeto — entra num registro único de auditoria e, com a observabilidade ligada (seção 8), vira
+o evento **`permission.decision`** no Langfuse. Escrita **aprovada** pelo dev aparece como `WARNING`
+no trace, para saltar aos olhos na análise; o conteúdo (SQL/argumentos) não vai ao trace — só os
+metadados da decisão.
+
 ---
 
 ## 10.1. Busca interna (o equivalente soberano à "web")
