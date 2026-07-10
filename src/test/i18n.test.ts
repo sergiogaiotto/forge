@@ -13,7 +13,9 @@ test("resolveLocale: casa por prefixo; desconhecido → pt-BR (pt-BR-first)", ()
   assert.equal(resolveLocale("pt-BR"), "pt-BR");
   assert.equal(resolveLocale("en"), "en");
   assert.equal(resolveLocale("en-US"), "en");
-  assert.equal(resolveLocale("es"), "pt-BR"); // não suportado ainda → default
+  assert.equal(resolveLocale("es"), "es"); // PR 11: es suportado
+  assert.equal(resolveLocale("es-419"), "es");
+  assert.equal(resolveLocale("fr"), "pt-BR"); // não suportado → default
   assert.equal(resolveLocale(""), "pt-BR");
   assert.equal(resolveLocale(undefined), "pt-BR");
   assert.equal(DEFAULT_LOCALE, "pt-BR");
@@ -60,25 +62,37 @@ test("t: chave inexistente cai na própria chave (buraco visível, nunca vazio)"
   assert.equal(t("nao.existe" as MessageKey), "nao.existe");
 });
 
-test("catálogo: EN cobre TODAS as chaves do pt-BR (nenhum fallback silencioso no piloto)", () => {
+test("catálogo: TODO locale cobre TODAS as chaves do pt-BR (nenhum fallback silencioso)", () => {
   const ptKeys = Object.keys(MESSAGES["pt-BR"]).sort();
-  const enKeys = Object.keys(MESSAGES.en).sort();
-  assert.deepEqual(enKeys, ptKeys, "pt-BR e en devem ter exatamente as mesmas chaves no piloto");
+  for (const loc of SUPPORTED_LOCALES) {
+    if (loc === "pt-BR") continue;
+    assert.deepEqual(Object.keys(MESSAGES[loc]).sort(), ptKeys, `pt-BR e ${loc} devem ter exatamente as mesmas chaves`);
+  }
   // e nenhuma string vazia
   for (const loc of SUPPORTED_LOCALES) {
     for (const [k, v] of Object.entries(MESSAGES[loc])) assert.ok(v && v.length > 0, `${loc}.${k} vazio`);
   }
 });
 
+test("t: es traduz (PR 11 — a arquitetura escala adicionando um catálogo)", () => {
+  setLocaleForTest("es");
+  assert.equal(t("app.loading"), "Cargando FORGE…");
+  assert.equal(t("common.allow"), "Permitir");
+  assert.equal(t("ctx.history", { count: 1 }), "Historial (1 turno)");
+  assert.equal(t("ctx.history", { count: 3 }), "Historial (3 turnos)");
+  setLocaleForTest("pt-BR");
+});
+
 // GUARD DE MANIFESTO (o design pediu como check de CI). Layout NATIVO do VSCode: a BASE package.nls.json
 // é INGLÊS (o VSCode curto-circuita o idioma-default 'en' e usa a base — um package.nls.en.json seria
 // código morto); package.nls.pt-br.json é o OVERRIDE pt-BR. Todo %chave% do package.json deve existir
 // nos DOIS, senão o VSCode renderiza o placeholder cru (%cmd.x%) ou o pt-BR degrada para inglês.
-test("package.nls: todo %chave% do package.json existe na base (en) E no override pt-br; base é inglês", () => {
+test("package.nls: todo %chave% do package.json existe na base (en) E nos overrides pt-br/es; base é inglês", () => {
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const pkg = fs.readFileSync(path.join(repo, "package.json"), "utf8");
   const nlsEn = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.json"), "utf8")) as Record<string, string>;
   const nlsPt = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.pt-br.json"), "utf8")) as Record<string, string>;
+  const nlsEs = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.es.json"), "utf8")) as Record<string, string>;
   // package.nls.en.json NÃO deve existir (o VSCode nunca o carregaria para um usuário en — dead code)
   assert.ok(!fs.existsSync(path.join(repo, "package.nls.en.json")), "package.nls.en.json é código morto (en é a base); remova-o");
   // Chave nls começa em minúscula (namespace com ou sem ponto). O anchor [a-z] exclui env vars all-caps
@@ -88,9 +102,11 @@ test("package.nls: todo %chave% do package.json existe na base (en) E no overrid
   for (const k of used) {
     assert.ok(k in nlsEn, `chave %${k}% usada no package.json mas ausente na base package.nls.json (en)`);
     assert.ok(k in nlsPt, `chave %${k}% usada no package.json mas ausente no override package.nls.pt-br.json`);
+    assert.ok(k in nlsEs, `chave %${k}% usada no package.json mas ausente no override package.nls.es.json`);
   }
   // sem chaves órfãs (definidas mas não usadas)
   for (const k of Object.keys(nlsEn)) assert.ok(used.includes(k), `chave "${k}" em package.nls.json não é usada no package.json`);
-  // base (en) e override (pt-br) com o MESMO conjunto de chaves
+  // base (en) e overrides (pt-br, es) com o MESMO conjunto de chaves
   assert.deepEqual(Object.keys(nlsPt).sort(), Object.keys(nlsEn).sort(), "package.nls.json (en) e package.nls.pt-br.json devem ter as mesmas chaves");
+  assert.deepEqual(Object.keys(nlsEs).sort(), Object.keys(nlsEn).sort(), "package.nls.json (en) e package.nls.es.json devem ter as mesmas chaves");
 });

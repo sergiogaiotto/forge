@@ -17,15 +17,15 @@ export interface SlashCommand {
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
-  { id: "ajuda", label: "/ajuda", hint: "Lista os comandos da paleta", icon: "info-circle", aliases: ["help", "?"] },
+  { id: "ajuda", label: "/ajuda", hint: "Lista os comandos da paleta", icon: "info-circle", aliases: ["help", "?", "ayuda"] },
   { id: "contexto", label: "/contexto", hint: "Orçamento da janela de contexto (modelo, reservas, histórico, RAG)", icon: "database", aliases: ["context"] },
   { id: "tokens", label: "/tokens", hint: "Uso de tokens da sessão (última geração + acumulado)", icon: "activity" },
-  { id: "limpar", label: "/limpar", hint: "Limpa a conversa DE VERDADE (histórico e anexos do host)", icon: "history", aliases: ["clear"] },
-  { id: "ambiente", label: "/ambiente", hint: "Prepara o ambiente Python (venv + dependências)", icon: "plug", aliases: ["env"] },
-  { id: "testes", label: "/testes", hint: "Roda a suíte de testes (instala o pytest se faltar)", icon: "terminal", aliases: ["test", "tests"] },
+  { id: "limpar", label: "/limpar", hint: "Limpa a conversa DE VERDADE (histórico e anexos do host)", icon: "history", aliases: ["clear", "limpiar"] },
+  { id: "ambiente", label: "/ambiente", hint: "Prepara o ambiente Python (venv + dependências)", icon: "plug", aliases: ["env", "entorno"] },
+  { id: "testes", label: "/testes", hint: "Roda a suíte de testes (instala o pytest se faltar)", icon: "terminal", aliases: ["test", "tests", "pruebas"] },
   { id: "perfil", label: "/perfil", hint: "Abre o Perfil do projeto (stack, papel, regras)", icon: "users", aliases: ["profile"] },
   { id: "indice", label: "/indice", hint: "Abre o Índice (skills + RAG que o FORGE injeta)", icon: "database", aliases: ["index"] },
-  { id: "projeto", label: "/projeto", hint: "Liga/desliga o Modo Projeto (blueprint aprovável)", icon: "list-check", aliases: ["project"] },
+  { id: "projeto", label: "/projeto", hint: "Liga/desliga o Modo Projeto (blueprint aprovável)", icon: "list-check", aliases: ["project", "proyecto"] },
   { id: "revisar", label: "/revisar", hint: "Revisão multi-lente das alterações do workspace (git diff)", icon: "git-compare", aliases: ["review"] },
   { id: "resumir", label: "/resumir", hint: "Compacta o histórico da conversa num resumo (libera a janela)", icon: "copy", aliases: ["compactar", "summarize"] },
   { id: "diagrama", label: "/diagrama", hint: "Gera diagrama Mermaid da codebase (proposta em docs/diagramas/)", icon: "network", aliases: ["diagram", "mermaid"], acceptsArgs: true },
@@ -34,7 +34,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/sumário projeto",
     hint: "Documentação funcional do projeto, padrão de mercado (proposta em docs/SUMARIO_FUNCIONAL.md)",
     icon: "file-code",
-    aliases: ["sumario-projeto", "summary"],
+    aliases: ["sumario-projeto", "summary", "resumen"],
     acceptsArgs: true, // aceita a forma completa "/sumário projeto" (a cauda é ignorada)
   },
   {
@@ -50,7 +50,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/traduzir-sql",
     hint: "Traduz o SQL do arquivo ativo para outro dialeto (proposta .sql validada pelo motor)",
     icon: "git-compare",
-    aliases: ["translate-sql", "traduzir"],
+    aliases: ["translate-sql", "traduzir", "traducir-sql", "traducir"],
     acceptsArgs: true, // cauda = dialeto alvo (bigquery, snowflake, postgres, spark, oracle…)
   },
   {
@@ -58,14 +58,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/conexoes",
     hint: "Lista e testa as conexões de warehouse (Oracle, PostgreSQL, BigQuery, DuckDB, S3/OCI)",
     icon: "plug",
-    aliases: ["connections", "warehouses"],
+    aliases: ["connections", "warehouses", "conexiones"],
   },
   {
     id: "executar-sql",
     label: "/executar-sql",
     hint: "Executa o .sql ativo na conexão (SELECT direto; escrita confirma; DROP/TRUNCATE nunca)",
     icon: "terminal",
-    aliases: ["run-sql", "rodar-sql"],
+    aliases: ["run-sql", "rodar-sql", "ejecutar-sql"],
     acceptsArgs: true, // cauda = id da conexão; sem cauda usa a default
   },
   {
@@ -81,7 +81,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/paridade",
     hint: "Compara duas tabelas por agregados (compliance-safe) — intra ou entre warehouses",
     icon: "git-compare",
-    aliases: ["parity", "data-diff"],
+    aliases: ["parity", "data-diff", "paridad"],
     acceptsArgs: true, // "tabela_a tabela_b" (opcional conexao:tabela em cada lado)
   },
   {
@@ -89,7 +89,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/custo",
     hint: "Custo: prévia da consulta ativa (dry-run/EXPLAIN) ou top consultas dos últimos 7 dias",
     icon: "activity",
-    aliases: ["cost", "finops"],
+    aliases: ["cost", "finops", "costo"],
     acceptsArgs: true, // cauda = id da conexão
   },
   {
@@ -104,7 +104,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/testes-dbt",
     hint: "Gera testes dbt (schema.yml) para um modelo, com as colunas REAIS do manifest",
     icon: "list-check",
-    aliases: ["dbt-tests", "testes-modelo"],
+    aliases: ["dbt-tests", "testes-modelo", "pruebas-dbt"],
     acceptsArgs: true, // cauda = nome do modelo; sem cauda usa o arquivo ativo
   },
   { id: "git-status", label: "/git-status", hint: "Status do repositório (branch, arquivos modificados, à frente/atrás)", icon: "git-compare", aliases: ["gs", "status-git"] },
@@ -153,12 +153,50 @@ export const COMMAND_EN: Record<string, { label: string; hint: string }> = {
   "git-commit": { label: "/git-commit", hint: 'Commit the modified TRACKED files (confirmation required). Usage: /git-commit "message"' },
 };
 
-// Label/hint EXIBIDOS do comando, resolvidos pelo locale ativo (pt-BR = a fonte do array; en = override).
+// Override ES (mesmo contrato do COMMAND_EN: só TEXTO; id/aliases nunca mudam — todo label es tem um
+// alias correspondente no array, exigido pelo guard de matching).
+export const COMMAND_ES: Record<string, { label: string; hint: string }> = {
+  ajuda: { label: "/ayuda", hint: "Lista los comandos de la paleta" },
+  contexto: { label: "/contexto", hint: "Presupuesto de la ventana de contexto (modelo, reservas, historial, RAG)" },
+  tokens: { label: "/tokens", hint: "Uso de tokens de la sesión (última generación + acumulado)" },
+  limpar: { label: "/limpiar", hint: "Limpia la conversación DE VERDAD (historial y adjuntos del host)" },
+  ambiente: { label: "/entorno", hint: "Prepara el entorno Python (venv + dependencias)" },
+  testes: { label: "/pruebas", hint: "Ejecuta la suite de pruebas (instala pytest si falta)" },
+  perfil: { label: "/perfil", hint: "Abre el Perfil del proyecto (stack, rol, reglas)" },
+  indice: { label: "/indice", hint: "Abre el Índice (skills + RAG que FORGE inyecta)" },
+  projeto: { label: "/proyecto", hint: "Activa/desactiva el Modo Proyecto (blueprint aprobable)" },
+  revisar: { label: "/revisar", hint: "Revisión multi-lente de los cambios del workspace (git diff)" },
+  resumir: { label: "/resumir", hint: "Compacta el historial de la conversación en un resumen (libera la ventana)" },
+  diagrama: { label: "/diagrama", hint: "Genera un diagrama Mermaid del codebase (propuesta en docs/diagramas/)" },
+  sumario: { label: "/resumen proyecto", hint: "Documentación funcional del proyecto, estándar de mercado (propuesta en docs/SUMARIO_FUNCIONAL.md)" },
+  impacto: { label: "/impacto", hint: "Radio de explosión del cambio (lineage del manifest dbt: downstream, pruebas, exposures)" },
+  "traduzir-sql": { label: "/traducir-sql", hint: "Traduce el SQL del archivo activo a otro dialecto (propuesta .sql validada por el motor)" },
+  conexoes: { label: "/conexiones", hint: "Lista y prueba las conexiones de warehouse (Oracle, PostgreSQL, BigQuery, DuckDB, S3/OCI)" },
+  "executar-sql": { label: "/ejecutar-sql", hint: "Ejecuta el .sql activo en la conexión (SELECT directo; escritura confirma; DROP/TRUNCATE nunca)" },
+  "schema-db": { label: "/schema-db", hint: "Indexa el schema REAL del warehouse (grounding: entra en el prompt y en el gate semántico)" },
+  paridade: { label: "/paridad", hint: "Compara dos tablas por agregados (compliance-safe) — intra o entre warehouses" },
+  custo: { label: "/costo", hint: "Costo: vista previa de la consulta activa (dry-run/EXPLAIN) o top consultas de los últimos 7 días" },
+  "auditoria-pii": { label: "/auditoria-pii", hint: "Auditoría LGPD por nombre de columna en el schema indexado (dbt + warehouse) — 100% local" },
+  "testes-dbt": { label: "/pruebas-dbt", hint: "Genera pruebas dbt (schema.yml) para un modelo, con las columnas REALES del manifest" },
+  "git-status": { label: "/git-status", hint: "Estado del repositorio (branch, archivos modificados, adelante/atrás)" },
+  "git-diff": { label: "/git-diff", hint: "Diferencias del working tree vs. el último commit (HEAD)" },
+  "git-log": { label: "/git-log", hint: "Últimos commits (hash, autor, cuándo, asunto)" },
+  "git-commit": { label: "/git-commit", hint: 'Hace commit de los archivos RASTREADOS modificados (confirmación obligatoria). Uso: /git-commit "mensaje"' },
+};
+
+// Overrides por locale (pt-BR = a fonte do array, sem entrada aqui). Adicionar um locale = adicionar
+// uma entrada — commandLabel/commandHint/matchesFullForm não mudam (é a prova de escala do PR 11).
+const COMMAND_OVERRIDES: Partial<Record<ReturnType<typeof getLocale>, Record<string, { label: string; hint: string }>>> = {
+  en: COMMAND_EN,
+  es: COMMAND_ES,
+};
+
+// Label/hint EXIBIDOS do comando, resolvidos pelo locale ativo (pt-BR = a fonte do array; resto = override).
 export function commandLabel(cmd: SlashCommand): string {
-  return getLocale() === "en" ? COMMAND_EN[cmd.id]?.label ?? cmd.label : cmd.label;
+  return COMMAND_OVERRIDES[getLocale()]?.[cmd.id]?.label ?? cmd.label;
 }
 export function commandHint(cmd: SlashCommand): string {
-  return getLocale() === "en" ? COMMAND_EN[cmd.id]?.hint ?? cmd.hint : cmd.hint;
+  return COMMAND_OVERRIDES[getLocale()]?.[cmd.id]?.hint ?? cmd.hint;
 }
 
 // Normalização para matching: minúsculas + remoção de diacríticos (á→a, ç→c) — o dev digita
@@ -199,12 +237,12 @@ export function slashFullFormTail(label: string): string {
   return words.length > 1 ? normalizeSlash(words.slice(1).join(" ")) : "";
 }
 
-// A cauda digitada casa a FORMA COMPLETA do comando em QUALQUER locale (pt-BR do array OU en do
-// COMMAND_EN)? Independe do locale ativo — um usuário pt que digita "/summary project" e um en que digita
+// A cauda digitada casa a FORMA COMPLETA do comando em QUALQUER locale (pt-BR do array OU um dos
+// overrides)? Independe do locale ativo — um usuário pt que digita "/summary project" e um en que digita
 // "/sumário projeto" ambos executam (a forma de uma palavra já é cross-locale via id/alias no matching).
 export function matchesFullForm(cmd: SlashCommand, args: string): boolean {
   const norm = normalizeSlash(args.trim());
-  const labels = [cmd.label, COMMAND_EN[cmd.id]?.label].filter((l): l is string => !!l);
+  const labels = [cmd.label, COMMAND_EN[cmd.id]?.label, COMMAND_ES[cmd.id]?.label].filter((l): l is string => !!l);
   return labels.some((l) => slashFullFormTail(l) === norm);
 }
 

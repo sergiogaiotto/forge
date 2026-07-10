@@ -2040,7 +2040,7 @@ function RoleCardView({ card, onDismiss, onOpenSkill }: { card: RoleCard; onDism
 function looksLikeRule(text: string): boolean {
   const s = text.trim();
   if (!s || s.length > 200 || s.includes("?")) return false;
-  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use|never|always|avoid|prefer(?=\s)|standardiz|do not use|don'?t use)\b/i.test(s);
+  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use|never|always|avoid|prefer(?=\s)|standardiz|do not use|don'?t use|siempre|jam[áa]s|prefiera|estandariz|no uses?(?=\s))\b/i.test(s);
 }
 
 // "Promover correção a regra": quando a última mensagem do usuário soa como diretiva, oferece
@@ -2051,7 +2051,7 @@ function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element
   if (!lastUser || dismissed.has(lastUser.id)) return null;
   // O prefixo de eco "[TDD]/[Projeto · …]" é gerado com o rótulo TRADUZIDO (t("comp.project")) — o
   // strip precisa casar as duas formas (label traduzido não é chave: aqui a comparação lista ambas).
-  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*|Project[^\]]*)\]\s*/, "").trim();
+  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*|Project[^\]]*|Proyecto[^\]]*)\]\s*/, "").trim();
   if (!looksLikeRule(rule)) return null;
   const close = () => setDismissed((s) => new Set(s).add(lastUser.id));
   return (
