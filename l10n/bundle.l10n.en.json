@@ -1,0 +1,8 @@
+{
+  "FORGE: skills reindexadas.": "FORGE: skills reindexed.",
+  "FORGE: licença e credenciais removidas.": "FORGE: license and credentials removed.",
+  "Abra uma pasta no VSCode para salvar regras do projeto.": "Open a folder in VS Code to save project rules.",
+  "Essa regra já está no perfil do projeto.": "This rule is already in the project profile.",
+  "Charter salvo em .forge/project.md (injetado em todo prompt).": "Charter saved to .forge/project.md (injected into every prompt).",
+  "Nenhum blueprint aprovado. Planeje o projeto primeiro.": "No approved blueprint. Plan the project first."
+}

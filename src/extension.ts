@@ -35,7 +35,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("forge.reindexSkills", async () => {
       await controller.reindexSkills();
       await controller.postState();
-      void vscode.window.showInformationMessage("FORGE: skills reindexadas.");
+      void vscode.window.showInformationMessage(vscode.l10n.t("FORGE: skills reindexadas."));
     }),
     vscode.commands.registerCommand("forge.reindexCodebase", async () => {
       await controller.reindexCodebase();
@@ -53,7 +53,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("forge.signOut", async () => {
       await controller.signOut();
-      void vscode.window.showInformationMessage("FORGE: licença e credenciais removidas.");
+      void vscode.window.showInformationMessage(vscode.l10n.t("FORGE: licença e credenciais removidas."));
     }),
     vscode.commands.registerCommand("forge.showOutput", () => log.show()),
     vscode.commands.registerCommand("forge.exportDiagnostics", async () => {
