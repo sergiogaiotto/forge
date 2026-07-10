@@ -344,9 +344,14 @@ export function buildBlueprintSystemPrompt(
     '[{"path":"caminho/relativo/arquivo.ext","purpose":"uma frase","deps":["outro/arquivo.ext"]}]',
     'Se a sua saída precisar ser um OBJETO JSON, use exatamente {"files": [ ...o array acima... ]}.',
     `Inclua o manifesto de dependências (${MANIFEST[language]}), os testes do núcleo e um README.md.`,
-    // O "purpose" de cada arquivo aparece no card de aprovação do blueprint (user-visível) — em en,
-    // instrui o idioma explicitamente; em pt-BR nada muda (o modelo já responde pt pelo contexto).
-    ...(activeOutputLanguage === "en" ? ['Escreva o valor de cada "purpose" em INGLÊS (o plano é exibido a um usuário de língua inglesa).'] : []),
+    // O "purpose" de cada arquivo aparece no card de aprovação do blueprint (user-visível). Instrui o
+    // idioma EXPLICITAMENTE nos dois sentidos: o blueprint roda em não-streaming + temperature 0 e, sem
+    // esta diretiva, o gpt-oss defaultava para INGLÊS mesmo com outputLanguage=pt-BR (o corpus do prompt e
+    // o schema JSON puxam para en). A suposição antiga "em pt-BR o modelo já responde pt pelo contexto" era
+    // falsa e determinística (temp 0 → sempre inglês). Ver buildBasePrompt/LANGUAGE_DIRECTIVE.
+    activeOutputLanguage === "en"
+      ? 'Escreva o valor de cada "purpose" em INGLÊS (o plano é exibido a um usuário de língua inglesa).'
+      : 'Escreva o valor de cada "purpose" em PORTUGUÊS DO BRASIL (o plano é exibido a um usuário de língua portuguesa).',
     "Nada de prosa, comentários ou cercas fora do JSON.",
   ].join("\n");
 }

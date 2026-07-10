@@ -195,6 +195,9 @@ test("outputLanguage=en troca a diretiva de idioma; o resto do corpus (protocolo
   assert.match(buildReviewPrompt(), /Nunca escreva em inglês/);
   assert.match(buildSummarizeSystemPrompt(), /em pt-BR,/);
   assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("INGLÊS"));
+  // F-05: o blueprint AGORA instrui pt-BR EXPLICITAMENTE (antes confiava no contexto e o gpt-oss
+  // defaultava para inglês em temperature 0 → purposes em inglês no card de aprovação pt-BR).
+  assert.match(buildBlueprintSystemPrompt("python", "hexagonal"), /"purpose" em PORTUGUÊS DO BRASIL/);
 });
 
 test("prompt base proíbe elipses/omissões para forçar o arquivo completo", () => {
