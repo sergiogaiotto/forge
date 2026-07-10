@@ -312,6 +312,11 @@ export type HostMessageKey =
   | "wh.hint.sqlcl"
   | "wh.hint.duckdb"
   | "wh.hint.default"
+  | "wh.err.schemaBigQuery"
+  | "wh.err.schemaUnavailable"
+  | "val.label.sqlSecurity"
+  | "val.label.sqlAntipatterns"
+  | "val.label.sqlSchema"
   // Paridade
   | "par.absent"
   | "par.head"
@@ -686,6 +691,11 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wh.hint.sqlcl": "SQLcl — baixe em oracle.com/sqlcl; conecta 19c, 26ai, Exadata e ADW (wallet)",
     "wh.hint.duckdb": "duckdb.org — binário único",
     "wh.hint.default": "instale e garanta no PATH",
+    "wh.err.schemaBigQuery": "BigQuery precisa de `schemas` na conexão (datasets a inventariar) — INFORMATION_SCHEMA é por dataset.",
+    "wh.err.schemaUnavailable": "Snapshot de schema não disponível para este tipo de conexão.",
+    "val.label.sqlSecurity": "SQL · segurança",
+    "val.label.sqlAntipatterns": "SQL · anti-padrões",
+    "val.label.sqlSchema": "SQL · schema (dbt)",
     "par.absent": "(ausente)",
     "par.head": "### Paridade de dados · `{left}` × `{right}`",
     "par.ok": "✅ **Paridade OK** — {n} métricas conferem (count, não-nulos e distintos por coluna).",
@@ -1051,6 +1061,11 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wh.hint.sqlcl": "SQLcl — download at oracle.com/sqlcl; connects 19c, 26ai, Exadata and ADW (wallet)",
     "wh.hint.duckdb": "duckdb.org — single binary",
     "wh.hint.default": "install it and ensure it's on PATH",
+    "wh.err.schemaBigQuery": "BigQuery requires `schemas` on the connection (datasets to inventory) — INFORMATION_SCHEMA is per dataset.",
+    "wh.err.schemaUnavailable": "Schema snapshot not available for this connection type.",
+    "val.label.sqlSecurity": "SQL · security",
+    "val.label.sqlAntipatterns": "SQL · anti-patterns",
+    "val.label.sqlSchema": "SQL · schema (dbt)",
     "par.absent": "(absent)",
     "par.head": "### Data parity · `{left}` × `{right}`",
     "par.ok": "✅ **Parity OK** — {n} metrics match (count, non-nulls and distincts per column).",
@@ -1117,7 +1132,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "pii.head": "### PII / LGPD audit (by column name)",
     "pii.noSchema": "No schema to audit — run `dbt parse` (dbt project) or `/schema-db` (warehouse) first.",
     "pii.clean": "✅ No column with a typical personal-data name across {tables} tables. (Heuristic by NAME — content was not read.)",
-    "pii.found": "⚠ **{count, plural, one{# column} other{# columns}} candidate for personal data** across {tables} tables (heuristic by NAME — content was not read):",
+    "pii.found": "⚠ **{count, plural, one{# column candidate} other{# column candidates}} for personal data** across {tables} tables (heuristic by NAME — content was not read):",
     "pii.cols": "| table | column | category | confidence |",
     "pii.more": "_… +{n} columns._",
     "pii.next": "Next steps: masking in the warehouse (Oracle: `DBMS_REDACT`/Data Redaction; BigQuery: policy tags + column-level access; Postgres: masked views + per-column GRANT) and minimization in the marts (don't propagate documents/contacts to consumption layers).",

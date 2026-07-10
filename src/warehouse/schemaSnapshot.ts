@@ -3,6 +3,7 @@
 // cache. Com o snapshot, o schema real do Oracle/PG/BigQuery entra no prompt e no gate semântico
 // exatamente como o manifest dbt — mata a alucinação também fora de projetos dbt. PURO.
 import { DbtIndex } from "../dbt/artifacts";
+import { hostT } from "../i18n";
 import { WarehouseKind } from "./types";
 
 // Inventário de colunas (tabela qualificada, coluna, tipo). Escopo por schemas/owners/datasets:
@@ -28,7 +29,7 @@ export function columnsInventorySql(kind: WarehouseKind, schemas: string[]): str
         "LIMIT 50000",
       ].join("\n");
     case "bigquery":
-      if (schemas.length === 0) return { error: "BigQuery precisa de `schemas` na conexão (datasets a inventariar) — INFORMATION_SCHEMA é por dataset." };
+      if (schemas.length === 0) return { error: hostT("wh.err.schemaBigQuery") };
       return schemas
         .map((ds) =>
           [
@@ -38,7 +39,7 @@ export function columnsInventorySql(kind: WarehouseKind, schemas: string[]): str
         )
         .join("\nUNION ALL\n") + "\nORDER BY 1";
     default:
-      return { error: "Snapshot de schema não disponível para este tipo de conexão." };
+      return { error: hostT("wh.err.schemaUnavailable") };
   }
 }
 
