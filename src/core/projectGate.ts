@@ -6,6 +6,7 @@
 // Este módulo é PURO (materialização/parse/decisão testáveis sem spawnar processo). O I/O (mkdtemp,
 // spawn do python) fica no Controller.runProjectGate, que orquestra e alimenta `entry.gateOk`.
 import * as path from "node:path";
+import { hostT } from "../i18n";
 import { ProjectLanguage, ValidatorResult } from "../shared/protocol";
 
 export const SYNTHETIC_INIT = "__init__.py";
@@ -340,14 +341,14 @@ export function summarizeGate(checks: GateCheckResult[]): ProjectGateSummary {
   // atribuição (traceback do próprio tooling, env quebrado) é ANÔMALA e vira aviso não-bloqueante — não
   // dá para saber se é defeito do código ou da ferramenta, e um bloqueio amplo por env seria falso.
   const summary = advisory
-    ? "Gate consultivo: compileall/mypy indisponíveis no ambiente — nada foi bloqueado (o projeto pode não rodar)."
+    ? hostT("gate.py.advisory")
     : fileErrors.length > 0
-      ? `Gate reprovou: ${fileErrors.length} arquivo(s) não compilam/importam. O "Aplicar" deles está bloqueado até corrigir.`
+      ? hostT("gate.py.failed", { count: fileErrors.length })
       : projectErrors.length > 0
-        ? "Gate rodou mas não consegui localizar a falha por arquivo (veja os detalhes) — nada foi bloqueado."
+        ? hostT("gate.py.unattributed")
         : mypyRan
-          ? "Gate verde: o conjunto compila e importa (compileall + mypy sem erros de contrato)."
-          : "Gate parcial: compilou sem erro de sintaxe (compileall), mas o mypy não rodou — o drift de contrato cross-file NÃO foi verificado.";
+          ? hostT("gate.py.ok")
+          : hostT("gate.py.partial");
 
   return { advisory, ran, skipped, fileErrors, projectErrors, partial, summary };
 }

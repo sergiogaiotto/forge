@@ -137,7 +137,7 @@ export class CodebaseIndex {
   }
 
   private warnCapped(): void {
-    const msg = `RAG: teto de ${MAX_CHUNKS} trechos atingido — parte do codebase NÃO foi indexada (a recuperação de contexto fica incompleta). Restrinja forge.rag.include ou aumente o filtro de exclusão.`;
+    const msg = hostT("rag.capped", { max: MAX_CHUNKS });
     log.warn(msg);
     if (!this.cappedNotified) {
       this.cappedNotified = true;

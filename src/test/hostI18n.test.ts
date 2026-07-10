@@ -60,6 +60,25 @@ test("rag.test.*: mensagens do teste de embeddings traduzem no host (o modo lexi
   assert.equal(hostT("rag.test.ok", { dims: 1024 }), "Embeddings OK (1024 dims).");
 });
 
+// PR8 (i18n do host): amostra das superfícies novas — notices, planStep, gate, smoke, cards — traduz
+// em en e mantém pt-BR byte-idêntico ao literal antigo (o pt é a fonte; os testes rodam no default).
+test("PR8: notices/gate/smoke/cards resolvem por locale (pt fonte intacta; en traduz)", () => {
+  setHostLocale("pt-BR");
+  assert.equal(hostT("notice.applyAll", { parts: "2 aplicado(s)" }), "Aplicar tudo: 2 aplicado(s).");
+  assert.equal(hostT("gate.py.failed", { count: 3 }), 'Gate reprovou: 3 arquivo(s) não compilam/importam. O "Aplicar" deles está bloqueado até corrigir.');
+  assert.equal(hostT("smoke.passed", { count: 7 }), "Smoke test: 7 teste(s) gerado(s) PASSARAM no venv do workspace — o projeto de fato roda, não só compila.");
+  assert.ok(hostT("card.git.untrusted").includes("não é confiável"));
+  assert.equal(hostT("bp.step.analyze"), "Analisando os requisitos e desenhando a arquitetura…");
+  setHostLocale("en");
+  assert.equal(hostT("notice.applyAll", { parts: "2 applied" }), "Apply all: 2 applied.");
+  assert.match(hostT("gate.py.failed", { count: 3 }), /^Gate failed: 3 file/);
+  assert.match(hostT("smoke.passed", { count: 7 }), /7 generated test\(s\) PASSED/);
+  assert.ok(hostT("card.git.untrusted").includes("not trusted"));
+  assert.match(hostT("card.sql.openFile"), /\/run-sql/); // texto en cita o LABEL en do comando
+  assert.equal(hostT("bp.step.analyze"), "Analyzing the requirements and designing the architecture…");
+  setHostLocale("pt-BR");
+});
+
 test("guard: nenhum vscode.l10n.t remanescente (o mecanismo nativo não serve pt-BR-first)", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
