@@ -3,6 +3,7 @@
 // dialeto; (b) mascaramento de AMOSTRAS — valores que casam padrões de dado pessoal brasileiro
 // (CPF/CNPJ, e-mail, telefone, cartão) viram ▇ antes de qualquer exibição/contexto. PURO.
 import { DbtIndex } from "../dbt/artifacts";
+import { hostT, HostMessageKey } from "../i18n";
 
 // "alta"/"média" são CÓDIGOS INTERNOS ESTÁVEIS — usados como CHAVE de ordenação (=== "alta" em
 // scanIndexForPii). NUNCA traduzir/exibir crus: o texto para o usuário vem de piiConfidenceLabel() (é
@@ -17,10 +18,30 @@ export interface PiiFinding {
   confidence: PiiConfidence;
 }
 
-// Mapa CÓDIGO→TEXTO exibido da confiança PII (identidade por ora; a i18n troca ESTE mapa, não o enum).
-const PII_CONFIDENCE_LABEL: Record<PiiConfidence, string> = { alta: "alta", "média": "média" };
+// CÓDIGO→TEXTO exibido da confiança PII, resolvido por locale via hostT (o enum nunca muda — este era
+// o ponto de inserção da i18n declarado desde o PR 3).
 export function piiConfidenceLabel(c: PiiConfidence): string {
-  return PII_CONFIDENCE_LABEL[c] ?? c;
+  return c === "alta" ? hostT("conf.alta") : c === "média" ? hostT("conf.media") : c;
+}
+
+// category dos achados é o CÓDIGO estável pt-BR (fonte, comparável em testes); o texto exibido no
+// cartão resolve por locale aqui — fallback no próprio código quando não mapeado.
+const PII_CATEGORY_KEY: Record<string, HostMessageKey> = {
+  "documento (CPF/CNPJ/RG)": "pii.cat.doc",
+  "nome de pessoa": "pii.cat.nome",
+  "e-mail": "pii.cat.email",
+  telefone: "pii.cat.telefone",
+  "endereço": "pii.cat.endereco",
+  "nascimento/idade": "pii.cat.nascimento",
+  "financeiro pessoal": "pii.cat.financeiro",
+  "cartão de pagamento": "pii.cat.cartao",
+  credencial: "pii.cat.credencial",
+  "dado sensível (LGPD art. 5º II)": "pii.cat.sensivel",
+  "geolocalização": "pii.cat.geo",
+};
+function piiCategoryLabel(category: string): string {
+  const key = PII_CATEGORY_KEY[category];
+  return key ? hostT(key) : category;
 }
 
 // Dicionário LGPD por nome de coluna (pt-BR + en comuns em warehouses brasileiros).
@@ -50,26 +71,26 @@ export function scanIndexForPii(index: DbtIndex): PiiFinding[] {
 }
 
 export function renderPiiCard(findings: PiiFinding[], tablesScanned: number): string {
-  const head = "### Auditoria PII / LGPD (por nome de coluna)";
+  const head = hostT("pii.head");
   if (tablesScanned === 0) {
-    return `${head}\n\nSem schema para auditar — rode \`dbt parse\` (projeto dbt) ou \`/schema-db\` (warehouse) primeiro.`;
+    return `${head}\n\n${hostT("pii.noSchema")}`;
   }
   if (findings.length === 0) {
-    return `${head}\n\n✅ Nenhuma coluna com nome típico de dado pessoal em ${tablesScanned} tabelas. (Heurística por NOME — conteúdo não foi lido.)`;
+    return `${head}\n\n${hostT("pii.clean", { tables: tablesScanned })}`;
   }
-  const rows = findings.slice(0, 40).map((f) => `| \`${f.table}\` | \`${f.column}\` | ${f.category} | ${piiConfidenceLabel(f.confidence)} |`);
+  const rows = findings.slice(0, 40).map((f) => `| \`${f.table}\` | \`${f.column}\` | ${piiCategoryLabel(f.category)} | ${piiConfidenceLabel(f.confidence)} |`);
   return [
     head,
     "",
-    `⚠ **${findings.length} coluna${findings.length === 1 ? "" : "s"} candidatas a dado pessoal** em ${tablesScanned} tabelas (heurística por NOME — o conteúdo não foi lido):`,
+    hostT("pii.found", { count: findings.length, tables: tablesScanned }),
     "",
-    "| tabela | coluna | categoria | confiança |",
+    hostT("pii.cols"),
     "|---|---|---|---|",
     ...rows,
-    findings.length > 40 ? `\n_… +${findings.length - 40} colunas._` : "",
+    findings.length > 40 ? `\n${hostT("pii.more", { n: findings.length - 40 })}` : "",
     "",
-    "Próximos passos: mascaramento no warehouse (Oracle: `DBMS_REDACT`/Data Redaction; BigQuery: policy tags + column-level access; Postgres: views com máscara + GRANT por coluna) e minimização nos marts (não propague documento/contato para camadas de consumo).",
-    "_O FORGE já mascara amostras exibidas no chat; a auditoria orienta a proteção NA ORIGEM._",
+    hostT("pii.next"),
+    hostT("pii.footer"),
   ].join("\n");
 }
 

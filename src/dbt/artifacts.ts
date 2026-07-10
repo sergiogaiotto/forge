@@ -5,6 +5,8 @@
 // via child_map. Zero dependências: só o subconjunto do JSON que usamos, tolerante a versões de
 // manifest (v7+). PURO/testável — o I/O (achar o projeto, ler os arquivos) vive em loader.ts.
 
+import { hostT } from "../i18n";
+
 export interface DbtColumn {
   name: string;
   type?: string;
@@ -360,14 +362,14 @@ export function renderImpactCard(index: DbtIndex, node: DbtNode): string {
   const safe = mdSafe(node.name);
   const fmt = (ns: DbtNode[], cap = 12) =>
     ns.length === 0 ? "—" : ns.slice(0, cap).map((n) => `\`${mdSafe(n.name)}\``).join(", ") + (ns.length > cap ? ` … (+${ns.length - cap})` : "");
-  const head = `### Raio de explosão · \`${safe}\``;
+  const head = hostT("dbt.impact.head", { name: safe });
   if (down.transitive.length === 0 && down.tests === 0) {
     return [
       head,
       "",
-      `Nenhum modelo, teste ou exposure depende de \`${safe}\` — mudança de impacto LOCAL.`,
+      hostT("dbt.impact.local", { name: safe }),
       "",
-      `Upstream direto: ${fmt(up)}`,
+      hostT("dbt.impact.upstream", { list: fmt(up) }),
       "",
       freshness(index),
     ].join("\n");
@@ -377,19 +379,19 @@ export function renderImpactCard(index: DbtIndex, node: DbtNode): string {
     "",
     `| | |`,
     `|---|---|`,
-    `| Downstream direto | ${down.direct.length} — ${fmt(down.direct)} |`,
-    `| Downstream transitivo | ${down.transitive.length} modelo${down.transitive.length === 1 ? "" : "s"} (profundidade ${down.maxDepth}) |`,
-    `| Testes impactados | ${down.tests} |`,
-    ...(down.exposures.length > 0 ? [`| Exposures | ${down.exposures.map((e) => `\`${mdSafe(e)}\``).join(", ")} |`] : []),
-    `| Upstream direto | ${fmt(up)} |`,
+    hostT("dbt.impact.downDirect", { n: down.direct.length, list: fmt(down.direct) }),
+    hostT("dbt.impact.downTransitive", { count: down.transitive.length, depth: down.maxDepth }),
+    hostT("dbt.impact.tests", { n: down.tests }),
+    ...(down.exposures.length > 0 ? [hostT("dbt.impact.exposures", { list: down.exposures.map((e) => `\`${mdSafe(e)}\``).join(", ") })] : []),
+    hostT("dbt.impact.upstreamRow", { list: fmt(up) }),
     "",
-    `Mudança em \`${safe}\` pode quebrar ${down.transitive.length + down.tests} consumidor${down.transitive.length + down.tests === 1 ? "" : "es"} — revise os downstream diretos antes de aplicar (\`dbt build --select ${safe}+\` valida a cadeia).`,
+    hostT("dbt.impact.warning", { name: safe, count: down.transitive.length + down.tests }),
     "",
     freshness(index),
   ].join("\n");
 }
 
 function freshness(index: DbtIndex): string {
-  const when = index.generatedAt ? ` (gerado em ${index.generatedAt.slice(0, 19).replace("T", " ")})` : "";
-  return `_Fonte: target/manifest.json${when} — \`dbt parse\` ou \`dbt compile\` atualiza o lineage._`;
+  const when = index.generatedAt ? hostT("dbt.impact.when", { ts: index.generatedAt.slice(0, 19).replace("T", " ") }) : "";
+  return hostT("dbt.impact.freshness", { when });
 }

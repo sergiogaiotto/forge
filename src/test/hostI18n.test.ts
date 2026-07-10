@@ -79,6 +79,25 @@ test("PR8: notices/gate/smoke/cards resolvem por locale (pt fonte intacta; en tr
   setHostLocale("pt-BR");
 });
 
+// PR9 (i18n dos módulos host): amostra dos renderers puros — git, warehouse, paridade, anti-padrões,
+// impacto dbt, PII — traduz em en e mantém pt-BR byte-idêntico (a fonte não muda; testes rodam no default).
+test("PR9: renderers de módulo resolvem por locale (git/wh/parity/ap/dbt/pii)", () => {
+  setHostLocale("pt-BR");
+  assert.equal(hostT("git.st.modified"), "modificado");
+  assert.equal(hostT("par.diffs", { count: 1, total: 9 }), "❌ **1 divergência** em 9 métricas:");
+  assert.equal(hostT("ap.inListaGrande", { count: 51 }), "IN com ~51 itens literais — mova para uma tabela temporária/CTE e faça JOIN.");
+  assert.equal(hostT("dbt.impact.downTransitive", { count: 1, depth: 2 }), "| Downstream transitivo | 1 modelo (profundidade 2) |");
+  assert.equal(hostT("conf.media"), "média");
+  setHostLocale("en");
+  assert.equal(hostT("git.st.modified"), "modified");
+  assert.equal(hostT("par.diffs", { count: 3, total: 9 }), "❌ **3 divergences** across 9 metrics:");
+  assert.match(hostT("wh.err.toolMissing", { tool: "psql", hint: "x" }), /is not on PATH/);
+  assert.equal(hostT("conf.media"), "medium");
+  assert.equal(hostT("pii.cat.cartao"), "payment card");
+  assert.match(hostT("wh.err.connNotExists", { id: "dw" }), /\/connections/); // texto en cita o label en
+  setHostLocale("pt-BR");
+});
+
 test("guard: nenhum vscode.l10n.t remanescente (o mecanismo nativo não serve pt-BR-first)", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");

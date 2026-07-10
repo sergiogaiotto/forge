@@ -3,6 +3,7 @@
 // custo direto), Postgres pg_stat_statements (exige a extensão), Oracle v$sql (exige privilégio de
 // dicionário — Exadata/ADW inclusos). Sem privilégio/extensão a consulta falha e o card explica —
 // fail-open, nunca inventa números. PURO.
+import { hostT } from "../i18n";
 import { WarehouseKind } from "./types";
 
 export function topQueriesSql(kind: WarehouseKind, scope?: string): string | { error: string } {
@@ -46,37 +47,28 @@ export function topQueriesSql(kind: WarehouseKind, scope?: string): string | { e
         ") WHERE ROWNUM <= 15",
       ].join("\n");
     case "duckdb":
-      return { error: "DuckDB é local — não há histórico de custo de warehouse para analisar." };
+      return { error: hostT("fin.err.duckdb") };
     default:
-      return { error: "Relatório de custo não disponível para este tipo de conexão." };
+      return { error: hostT("fin.err.unavailable") };
   }
 }
 
 export function renderFinopsCard(connLabel: string, kind: WarehouseKind, csv: string): string {
   const lines = (csv ?? "").split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) {
-    return [
-      `### Custo · \`${connLabel}\``,
-      "",
-      "Nenhum dado retornado. Causas comuns: falta de privilégio no dicionário (Oracle v$sql), extensão `pg_stat_statements` ausente (Postgres), ou region errada no `schemas` da conexão (BigQuery).",
-    ].join("\n");
+    return [hostT("fin.head", { id: connLabel }), "", hostT("fin.noData")].join("\n");
   }
   const header = lines[0].split(",");
   const rows = lines.slice(1, 16).map((l) => `| ${l.split(",").join(" | ")} |`);
-  const hint =
-    kind === "bigquery"
-      ? "1 TB processado ≈ US$ 6,25 (on-demand). Ataque primeiro os maiores `tb_processados`: SELECT * e falta de filtro de partição são as causas nº 1."
-      : kind === "oracle"
-        ? "Alto `gets_por_exec` = consulta cara por execução (índice/plano); alto `execucoes` × tempo médio = candidato a cache/materialização."
-        : "Alto `tempo_total_s` com muitas `execucoes` = otimize a consulta; poucas execuções muito lentas = revise plano/índices.";
+  const hint = kind === "bigquery" ? hostT("fin.hint.bq") : kind === "oracle" ? hostT("fin.hint.oracle") : hostT("fin.hint.other");
   return [
-    `### Custo (últimos 7 dias) · \`${connLabel}\``,
+    hostT("fin.head7d", { id: connLabel }),
     "",
     `| ${header.join(" | ")} |`,
     `|${header.map(() => "---").join("|")}|`,
     ...rows,
     "",
     `💡 ${hint}`,
-    "_Fonte determinística: metadados do próprio warehouse — nenhum dado de negócio saiu do banco._",
+    hostT("fin.footer"),
   ].join("\n");
 }

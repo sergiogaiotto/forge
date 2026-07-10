@@ -3,6 +3,7 @@
 // mypy/compileall não pega isso: um domínio importando adapters compila e tipa, mas quebra a arquitetura
 // que o dev escolheu. Este módulo é a fitness function (estilo import-linter/ArchUnit) — PURO/testável; o
 // Controller.runProjectGate a materializa num GateCheckResult que bloqueia o Aplicar do arquivo violador.
+import { hostT } from "../i18n";
 import { ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
 
 // Aliases de diretório da camada INTERNA (o centro puro que não pode depender de fora).
@@ -23,13 +24,18 @@ const OUTER: Record<ProjectArchitecture, string[]> = {
   mvc: ["view", "views", "controller", "controllers"],
 };
 
-// Descrição pt-BR da regra por arquitetura, para a mensagem do gate.
+// Descrição pt-BR da regra por arquitetura (fonte/documentação). A EXIBIÇÃO no veredito do gate resolve
+// por locale via layerRuleLabel — um Record módulo-nível com hostT congelaria o locale (avalia antes do
+// setHostLocale da ativação).
 export const LAYER_RULE: Record<ProjectArchitecture, string> = {
   hexagonal: "o domínio não pode importar adapters/infraestrutura — a dependência aponta para DENTRO (os adapters implementam as ports; o domínio não os conhece)",
   clean: "as camadas internas (entities/use cases) não conhecem as externas (adapters/frameworks) — a regra da dependência aponta para dentro",
   layered: "a camada de modelo/entidade não pode importar service/repository/apresentação (cada camada só chama a de baixo)",
   mvc: "o Model não pode importar View nem Controller (Model rico, sem conhecer a apresentação)",
 };
+export function layerRuleLabel(a: ProjectArchitecture): string {
+  return a === "hexagonal" ? hostT("arch.rule.hexagonal") : a === "clean" ? hostT("arch.rule.clean") : a === "layered" ? hostT("arch.rule.layered") : hostT("arch.rule.mvc");
+}
 
 type Layer = "inner" | "outer" | "other";
 
