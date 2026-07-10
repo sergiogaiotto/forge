@@ -3,6 +3,59 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.10.0] — 2026-07-10
+
+**FORGE trilíngue + workspace governado.** Fecha os dois itens restantes da gap analysis corporativa:
+internacionalização completa (pt-BR/en/es) e a navegação/busca só-leitura do workspace. Todas as 12
+fatias (PRs #140–#153) passaram por revisão adversarial multi-agente antes do merge — que confirmou e
+corrigiu, ao longo da jornada, 28 defeitos reais (locale congelado por avaliação de módulo, host
+vazando string pt-BR pronta pelo protocolo, ramos de prompt gêmeos divergindo, heurística lexical
+colidindo entre idiomas e um **ReDoS blocker** medido ao vivo), **nenhum chegando à main**. 893 testes
+(eram 834 na 2.9.0).
+
+### Added
+- **i18n pt-BR-first completo — pt-BR / en / es** (#140–#152): camada de tradução **própria** (não o
+  `vscode.l10n` nativo, arquiteturalmente incapaz de servir inglês a partir de uma fonte pt-BR — o
+  inglês é a língua-default do VSCode e curto-circuita o carregamento do bundle). `hostT` no host e `t`
+  na webview, com `formatMessage` compartilhado (interpolação `{var}` + mini-ICU plural), fallback
+  pt-BR e guards de completude por catálogo. ~1.300 strings em 3 idiomas cobrindo Onboarding, DevPanel
+  (o hotspot, ~200 strings), Controller (notices, diálogos nativos, ~30 dataCards), gate/smoke, os
+  renderers dos módulos host (git, warehouse, SQL, dbt, PII) e o manifesto (`package.nls.json` inglês
+  base + `package.nls.pt-br.json`/`package.nls.es.json` override, com `enumDescriptions` posicionais).
+  A paleta "/" resolve label/hint por locale (`COMMAND_EN`/`COMMAND_ES`) com aliases cross-locale; o
+  matching (id/aliases) nunca muda. O locale `es` foi a prova de escala: adicionado sem tocar
+  `t`/`hostT`/`formatMessage`, só catálogos e aliases.
+- **`forge.outputLanguage`** (#151): separa **idioma-da-UI de idioma-da-geração** — o modelo pode
+  responder em pt-BR com a UI em inglês, e vice-versa. `auto` (default) segue o locale da UI (en →
+  inglês; senão pt-BR); `pt-BR`/`en` fixam. Parametriza só a diretiva de saída dos prompts (o corpus
+  segue pt-BR, meta-linguagem para o modelo); resolve na ativação e em runtime.
+- **Navegação e busca governadas do workspace** (#153): três comandos só-leitura no padrão do git
+  governado — `/arquivos [pasta]` (lista com filtro), `/buscar <regex>` (busca linha a linha) e
+  `/todos` (marcadores `TODO/FIXME/HACK/XXX`). O host executa **determinístico** (sem LLM, sem rede,
+  sem execução — logo sem gate de trust: ler não roda código do repo, ao contrário do git) e responde
+  `data/card`. Governança: `.env`/`.env.*` nunca entram, binários e arquivos >512 KB pulados, tetos de
+  arquivos/ocorrências, e **máscara LGPD** nas linhas exibidas.
+
+### Security
+- **Anti-ReDoS do `/buscar`** (#153, achado blocker da revisão): o cap de linha barra custo polinomial,
+  mas não o backtracking **exponencial** de um quantificador aninhado (`(a+)+` numa linha de 33 chars
+  congelava o extension host por ~45 s, síncrono, sem cancelamento — provado ao vivo). Defesa em três
+  camadas: `hasNestedQuantifier` recusa star-height ≥ 2 **antes de compilar** (é o único site do repo
+  que passava um regex cru do dev ao engine — os irmãos SQL/dbt escapam), orçamento de wall-clock corta
+  a varredura residual, e leitura incremental (para de ler no teto de ocorrências ou no deadline).
+- **Injeção de markdown no card** (#153): backtick é caractere de nome de arquivo legal — um repo
+  hostil podia quebrar o code span; `codeSafe` neutraliza `` ` `` em todo conteúdo vindo do disco
+  (path, linha, prefixo).
+
+### Fixed
+- **Strings do host vazando pt-BR na UI en** (#147): `preset.note` e a mensagem do teste de embeddings
+  eram enviadas prontas pelo protocolo — traduzidas na fonte (`localizedProviderPresets`, `hostT`).
+- **Heurística "promover a regra" quebrando entre idiomas** (#148, #152): `\b` é ASCII (o termo en
+  `prefer` casava o pt "Preferências"; o es `no use` é diretiva mas idiom em inglês) e radical + `\b`
+  era gatilho morto para línguas flexionadas — corrigido com lookahead, `\w*` e gating por locale.
+- **Gate de definição-de-pronto sem espanhol** (#153): o detector de "## Como rodar" ganhou os termos
+  es (`Cómo ejecutar`) que a doc do manifesto já prometia.
+
 ## [2.9.0] — 2026-07-09
 
 **Hardening corporativo — gate autossuficiente, permissões unificadas, E2E e integridade do pacote.**
