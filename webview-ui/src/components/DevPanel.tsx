@@ -1832,7 +1832,7 @@ function RunCard({
     if (running) outRef.current?.scrollTo({ top: outRef.current.scrollHeight });
   }, [run.output, running]);
 
-  const isTests = run.label === "testes";
+  const isTests = !!run.isTest;
   const outcome: TestOutcome | null = isTests && !running ? pytestOutcome(run.exitCode, run.output) : null;
   // Para testes, o status vem do outcome semântico (exit 5 = neutro, não vermelho). Para execução de
   // arquivo, segue o ok booleano. "Corrigir com FORGE" só faz sentido quando os testes de fato falharam.
@@ -2053,7 +2053,7 @@ type DodStatus = "ok" | "fail" | "pending";
 
 function runStatus(r: RunResultData | null): DodStatus {
   if (!r || r.skippedReason) return "pending";
-  if (r.label === "testes") {
+  if (r.isTest) {
     const o = pytestOutcome(r.exitCode, r.output);
     // sem testes coletados / ambiente incompleto = pendente (acionável), não falha da DoD
     return o === "passed" ? "ok" : o === "no-tests" || o === "env-missing" ? "pending" : "fail";

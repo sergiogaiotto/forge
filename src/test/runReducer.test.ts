@@ -5,6 +5,35 @@ import { initialState, reducer, type UIState } from "../../webview-ui/src/state"
 
 const EMPTY_CHARTER: CharterSections = { purpose: "", rules: "", fr: "", nfr: "" };
 
+// REFACTOR pré-i18n: o card de testes é keyado por `isTest` (estável), NÃO pelo label (traduzível).
+// Este teste PROVA que traduzir o label não quebra o singleton nem o roteamento da DoD.
+test("run testes: isTest (não o label) keia o singleton e o lastTestRun — label traduzido não quebra", () => {
+  const testRun = (label: string, exitCode: number): Extract<ExtToWebview, { type: "run/result" }> => ({
+    type: "run/result",
+    filePath: "",
+    label, // rótulo EXIBIDO — aqui variamos ("testes" vs "tests") para simular a tradução futura
+    isTest: true, // chave estável
+    command: "pytest -q",
+    ok: exitCode === 0,
+    exitCode,
+    output: "",
+    durationMs: 10,
+  });
+  // primeira execução (pt-BR) cria o card
+  let s = reducer(initialState, { kind: "ext", msg: testRun("testes", 1) });
+  assert.equal(s.runs.filter((r) => r.isTest).length, 1);
+  assert.equal(s.lastTestRun?.exitCode, 1, "isTest deve rotear para lastTestRun (DoD)");
+  // segunda execução com label EM INGLÊS substitui o MESMO card (singleton por isTest, não por texto)
+  s = reducer(s, { kind: "ext", msg: testRun("tests", 0) });
+  assert.equal(s.runs.filter((r) => r.isTest).length, 1, "ainda 1 card — singleton keyado por isTest, não pelo label");
+  assert.equal(s.lastTestRun?.exitCode, 0, "atualizou o lastTestRun apesar do label diferente");
+  // uma execução de ARQUIVO (sem isTest) NÃO vira card de teste nem lastTestRun
+  const fileRun = reducer(initialState, { kind: "ext", msg: { type: "run/result", filePath: "a.py", command: "python a.py", ok: true, exitCode: 0, output: "", durationMs: 5 } });
+  assert.equal(fileRun.runs.filter((r) => r.isTest).length, 0);
+  assert.ok(fileRun.lastFileRun, "execução de arquivo alimenta lastFileRun");
+  assert.ok(!fileRun.lastTestRun, "execução de arquivo NÃO alimenta lastTestRun");
+});
+
 test("charter: state → drafting → drafted atualiza a seção e o status; edit é local", () => {
   let s = reducer(initialState, { kind: "ext", msg: { type: "charter/state", sections: { ...EMPTY_CHARTER, purpose: "inicial" } } });
   assert.equal(s.charter?.sections.purpose, "inicial");
@@ -276,7 +305,7 @@ test("run de teste (label=testes) atualiza lastTestRun, não lastFileRun", () =>
   const s = apply(initialState, {
     type: "run/result",
     filePath: "",
-    label: "testes",
+    label: "testes", isTest: true,
     command: "pytest",
     ok: true,
     exitCode: 0,
@@ -306,7 +335,7 @@ test("suíte de testes é SINGLETON: rodar várias vezes não empilha cartões (
     s = apply(s, {
       type: "run/result",
       filePath: "",
-      label: "testes",
+      label: "testes", isTest: true,
       command: "pytest -q",
       ok: exitCode === 0,
       exitCode,
@@ -314,14 +343,14 @@ test("suíte de testes é SINGLETON: rodar várias vezes não empilha cartões (
       durationMs: 10,
     });
   }
-  const testCards = s.runs.filter((r) => r.label === "testes");
+  const testCards = s.runs.filter((r) => r.isTest);
   assert.equal(testCards.length, 1); // um único cartão, não três botões "Corrigir com FORGE"
   assert.equal(testCards[0].exitCode, 0); // reflete a ÚLTIMA execução
   assert.equal(testCards[0].ok, true);
   const idAfter = testCards[0].id;
   // re-rodar mantém o mesmo id (key estável no React)
-  s = apply(s, { type: "run/result", filePath: "", label: "testes", command: "pytest -q", ok: false, exitCode: 1, output: "exit 1", durationMs: 9 });
-  const after = s.runs.filter((r) => r.label === "testes");
+  s = apply(s, { type: "run/result", filePath: "", label: "testes", isTest: true, command: "pytest -q", ok: false, exitCode: 1, output: "exit 1", durationMs: 9 });
+  const after = s.runs.filter((r) => r.isTest);
   assert.equal(after.length, 1);
   assert.equal(after[0].id, idAfter);
   assert.equal(after[0].exitCode, 1);
@@ -348,8 +377,8 @@ test("singleton só vale para 'testes': runs de arquivo distintos NÃO são fund
   s = apply(s, { type: "run/result", filePath: "b.py", command: "python b.py", ok: false, exitCode: 1, output: "", durationMs: 1 });
   assert.equal(s.runs.length, 2); // não coalesce — cada arquivo tem seu cartão
   // e o singleton de testes convive sem afetar os de arquivo
-  s = apply(s, { type: "run/result", filePath: "", label: "testes", command: "pytest", ok: true, exitCode: 0, output: "", durationMs: 1 });
-  assert.equal(s.runs.filter((r) => r.label === "testes").length, 1);
+  s = apply(s, { type: "run/result", filePath: "", label: "testes", isTest: true, command: "pytest", ok: true, exitCode: 0, output: "", durationMs: 1 });
+  assert.equal(s.runs.filter((r) => r.isTest).length, 1);
   assert.equal(s.runs.length, 3);
 });
 

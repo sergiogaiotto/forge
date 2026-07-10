@@ -315,7 +315,11 @@ export type ExtToWebview =
       runId?: string;
       proposalId?: string;
       filePath: string;
-      label?: string; // ex.: "testes" — quando não é a execução de um arquivo
+      label?: string; // rótulo EXIBIDO (ex.: "testes") — traduzível; NÃO usar como chave (ver isTest)
+      // Discriminador ESTÁVEL da execução de TESTES: o webview keya o card singleton e o lastTestRun por
+      // ISTO, não pelo label (que será traduzido). Sem ele, traduzir "testes"→"tests" quebraria o
+      // singleton e a DoD em silêncio (label-que-é-chave — refactor pré-i18n).
+      isTest?: boolean;
       command: string;
       ok: boolean;
       exitCode: number | null;

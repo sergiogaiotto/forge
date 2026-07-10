@@ -8,7 +8,16 @@ import { SqlStatement } from "./classify";
 import { clauseEnd, depthMap, lineOf } from "./lex";
 
 export type SqlSeverity = "info" | "warn" | "error";
+// CÓDIGOS INTERNOS ESTÁVEIS de confiança — usados em LÓGICA (degrade/comparações). NUNCA traduzir nem
+// exibir crus: o texto para o usuário vem de confidenceLabel() (é lá que a i18n futura entra). Traduzir
+// estes valores quebraria `c === "alta"` e o degrade em silêncio (label-que-é-chave).
 export type SqlConfidence = "alta" | "média" | "baixa";
+
+// Mapa CÓDIGO→TEXTO exibido da confiança (identidade por ora; a i18n troca ESTE mapa, não o enum).
+const CONFIDENCE_LABEL: Record<SqlConfidence, string> = { alta: "alta", "média": "média", baixa: "baixa" };
+export function confidenceLabel(c: SqlConfidence): string {
+  return CONFIDENCE_LABEL[c] ?? c;
+}
 
 export interface SqlFinding {
   rule: string;
@@ -273,6 +282,6 @@ function escapeRe(x: string): string {
 export function renderFindings(findings: SqlFinding[]): string {
   const icon: Record<SqlSeverity, string> = { error: "✖", warn: "⚠", info: "ℹ" };
   return findings
-    .map((f) => `${icon[f.severity]} linha ${f.line} [${f.rule}] (confiança ${f.confidence}): ${f.message}`)
+    .map((f) => `${icon[f.severity]} linha ${f.line} [${f.rule}] (confiança ${confidenceLabel(f.confidence)}): ${f.message}`)
     .join("\n");
 }

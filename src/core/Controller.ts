@@ -4040,6 +4040,7 @@ export class Controller {
       type: "run/result",
       filePath: "",
       label: "testes",
+      isTest: true, // chave ESTÁVEL do card de testes (o label "testes" é só display, será traduzido)
       command: result.command,
       ok: result.ok,
       exitCode: result.exitCode,

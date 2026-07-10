@@ -5,6 +5,7 @@
 // tabelas no FROM) vira origem "?". Não existe lib TS madura para isso — este módulo é a semente do
 // diferencial. PURO/testável.
 import { SqlStatement } from "./classify";
+import { confidenceLabel, SqlConfidence } from "./antipatterns";
 import { depthMap } from "./lex";
 
 export interface ColumnLineage {
@@ -16,7 +17,7 @@ export interface ColumnLineage {
 export interface LineageResult {
   columns: ColumnLineage[];
   star: boolean; // o select final usa * (lineage incompleto por construção)
-  confidence: "alta" | "média" | "baixa";
+  confidence: SqlConfidence; // código interno estável — exibir via confidenceLabel()
 }
 
 const NOT_COLUMN = new Set([
@@ -230,7 +231,7 @@ export function renderLineage(result: LineageResult, cap = 14): string {
   const more = result.columns.length > cap ? `\n_… +${result.columns.length - cap} colunas._` : "";
   const star = result.star ? "\n_⚠ O SELECT final usa `*` — colunas propagadas do upstream não aparecem no mapa._" : "";
   return [
-    `**Lineage de coluna** (confiança ${result.confidence}):`,
+    `**Lineage de coluna** (confiança ${confidenceLabel(result.confidence)}):`,
     "",
     "| saída | transformação | origem |",
     "|---|---|---|",
