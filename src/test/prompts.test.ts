@@ -12,9 +12,11 @@ import {
   buildProjectPrompt,
   buildProjectRepairPrompt,
   buildReviewPrompt,
+  buildSummarizeSystemPrompt,
   buildTailContinuation,
   buildTddPrompt,
   frameworkInstruction,
+  setOutputLanguage,
   uiLayerInstruction,
 } from "../core/systemPrompt";
 
@@ -163,6 +165,36 @@ test("prompt de revisão é multi-lente e em pt-BR", () => {
 
 test("prompt base exige pt-BR", () => {
   assert.match(buildBasePrompt("x"), /pt-BR/);
+});
+
+// PR 10 (i18n): forge.outputLanguage parametriza SÓ a diretiva de idioma — o corpus segue pt-BR.
+// A diretiva en é escrita EM inglês (adesão do modelo) e o default pt-BR é byte-idêntico ao antigo.
+test("outputLanguage=en troca a diretiva de idioma; o resto do corpus (protocolo) segue pt-BR", () => {
+  try {
+    setOutputLanguage("en");
+    const p = buildBasePrompt("x");
+    assert.match(p, /LANGUAGE \(MANDATORY\): ALWAYS respond in English/);
+    assert.ok(!p.includes("responda SEMPRE em português"));
+    // o corpus (persona, protocolo forge-file, anti-elipse) NÃO muda — é meta-linguagem pt-BR
+    assert.match(p, /Você é o FORGE/);
+    assert.match(p, /PROIBIDO/);
+    // os wrappers herdam a diretiva (TDD/projeto compõem sobre o base)
+    assert.match(buildTddPrompt("x"), /ALWAYS respond in English/);
+    // builders FORA do base com saída user-visível também seguem a setting (achados da revisão):
+    // revisão (prosa livre), /resumir (cartão na thread) e blueprint (purpose no card de aprovação)
+    const rev = buildReviewPrompt();
+    assert.match(rev, /must be in English/);
+    assert.ok(!rev.includes("Nunca escreva em inglês"));
+    assert.match(buildSummarizeSystemPrompt(), /em inglês,/);
+    assert.match(buildBlueprintSystemPrompt("python", "hexagonal"), /"purpose" em INGLÊS/);
+  } finally {
+    setOutputLanguage("pt-BR");
+  }
+  // de volta ao default: diretivas pt-BR byte-idênticas às históricas
+  assert.match(buildBasePrompt("x"), /responda SEMPRE em português do Brasil \(pt-BR\)/);
+  assert.match(buildReviewPrompt(), /Nunca escreva em inglês/);
+  assert.match(buildSummarizeSystemPrompt(), /em pt-BR,/);
+  assert.ok(!buildBlueprintSystemPrompt("python", "hexagonal").includes("INGLÊS"));
 });
 
 test("prompt base proíbe elipses/omissões para forçar o arquivo completo", () => {
