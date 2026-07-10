@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
-import { t } from "../i18n";
+import { t, type MessageKey } from "../i18n";
 import { atMentionToken, filterMentions, replaceMention } from "../mentions";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
@@ -19,28 +19,47 @@ import {
   ProjectUI,
 } from "../../../src/shared/protocol";
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
-import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
+import { pytestOutcome, TestOutcome } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
-import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, commandHint, commandLabel, exactSlashCommand, matchesFullForm, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
+import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, commandHint, commandLabel, exactSlashCommand, matchesFullForm, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, SLASH_COMMANDS, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, MAX_OUTPUT_PRESETS, maxOutputLabel, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
 
-const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "baixo", medium: "médio", high: "alto" };
+// Mapas de rótulo exibido → CHAVES do catálogo, resolvidas no render via t(). Não usar t() em const
+// módulo-nível: os módulos avaliam ANTES do initLocale() do main.tsx e o texto congelaria em pt-BR.
+const EFFORT_KEY: Record<ReasoningEffort, MessageKey> = { low: "effort.low", medium: "effort.medium", high: "effort.high" };
+const effortLabel = (e: ReasoningEffort): string => t(EFFORT_KEY[e]);
+// Nomes próprios (Python/TypeScript/Java/Go) — idênticos em todos os locales, sem chave.
 const PROJ_LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript", java: "Java", go: "Go" };
-const PROJ_ARCH_LABEL: Record<ProjectArchitecture, string> = { hexagonal: "Hexagonal", clean: "Clean", layered: "Camadas", mvc: "MVC" };
-const PROJ_UI_LABEL: Record<ProjectUI, string> = {
-  auto: "UI: auto",
-  none: "Sem UI",
-  "template-engine": "Template engine",
-  "spa-react": "SPA React",
-  streamlit: "Streamlit",
+const PROJ_ARCH_KEY: Record<ProjectArchitecture, MessageKey> = {
+  hexagonal: "proj.arch.hexagonal",
+  clean: "proj.arch.clean",
+  layered: "proj.arch.layered",
+  mvc: "proj.arch.mvc",
 };
-const PROJ_FW_LABEL: Record<ProjectFramework, string> = {
-  auto: "Framework: auto",
-  fastapi: "FastAPI",
-  flask: "Flask",
-  litestar: "Litestar",
+const archLabel = (a: ProjectArchitecture): string => t(PROJ_ARCH_KEY[a]);
+const PROJ_UI_KEY: Record<ProjectUI, MessageKey> = {
+  auto: "proj.ui.auto",
+  none: "proj.ui.none",
+  "template-engine": "proj.ui.templateEngine",
+  "spa-react": "proj.ui.spaReact",
+  streamlit: "proj.ui.streamlit",
+};
+const uiLabel = (u: ProjectUI): string => t(PROJ_UI_KEY[u]);
+const PROJ_FW_KEY: Record<ProjectFramework, MessageKey> = {
+  auto: "proj.fw.auto",
+  fastapi: "proj.fw.fastapi",
+  flask: "proj.fw.flask",
+  litestar: "proj.fw.litestar",
+};
+const fwLabel = (f: ProjectFramework): string => t(PROJ_FW_KEY[f]);
+
+// Label EXIBIDO de um comando da paleta pelo id — para os ecos "[/cmd] …" na bolha do usuário
+// (um usuário en vê o eco com o label que a paleta mostra: [/connections], não [/conexoes]).
+const cmdLabelById = (id: string): string => {
+  const c = SLASH_COMMANDS.find((x) => x.id === id);
+  return c ? commandLabel(c) : `/${id}`;
 };
 
 export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
@@ -136,7 +155,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         break;
       case "revisar":
         // Espelha o botão de revisão do cabeçalho.
-        dispatch({ kind: "pushUser", text: "Revisar minhas alterações (git diff)." });
+        dispatch({ kind: "pushUser", text: t("echo.review") });
         post({ type: "review/changes" });
         break;
       case "resumir":
@@ -198,7 +217,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // Git GOVERNADO (Fase 4): status/diff/log são leitura; commit é escrita (o host pede confirmação via
   // permission model). Host executa e responde com data/card — nenhum LLM no caminho.
   const runGit = (op: "status" | "diff" | "log" | "commit", args?: string) => {
-    dispatch({ kind: "pushUser", text: `[/git-${op}]${args ? " " + args : ""}` });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById(`git-${op}`)}]${args ? " " + args : ""}` });
     post({ type: "git/command", op, args });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -207,7 +226,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // /diagrama [tema]: geração normal com prompt craftado — o diagrama nasce como PROPOSTA de arquivo
   // versionável (docs/diagramas/*.md), reusando todo o pipeline de propostas/aplicação/continuação.
   const runDiagram = (theme: string) => {
-    dispatch({ kind: "pushUser", text: `[/diagrama] ${theme.trim() || "arquitetura do projeto"}` });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById("diagrama")}] ${theme.trim() || t("echo.diagramDefault")}` });
     post({ type: "chat/send", text: buildDiagramRequest(theme) });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -216,7 +235,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // /sumário projeto: documentação funcional padrão de mercado como PROPOSTA versionável
   // (docs/SUMARIO_FUNCIONAL.md) — geração normal com prompt craftado, zero protocolo novo.
   const runSummary = () => {
-    dispatch({ kind: "pushUser", text: "[/sumário projeto] Gerar a documentação funcional do projeto." });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById("sumario")}] ${t("echo.summary")}` });
     post({ type: "chat/send", text: buildProjectSummaryRequest() });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -225,7 +244,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // /impacto [modelo]: raio de explosão determinístico (lineage do manifest dbt) — computado pelo HOST,
   // sem LLM; a resposta volta como impact/report → cartão na thread (padrão do /contexto).
   const runImpact = (target: string) => {
-    dispatch({ kind: "pushUser", text: `[/impacto] ${target.trim() || "modelo do arquivo ativo"}` });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById("impacto")}] ${target.trim() || t("echo.activeFileModel")}` });
     post({ type: "impact/request", target: target.trim() || undefined });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -238,11 +257,11 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     if (!SQL_DIALECTS.includes(d)) {
       dispatch({
         kind: "pushLocal",
-        text: `Dialeto \`${dialect.trim()}\` não reconhecido — use um de: ${SQL_DIALECTS.map((x) => `\`${x}\``).join(", ")}.`,
+        text: t("cmd.dialectUnknown", { dialect: dialect.trim(), dialects: SQL_DIALECTS.map((x) => `\`${x}\``).join(", ") }),
       });
       return;
     }
-    dispatch({ kind: "pushUser", text: `[/traduzir-sql] arquivo ativo → ${d}` });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById("traduzir-sql")}] ${t("echo.translate", { dialect: d })}` });
     post({ type: "chat/send", text: buildSqlTranslateRequest(d) });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -251,7 +270,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // Comandos de DADOS (Ondas 3/4): host executa (conexões/SQL/schema/paridade/custo/PII) e responde
   // com data/card — nenhum LLM no caminho; governança do motor no host.
   const runData = (cmd: "conexoes" | "executar-sql" | "schema-db" | "paridade" | "custo" | "auditoria-pii", args?: string) => {
-    dispatch({ kind: "pushUser", text: `[/${cmd}]${args ? " " + args : ""}` });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById(cmd)}]${args ? " " + args : ""}` });
     post({ type: "data/command", cmd, args });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -260,7 +279,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // /testes-dbt [modelo]: schema.yml com a taxonomia coluna→teste, ancorado no schema REAL que o host
   // injeta no contexto (manifest dbt) — proposta versionável, mesmo pipeline de aplicação.
   const runDbtTests = (model: string) => {
-    dispatch({ kind: "pushUser", text: `[/testes-dbt] ${model.trim() || "modelo do arquivo ativo"}` });
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById("testes-dbt")}] ${model.trim() || t("echo.activeFileModel")}` });
     post({ type: "chat/send", text: buildDbtTestsRequest(model) });
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
@@ -331,9 +350,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       // guard defensivo garante ("auto") caso a linguagem mude depois da escolha.
       const ui = projUi === "streamlit" && language !== "python" ? "auto" : projUi;
       const framework = language === "python" ? projFw : "auto"; // framework é Python-only (defensivo)
-      const uiTag = ui !== "auto" ? `/${PROJ_UI_LABEL[ui]}` : "";
-      const fwTag = framework !== "auto" ? `/${PROJ_FW_LABEL[framework]}` : "";
-      dispatch({ kind: "pushUser", text: `[Projeto · ${PROJ_LANG_LABEL[language]}/${PROJ_ARCH_LABEL[architecture]}${fwTag}${uiTag}] ${text}` });
+      const uiTag = ui !== "auto" ? `/${uiLabel(ui)}` : "";
+      const fwTag = framework !== "auto" ? `/${fwLabel(framework)}` : "";
+      dispatch({ kind: "pushUser", text: `[${t("comp.project")} · ${PROJ_LANG_LABEL[language]}/${archLabel(architecture)}${fwTag}${uiTag}] ${text}` });
       dispatch({ kind: "project/planning", brief: { text, language, architecture, ui, framework } });
       post({ type: "project/blueprint", text, language, architecture, ui, framework });
     } else {
@@ -488,23 +507,23 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           <Icon name="flame" size={16} color="#e0863c" />
           <span className="hdr-title">FORGE</span>
           <span className="lic-pill">
-            <span className="dot" style={{ background: "#3fb950" }} /> Licença ativa
+            <span className="dot" style={{ background: "#3fb950" }} /> {t("hdr.licenseActive")}
           </span>
           <div className="spacer" />
           {forge.observability.traceActive && (
             <span
               className="chip"
               style={{ color: "#6f8fb0" }}
-              title={`Observabilidade ativa · registrado como "${forge.identity.email ?? forge.observability.login}" no Langfuse (gerido pelo admin)`}
+              title={t("hdr.traceTitle", { user: forge.identity.email ?? forge.observability.login })}
             >
               <Icon name="activity" size={13} /> trace
             </span>
           )}
           <button
             className="icon-btn"
-            title="Revisar alterações (IA in-network)"
+            title={t("hdr.review")}
             onClick={() => {
-              dispatch({ kind: "pushUser", text: "Revisar minhas alterações (git diff)." });
+              dispatch({ kind: "pushUser", text: t("echo.review") });
               post({ type: "review/changes" });
             }}
           >
@@ -512,7 +531,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           </button>
           <button
             className="icon-btn"
-            title="Nova conversa (limpa também o histórico e os anexos enviados ao modelo)"
+            title={t("hdr.newChat")}
             onClick={() => {
               // Mesmo efeito do /limpar: sem o chat/clear o host seguia reenviando o histórico
               // antigo — a conversa "nova" era silenciosamente contaminada (bugfix).
@@ -522,7 +541,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           >
             <Icon name="history" size={15} />
           </button>
-          <button className="icon-btn" title="Configurações" onClick={() => post({ type: "provider/openSettings" })}>
+          <button className="icon-btn" title={t("hdr.settings")} onClick={() => post({ type: "provider/openSettings" })}>
             <Icon name="settings" size={15} />
           </button>
         </div>
@@ -541,12 +560,10 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           {state.messages.length === 0 && (
             <div className="empty">
               <Icon name="flame" size={30} color="#3a3a3a" />
-              <div style={{ marginTop: 12, color: "#9a9a9a", fontSize: 13 }}>Pronto para gerar.</div>
-              <div style={{ marginTop: 6 }}>
-                Descreva a tarefa — ex.: "Limpe o churn.parquet: remova duplicados, ajuste tipos e trate nulos com segurança."
-              </div>
+              <div style={{ marginTop: 12, color: "#9a9a9a", fontSize: 13 }}>{t("empty.ready")}</div>
+              <div style={{ marginTop: 6 }}>{t("empty.hint")}</div>
               <div style={{ marginTop: 14, fontSize: 11, color: "#6f6f6f" }}>
-                {enabledSkills} skills ativas · {enabledMcp.length} MCP in-network
+                {t("empty.counts", { skills: enabledSkills, mcp: enabledMcp.length })}
               </div>
             </div>
           )}
@@ -561,13 +578,13 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         {state.messages.length > 0 && (
           <div className="ctx">
             <div className="ctx-row">
-              <Icon name="paperclip" size={13} /> Contexto: editor ativo · {enabledSkills} skills habilitadas
+              <Icon name="paperclip" size={13} /> {t("ctxbar.context", { skills: enabledSkills })}
             </div>
             {enabledMcp.length > 0 && (
               <div className="ctx-row">
                 <Icon name="plug" size={13} color="#8aa0b8" /> MCP: {enabledMcp.map((m) => m.id).join(", ")}
                 <span className="chip" style={{ color: "#6f8fb0" }}>
-                  <Icon name="network" size={12} /> rede interna
+                  <Icon name="network" size={12} /> {t("ob.internalNetwork")}
                 </span>
               </div>
             )}
@@ -585,16 +602,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             <div className="attach-backdrop" onClick={() => setAttachMenu(false)} />
             <div className="attach-menu">
               <button onClick={() => { setAttachMenu(false); post({ type: "context/addSelection" }); }}>
-                <Icon name="code" size={14} /> Anexar seleção do editor
+                <Icon name="code" size={14} /> {t("att.editorSelection")}
               </button>
               <button onClick={() => { setAttachMenu(false); post({ type: "context/addTerminalSelection" }); }}>
-                <Icon name="terminal" size={14} /> Anexar seleção do terminal
+                <Icon name="terminal" size={14} /> {t("att.terminalSelection")}
               </button>
               <button onClick={() => { setAttachMenu(false); post({ type: "context/pickWorkspaceFile" }); }}>
-                <Icon name="paperclip" size={14} /> Anexar arquivo do workspace
+                <Icon name="paperclip" size={14} /> {t("att.workspaceFile")}
               </button>
               <button onClick={() => { setAttachMenu(false); post({ type: "context/pickLocalFile" }); }}>
-                <Icon name="arrow-up" size={14} /> Enviar do computador
+                <Icon name="arrow-up" size={14} /> {t("att.upload")}
               </button>
               {forge.search.enabled ? (
                 <button onClick={() => { setAttachMenu(false); post({ type: "context/search" }); }}>
@@ -602,7 +619,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                 </button>
               ) : (
                 <button className="disabled" onClick={() => { setAttachMenu(false); post({ type: "context/webInfo" }); }}>
-                  <Icon name="network" size={14} /> Buscar na web · bloqueada (rede interna)
+                  <Icon name="network" size={14} /> {t("att.webBlocked")}
                 </button>
               )}
             </div>
@@ -682,7 +699,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           )}
           <textarea
             ref={taRef}
-            placeholder="Pergunte ou descreva a tarefa… (@ para arquivos, / para comandos)"
+            placeholder={t("comp.placeholder")}
             value={input}
             onChange={(e) => {
               setInput(e.target.value);
@@ -705,23 +722,23 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             rows={1}
           />
           <div className="composer-tools">
-            <span className="pill" title="Anexar contexto (arquivo, seleção, upload)" onClick={() => setAttachMenu((v) => !v)}>
+            <span className="pill" title={t("att.title")} onClick={() => setAttachMenu((v) => !v)}>
               <Icon name="paperclip" size={15} />
             </span>
             <span
               className="pill"
-              title="Modo Projeto: gera um projeto COMPLETO na linguagem e arquitetura escolhidas"
+              title={t("comp.projectTitle")}
               onClick={() => {
                 setProjectMode((v) => !v);
                 setTdd(false);
               }}
               style={{ color: projectMode ? "#e0863c" : undefined, fontWeight: projectMode ? 500 : undefined }}
             >
-              <Icon name={projectMode ? "circle-check" : "circle"} size={14} color={projectMode ? "#e0863c" : undefined} /> Projeto
+              <Icon name={projectMode ? "circle-check" : "circle"} size={14} color={projectMode ? "#e0863c" : undefined} /> {t("comp.project")}
             </span>
             <span
               className="pill"
-              title="Modo TDD: escreve o teste primeiro, depois a implementação"
+              title={t("comp.tddTitle")}
               onClick={() => {
                 setTdd((v) => !v);
                 setProjectMode(false);
@@ -734,7 +751,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               <>
                 <select
                   className="proj-select"
-                  title="Linguagem"
+                  title={t("comp.langTitle")}
                   value={language}
                   onChange={(e) => {
                     const l = e.target.value as ProjectLanguage;
@@ -751,35 +768,35 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                     </option>
                   ))}
                 </select>
-                <select className="proj-select" title="Arquitetura" value={architecture} onChange={(e) => setArchitecture(e.target.value as ProjectArchitecture)}>
+                <select className="proj-select" title={t("comp.archTitle")} value={architecture} onChange={(e) => setArchitecture(e.target.value as ProjectArchitecture)}>
                   {PROJECT_ARCHITECTURES.map((a) => (
                     <option key={a} value={a}>
-                      {PROJ_ARCH_LABEL[a]}
+                      {archLabel(a)}
                     </option>
                   ))}
                 </select>
                 <select
                   className="proj-select"
-                  title="Camada de UI do projeto (opcional): auto deixa o modelo decidir; as demais viram instrução explícita no blueprint e na geração"
+                  title={t("comp.uiTitle")}
                   value={projUi}
                   onChange={(e) => setProjUi(e.target.value as ProjectUI)}
                 >
                   {PROJECT_UIS.filter((u) => u !== "streamlit" || language === "python").map((u) => (
                     <option key={u} value={u}>
-                      {PROJ_UI_LABEL[u]}
+                      {uiLabel(u)}
                     </option>
                   ))}
                 </select>
                 {language === "python" && (
                   <select
                     className="proj-select"
-                    title="Framework web do projeto Python (opcional): auto deixa o modelo decidir; FastAPI, Flask ou Litestar viram instrução explícita"
+                    title={t("comp.fwTitle")}
                     value={projFw}
                     onChange={(e) => setProjFw(e.target.value as ProjectFramework)}
                   >
                     {PROJECT_FRAMEWORKS.map((f) => (
                       <option key={f} value={f}>
-                        {PROJ_FW_LABEL[f]}
+                        {fwLabel(f)}
                       </option>
                     ))}
                   </select>
@@ -795,7 +812,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             {state.busy ? (
               <button
                 className="send-btn"
-                title="Parar"
+                title={t("comp.stop")}
                 style={{ background: "#3a3a3a", color: "#ddd" }}
                 onClick={() => {
                   const last = [...state.messages].reverse().find((x) => x.role === "assistant" && x.streaming);
@@ -805,7 +822,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                 <Icon name="x" size={15} />
               </button>
             ) : (
-              <button className="send-btn" title="Enviar" onClick={submit} disabled={!input.trim()}>
+              <button className="send-btn" title={t("comp.send")} onClick={submit} disabled={!input.trim()}>
                 <Icon name="arrow-up" size={15} />
               </button>
             )}
@@ -818,16 +835,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         {/* O rótulo do provedor ("HubGPU/compat · modelo") saiu do rodapé a pedido; o modelo atual
             continua visível no pill do composer. */}
         <div className="sb-item" style={{ color: "#7bbf6a" }}>
-          <Icon name="shield-check" size={13} /> Licença ✓
+          <Icon name="shield-check" size={13} /> {t("ob.step.license")} ✓
         </div>
         {forge.observability.traceActive && (
-          <div className="sb-item" style={{ color: "#7bbf6a" }} title={`Telemetria ativa · usuário "${forge.identity.email ?? forge.observability.login}"`}>
+          <div className="sb-item" style={{ color: "#7bbf6a" }} title={t("sb.traceTitle", { user: forge.identity.email ?? forge.observability.login })}>
             <Icon name="activity" size={13} /> trace ✓
           </div>
         )}
         {forge.network.internalOnly && (
           <div className="sb-item" style={{ color: "#8aa0b8" }}>
-            <Icon name="network" size={13} /> rede interna
+            <Icon name="network" size={13} /> {t("ob.internalNetwork")}
           </div>
         )}
         {forge.rag.enabled && (
@@ -836,34 +853,34 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             style={{ color: !forge.rag.ready ? "#9a9a9a" : forge.rag.mode === "embeddings" ? "#7bbf6a" : "#b0a070" }}
             title={
               !forge.rag.ready
-                ? "Indexando o codebase…"
+                ? t("sb.ragIndexingTitle")
                 : forge.rag.mode === "embeddings"
-                ? `Busca semântica · ${forge.rag.embeddingModel} · ${forge.rag.files} arquivos`
-                : `BM25 lexical (sem embeddings) · ${forge.rag.files} arquivos`
+                ? t("sb.ragSemanticTitle", { model: forge.rag.embeddingModel, files: forge.rag.files })
+                : t("sb.ragLexicalTitle", { files: forge.rag.files })
             }
           >
             <Icon name="database" size={13} className={!forge.rag.ready ? "spin" : ""} />
-            {!forge.rag.ready ? "RAG indexando…" : `RAG ${forge.rag.mode === "embeddings" ? "embeddings" : "lexical"} · ${forge.rag.chunks}`}
+            {!forge.rag.ready ? t("sb.ragIndexing") : `RAG ${forge.rag.mode === "embeddings" ? "embeddings" : "lexical"} · ${forge.rag.chunks}`}
           </div>
         )}
         <div className="spacer" />
         {forge.provider.supportsReasoningEffort && (
           <button
             className="sb-item sb-btn"
-            title="Esforço de raciocínio do gpt-oss — clique para alternar (baixo → médio → alto). Esforço maior raciocina mais e eleva o timeout automaticamente."
+            title={t("sb.effortTitle")}
             onClick={() => {
               const cur = forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
               const next = REASONING_EFFORTS[(REASONING_EFFORTS.indexOf(cur) + 1) % REASONING_EFFORTS.length];
               post({ type: "provider/setEffort", effort: next });
             }}
           >
-            <Icon name="cpu" size={13} /> esforço: {EFFORT_LABEL[forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT]}
+            <Icon name="cpu" size={13} /> {t("sb.effort", { level: effortLabel(forge.provider.reasoningEffort ?? DEFAULT_REASONING_EFFORT) })}
           </button>
         )}
         {forge.provider.configured && (
           <button
             className="sb-item sb-btn"
-            title="Máximo de tokens de saída — clique para alternar (auto → 16k → 32k → 64k → 128k). Valores altos são rebaixados automaticamente ao que o gateway serve (sem erro)."
+            title={t("sb.maxOutTitle")}
             onClick={() => {
               const cur = forge.provider.maxOutput ?? 0;
               const idx = MAX_OUTPUT_PRESETS.indexOf(cur);
@@ -871,7 +888,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               post({ type: "provider/setMaxOutput", maxTokens: next });
             }}
           >
-            <Icon name="activity" size={13} /> saída: {maxOutputLabel(forge.provider.maxOutput)}
+            <Icon name="activity" size={13} /> {t("sb.maxOut", { label: maxOutputLabel(forge.provider.maxOutput) })}
           </button>
         )}
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
@@ -881,7 +898,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           <div
             className="sb-item"
             style={{ color: "#9a9a9a" }}
-            title={`Tokens da sessão — entrada: ${state.usage.sessionIn} · saída: ${state.usage.sessionOut} (última geração: ${state.usage.lastIn}/${state.usage.lastOut}). Digite /tokens para o detalhe.`}
+            title={t("sb.usageTitle", { sessionIn: state.usage.sessionIn, sessionOut: state.usage.sessionOut, lastIn: state.usage.lastIn, lastOut: state.usage.lastOut })}
           >
             <Icon name="activity" size={12} /> {fmtTokens(state.usage.sessionIn)}→{fmtTokens(state.usage.sessionOut)}
           </div>
@@ -923,13 +940,14 @@ const STATUS_DOT: Record<ProjectFileStatus, string> = {
   applied: "#4ec9b0",
   failed: "#d16969",
 };
-const STATUS_LABEL: Record<ProjectFileStatus, string> = {
-  pending: "pendente",
-  generating: "gerando…",
-  complete: "gerado",
-  applied: "aplicado",
-  failed: "não gerado",
+const STATUS_KEY: Record<ProjectFileStatus, MessageKey> = {
+  pending: "plan.status.pending",
+  generating: "plan.status.generating",
+  complete: "plan.status.complete",
+  applied: "plan.status.applied",
+  failed: "plan.status.failed",
 };
+const statusLabel = (s: ProjectFileStatus): string => t(STATUS_KEY[s]);
 
 function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
   const proj = state.project!;
@@ -954,11 +972,11 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
     <div className="modal-backdrop" onClick={proj.busy ? undefined : close}>
       <div className="modal plan-modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-title">
-          <Icon name="list-check" size={15} color="#e0863c" /> Blueprint do projeto
-          {bp ? <span className="plan-sub">· {bp.files.length} arquivos</span> : null}
+          <Icon name="list-check" size={15} color="#e0863c" /> {t("plan.title")}
+          {bp ? <span className="plan-sub">· {t("plan.files", { count: bp.files.length })}</span> : null}
           <div className="spacer" />
           {!proj.busy && (
-            <span className="icon-btn" title="Fechar" onClick={close}>
+            <span className="icon-btn" title={t("common.close")} onClick={close}>
               <Icon name="x" size={15} />
             </span>
           )}
@@ -973,16 +991,16 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
               </div>
               <div className="actions" style={{ marginTop: 12, justifyContent: "flex-end", gap: 8 }}>
                 <button className="btn" onClick={close}>
-                  Fechar
+                  {t("common.close")}
                 </button>
                 <button className="btn p" disabled={!proj.brief} onClick={retry}>
-                  <Icon name="refresh" size={13} /> Tentar de novo
+                  <Icon name="refresh" size={13} /> {t("plan.retry")}
                 </button>
               </div>
             </>
           ) : (
             <div className="profile-empty">
-              <Icon name="refresh" size={13} className="spin" /> {proj.planStep ?? "Planejando o projeto…"}
+              <Icon name="refresh" size={13} className="spin" /> {proj.planStep ?? t("plan.planning")}
             </div>
           )
         ) : (
@@ -1000,11 +1018,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                 <Icon name="alert-triangle" size={14} /> {proj.warning}
               </div>
             )}
-            <div className="plan-hint">
-              {proj.done
-                ? "Arquivos gerados. Clique em “Aplicar tudo” para gravá-los no workspace, ou feche para revisar antes."
-                : "Revise os arquivos abaixo — passe o mouse para ver o objetivo e as dependências de cada um. “Aprovar e gerar” cria todos na ordem de dependência; “Cancelar” descarta o plano."}
-            </div>
+            <div className="plan-hint">{proj.done ? t("plan.hintDone") : t("plan.hintReview")}</div>
             {gate && (
               // Veredito do gate: reprovado (vermelho) · parcial/consultivo = coerência NÃO verificada
               // (âmbar, NÃO verde) · verde só quando compileall E mypy rodaram sem erro de contrato.
@@ -1023,7 +1037,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                   // falta é do CONJUNTO (não de um arquivo), aparece aqui como aviso project-level e bloqueia o
                   // Aplicar de todos — o dev gera o que falta e re-roda.
                   <div style={{ marginTop: 6 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d16969" }}>Definição de pronto — Aplicar bloqueado até fechar:</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d16969" }}>{t("plan.dodHeader")}</div>
                     {(gate.dod ?? []).map((e, i) => (
                       <div key={i} className="mono" style={{ marginTop: 3, fontSize: 11, color: "#d16969", whiteSpace: "pre-wrap" }}>
                         • {e}
@@ -1035,7 +1049,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                   // Segurança (P2): avisos ADVISORY do bandit (os bloqueantes de ALTO risco já pintam o cartão
                   // do arquivo). Âmbar — informam, não bloqueiam. Os de ALTO risco bloqueiam via `files`.
                   <div style={{ marginTop: 6 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d1a13a" }}>Segurança (bandit) — avisos (não bloqueiam):</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d1a13a" }}>{t("plan.securityHeader")}</div>
                     {(gate.security ?? []).map((e, i) => (
                       <div key={i} className="mono" style={{ marginTop: 3, fontSize: 11, color: "#d1a13a", whiteSpace: "pre-wrap" }}>
                         • {e}
@@ -1053,15 +1067,15 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                   <div
                     key={f.path}
                     className="plan-item"
-                    title={`${f.path}\n\n${f.purpose || "(sem descrição)"}${f.deps.length ? `\n\nDepende de: ${f.deps.join(", ")}` : ""}${blocked ? `\n\nGate reprovou:\n${errs.join("\n")}` : ""}`}
+                    title={`${f.path}\n\n${f.purpose || t("plan.noPurpose")}${f.deps.length ? `\n\n${t("plan.dependsOn", { deps: f.deps.join(", ") })}` : ""}${blocked ? `\n\n${t("plan.gateFailedTip")}\n${errs.join("\n")}` : ""}`}
                   >
-                    <span className="dot" style={{ background: blocked ? STATUS_DOT.failed : STATUS_DOT[f.status] }} title={blocked ? "gate reprovou" : STATUS_LABEL[f.status]} />
+                    <span className="dot" style={{ background: blocked ? STATUS_DOT.failed : STATUS_DOT[f.status] }} title={blocked ? t("plan.gateFailedDot") : statusLabel(f.status)} />
                     <div className="plan-file">
                       <span className="mono">{f.path}</span>
                       <span className="purpose">{blocked ? errs[0] : f.purpose}</span>
                     </div>
                     <span className="plan-st" style={{ color: blocked ? STATUS_DOT.failed : STATUS_DOT[f.status] }}>
-                      {blocked ? "bloqueado" : STATUS_LABEL[f.status]}
+                      {blocked ? t("plan.blocked") : statusLabel(f.status)}
                     </span>
                   </div>
                 );
@@ -1071,7 +1085,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
               {!proj.done ? (
                 <>
                   <button className="btn" disabled={proj.busy} onClick={() => { post({ type: "project/cancel" }); close(); }}>
-                    Cancelar
+                    {t("common.cancel")}
                   </button>
                   <button
                     className="btn p"
@@ -1083,11 +1097,11 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                   >
                     {proj.busy ? (
                       <>
-                        <Icon name="refresh" size={13} className="spin" /> gerando…
+                        <Icon name="refresh" size={13} className="spin" /> {t("common.generating")}
                       </>
                     ) : (
                       <>
-                        <Icon name="check" size={13} /> Aprovar e gerar
+                        <Icon name="check" size={13} /> {t("plan.approve")}
                       </>
                     )}
                   </button>
@@ -1095,7 +1109,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
               ) : (
                 <>
                   <button className="btn" onClick={close}>
-                    Fechar
+                    {t("common.close")}
                   </button>
                   {gate && (gate.files.length > 0 || gate.dod.length > 0) && !gate.contractBlocked && (
                     // Escape consciente do gate no lote: aplica TAMBÉM os arquivos reprovados (revisados pelo
@@ -1104,10 +1118,10 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                     <button
                       className="btn"
                       style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
-                      title="Aplicar também os arquivos que o gate reprovou — você revisou e assume. Fica registrado no diagnóstico."
+                      title={t("plan.forceTitle")}
                       onClick={() => post({ type: "proposal/applyAll", forceBlocked: true })}
                     >
-                      <Icon name="alert-triangle" size={13} /> Forçar bloqueados
+                      <Icon name="alert-triangle" size={13} /> {t("plan.force")}
                     </button>
                   )}
                   {gate && gate.requiresContractConfirm && !gate.contractBlocked && !(gate.files.length > 0 || gate.dod.length > 0) && (
@@ -1116,10 +1130,10 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                     <button
                       className="btn"
                       style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
-                      title="O mypy não verificou o contrato cross-file (import/atributo fantasma). Aplicar assim mesmo — você revisou e assume. Fica registrado no diagnóstico."
+                      title={t("plan.applyNoContractTitle")}
                       onClick={() => post({ type: "proposal/applyAll", forceBlocked: true })}
                     >
-                      <Icon name="alert-triangle" size={13} /> Aplicar sem verificar contrato
+                      <Icon name="alert-triangle" size={13} /> {t("plan.applyNoContract")}
                     </button>
                   )}
                   {gate && gate.contractBlocked && (
@@ -1129,10 +1143,10 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                     <button
                       className="btn"
                       style={{ borderColor: "#d16969", color: "#d16969" }}
-                      title="Política do admin: o contrato cross-file precisa ser verificado (mypy) antes de aplicar — sem escape. Preparar o ambiente cria o venv; depois clique em Re-verificar contrato."
+                      title={t("plan.envRequiredTitle")}
                       onClick={() => post({ type: "env/prepare" })}
                     >
-                      <Icon name="plug" size={13} /> Verificação exigida — Preparar ambiente
+                      <Icon name="plug" size={13} /> {t("plan.envRequired")}
                     </button>
                   )}
                   {gate && (gate.contractBlocked || gate.requiresContractConfirm) && (
@@ -1140,14 +1154,14 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                     // gate instala o mypy nele e verifica de fato — fecha o ciclo da política sem custo de LLM.
                     <button
                       className="btn"
-                      title="Re-rodar a verificação (compileall/mypy) sobre as propostas já geradas — sem regenerar. Use depois de Preparar ambiente."
+                      title={t("plan.regateTitle")}
                       onClick={() => post({ type: "project/regate" })}
                     >
-                      <Icon name="refresh" size={13} /> Re-verificar contrato
+                      <Icon name="refresh" size={13} /> {t("plan.regate")}
                     </button>
                   )}
-                  <button className="btn p" disabled={!anyComplete} title="Aplicar todos os arquivos gerados, na ordem de dependência" onClick={() => post({ type: "proposal/applyAll" })}>
-                    <Icon name="check" size={13} /> Aplicar tudo
+                  <button className="btn p" disabled={!anyComplete} title={t("plan.applyAllTitle")} onClick={() => post({ type: "proposal/applyAll" })}>
+                    <Icon name="check" size={13} /> {t("plan.applyAll")}
                   </button>
                 </>
               )}
@@ -1195,9 +1209,9 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal inspect-modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-title">
-          <Icon name="database" size={15} color="#7fb3d5" /> Índice · o que o FORGE injeta
+          <Icon name="database" size={15} color="#7fb3d5" /> {t("insp.title")}
           <div className="spacer" />
-          <span className="icon-btn" title="Fechar" onClick={onClose}>
+          <span className="icon-btn" title={t("common.close")} onClick={onClose}>
             <Icon name="x" size={15} />
           </span>
         </div>
@@ -1207,7 +1221,7 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
             <Icon name="puzzle" size={12} /> Skills {insp ? `· ${insp.skills.length}` : ""}
           </button>
           <button className={`inspect-tab ${tab === "rag" ? "on" : ""}`} onClick={() => setTab("rag")}>
-            <Icon name="database" size={12} /> RAG {rag ? `· ${rag.files} arq.` : ""}
+            <Icon name="database" size={12} /> RAG {rag ? t("insp.ragFiles", { count: rag.files }) : ""}
           </button>
         </div>
 
@@ -1219,13 +1233,13 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
             <div className="inspect-stack">
               <div className="inspect-back">
                 <button className="btn" onClick={() => setSelSkill(null)}>
-                  ← voltar
+                  {t("insp.back")}
                 </button>
                 <span className="inspect-path">{insp?.skills.find((s) => s.name === selSkill)?.relFile}</span>
               </div>
               <div className="inspect-detail full">
                 {body === undefined ? (
-                  <div className="profile-empty">carregando…</div>
+                  <div className="profile-empty">{t("common.loading")}</div>
                 ) : (
                   <div className="inspect-md">
                     <Markdown text={body} />
@@ -1236,9 +1250,9 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
           ) : (
             <div className="inspect-list full">
               {!insp ? (
-                <div className="profile-empty">carregando…</div>
+                <div className="profile-empty">{t("common.loading")}</div>
               ) : insp.skills.length === 0 ? (
-                <div className="profile-empty">nenhuma skill</div>
+                <div className="profile-empty">{t("insp.noSkills")}</div>
               ) : (
                 insp.skills.map((s) => (
                   <div key={s.name} className="inspect-item roomy" onClick={() => openSkill(s)}>
@@ -1258,13 +1272,13 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
           <div className="inspect-stack">
             <div className="inspect-back">
               <button className="btn" onClick={() => setSelFile(null)}>
-                ← voltar
+                {t("insp.back")}
               </button>
               <span className="inspect-path">{selFile}</span>
             </div>
             <div className="inspect-detail full">
               {chunks === undefined ? (
-                <div className="profile-empty">carregando…</div>
+                <div className="profile-empty">{t("common.loading")}</div>
               ) : (
                 chunks.map((c) => (
                   <div key={c.id} className="rag-chunk">
@@ -1272,7 +1286,7 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
                       L{c.startLine}–{c.endLine}
                       {c.symbol ? ` · ${c.symbol}` : ""}
                       <span className="spacer" />
-                      {c.hasVector ? "vetor ✓" : "sem vetor"}
+                      {c.hasVector ? t("insp.vector") : t("insp.noVector")}
                     </div>
                     <pre className="rag-chunk-body">{c.preview}</pre>
                   </div>
@@ -1283,22 +1297,23 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
         ) : (
           <div className="inspect-list full">
             {!rag ? (
-              <div className="profile-empty">carregando…</div>
+              <div className="profile-empty">{t("common.loading")}</div>
             ) : (
               <>
                 <div className="rag-status">
                   <div>
-                    modo <b>{rag.mode}</b> · {rag.ready ? "pronto" : "indexando…"}
+                    {t("insp.mode")} <b>{rag.mode}</b> · {rag.ready ? t("insp.ready") : t("insp.indexing")}
                   </div>
                   <div>
-                    {rag.files} arquivos · {rag.chunks} chunks{rag.capped ? ` (teto ${rag.maxChunks})` : ""}
+                    {t("insp.stats", { files: rag.files, chunks: rag.chunks })}
+                    {rag.capped ? ` ${t("insp.cap", { max: rag.maxChunks })}` : ""}
                   </div>
                   <div className="muted">
-                    {rag.mode === "embeddings" ? `${rag.embeddingModel}${rag.dimensions ? ` · ${rag.dimensions}d` : ""}` : "BM25 lexical (sem embeddings)"}
+                    {rag.mode === "embeddings" ? `${rag.embeddingModel}${rag.dimensions ? ` · ${rag.dimensions}d` : ""}` : t("insp.lexical")}
                   </div>
                 </div>
                 {rag.fileList.length === 0 ? (
-                  <div className="profile-empty">nada indexado</div>
+                  <div className="profile-empty">{t("insp.nothingIndexed")}</div>
                 ) : (
                   rag.fileList.map((f) => (
                     <div key={f.relPath} className="inspect-item roomy" onClick={() => openFile(f.relPath)}>
@@ -1320,11 +1335,13 @@ function InspectPanel({ state, onClose, initialSkill }: { state: UIState; onClos
 // Charter Wizard: redige Propósito/Regras/RF/RNF com auxílio do modelo e grava no .forge/project.md.
 // Cada seção tem um textarea (fonte da verdade no estado global) e "Redigir com IA", que envia o
 // rascunho atual como brief e substitui o conteúdo pelo texto do modelo.
-const CHARTER_UI: { key: CharterKey; label: string; rows: number; ph: string }[] = [
-  { key: "purpose", label: "Propósito", rows: 3, ph: "O que a aplicação faz, para quem e qual o valor…" },
-  { key: "rules", label: "Regras do projeto", rows: 5, ph: "- sempre use type hints\n- nunca logue segredos" },
-  { key: "fr", label: "Requisitos funcionais", rows: 6, ph: "- RF-01: o sistema deve autenticar via licença Ed25519" },
-  { key: "nfr", label: "Requisitos não funcionais", rows: 6, ph: "- RNF-01: p95 < 200ms\n- RNF-02: LGPD — sem PII em logs" },
+// label/placeholder são CHAVES do catálogo (resolvidas via t() no render — const módulo-nível avalia
+// antes do initLocale); `key` é a chave ESTÁVEL do protocolo (nunca traduz).
+const CHARTER_UI: { key: CharterKey; labelKey: MessageKey; rows: number; phKey: MessageKey }[] = [
+  { key: "purpose", labelKey: "chart.purpose", rows: 3, phKey: "chart.purposePh" },
+  { key: "rules", labelKey: "chart.rules", rows: 5, phKey: "chart.rulesPh" },
+  { key: "fr", labelKey: "chart.fr", rows: 6, phKey: "chart.frPh" },
+  { key: "nfr", labelKey: "chart.nfr", rows: 6, phKey: "chart.nfrPh" },
 ];
 
 function CharterWizard({
@@ -1342,17 +1359,15 @@ function CharterWizard({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal charter-modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-title">
-          <Icon name="sparkles" size={15} color="#c9a26d" /> Charter do projeto
+          <Icon name="sparkles" size={15} color="#c9a26d" /> {t("chart.title")}
           <div className="spacer" />
-          <span className="icon-btn" title="Fechar" onClick={onClose}>
+          <span className="icon-btn" title={t("common.close")} onClick={onClose}>
             <Icon name="x" size={15} />
           </span>
         </div>
-        <div className="charter-hint">
-          Redija com o modelo e salve — o charter vira contexto fixo (pinned) em toda geração do FORGE.
-        </div>
+        <div className="charter-hint">{t("chart.hint")}</div>
         {!charter ? (
-          <div className="profile-empty">carregando…</div>
+          <div className="profile-empty">{t("common.loading")}</div>
         ) : (
           <>
             {CHARTER_UI.map((sec) => {
@@ -1361,18 +1376,18 @@ function CharterWizard({
               return (
                 <div key={sec.key} className="charter-sec">
                   <div className="profile-sec" style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
-                    {sec.label}
+                    {t(sec.labelKey)}
                     <div className="spacer" />
                     <button
                       className="btn"
                       disabled={drafting}
-                      title="Redigir/estruturar esta seção com o modelo, a partir do que você escreveu"
+                      title={t("chart.draftTitle")}
                       // sections: o estado ATUAL do wizard (inclui o não salvo) — um Propósito recém-
                       // digitado ancora a redação de Regras/RF/RNF vazios sem exigir "Salvar" antes.
                       onClick={() => post({ type: "charter/draft", section: sec.key, brief: charter.sections[sec.key], sections: charter.sections })}
                     >
                       <Icon name={drafting ? "refresh" : "sparkles"} size={12} className={drafting ? "spin" : ""} />{" "}
-                      {drafting ? "redigindo…" : "Redigir com IA"}
+                      {drafting ? t("chart.drafting") : t("chart.draft")}
                     </button>
                   </div>
                   {note && (
@@ -1385,7 +1400,7 @@ function CharterWizard({
                   <textarea
                     className="charter-input"
                     rows={sec.rows}
-                    placeholder={sec.ph}
+                    placeholder={t(sec.phKey)}
                     value={charter.sections[sec.key]}
                     disabled={drafting}
                     onChange={(e) => dispatch({ kind: "charter/edit", section: sec.key, text: e.target.value })}
@@ -1394,22 +1409,22 @@ function CharterWizard({
               );
             })}
             <div className="actions" style={{ marginTop: 12, justifyContent: "flex-end", gap: 8 }}>
-              <button className="btn" title="Abrir o .forge/project.md cru no editor" onClick={() => post({ type: "profile/open" })}>
-                <Icon name="code" size={13} /> abrir .md
+              <button className="btn" title={t("chart.openMdTitle")} onClick={() => post({ type: "profile/open" })}>
+                <Icon name="code" size={13} /> {t("chart.openMd")}
               </button>
               <button
                 className="btn"
                 disabled={state.busy || anyDrafting || !(charter.sections.fr.trim() || charter.sections.nfr.trim())}
-                title="Gerar testes de aceitação (test-first) a partir dos Requisitos Funcionais/Não Funcionais"
+                title={t("chart.genTestsTitle")}
                 onClick={() => {
                   // bolha fiel: mostra no transcript os requisitos efetivamente enviados ao modelo.
                   const reqs = [charter.sections.fr.trim(), charter.sections.nfr.trim()].filter(Boolean).join("\n\n");
-                  dispatch({ kind: "pushUser", text: `Gerar testes de aceitação a partir destes requisitos:\n\n${reqs}` });
+                  dispatch({ kind: "pushUser", text: `${t("chart.genTestsEcho")}\n\n${reqs}` });
                   post({ type: "charter/genTests", fr: charter.sections.fr, nfr: charter.sections.nfr });
                   onClose();
                 }}
               >
-                <Icon name="terminal" size={13} /> Gerar testes
+                <Icon name="terminal" size={13} /> {t("chart.genTests")}
               </button>
               <button
                 className="btn p"
@@ -1419,7 +1434,7 @@ function CharterWizard({
                   onClose(); // fecha o modal e volta à tela principal (o toast "Charter salvo…" confirma)
                 }}
               >
-                <Icon name="check" size={13} /> Salvar
+                <Icon name="check" size={13} /> {t("common.save")}
               </button>
             </div>
           </>
@@ -1432,12 +1447,12 @@ function CharterWizard({
 function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | null; onClose: () => void; onWizard: () => void }): JSX.Element {
   const s = profile?.stack;
   const stackRows: [string, string | undefined][] = [
-    ["Linguagem", s?.language],
-    ["Pacotes", s?.packaging],
-    ["Lint/format", s?.lintFormat.join(", ") || undefined],
-    ["Tipos", s?.types.join(", ") || undefined],
-    ["Testes", s?.tests],
-    ["Libs", s?.libs.slice(0, 12).join(", ") || undefined],
+    [t("prof.language"), s?.language],
+    [t("prof.packaging"), s?.packaging],
+    [t("prof.lint"), s?.lintFormat.join(", ") || undefined],
+    [t("prof.types"), s?.types.join(", ") || undefined],
+    [t("prof.tests"), s?.tests],
+    [t("prof.libs"), s?.libs.slice(0, 12).join(", ") || undefined],
   ];
   const detected = stackRows.filter(([, v]) => v);
   return (
@@ -1445,9 +1460,9 @@ function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | n
       <div className="modal profile-modal" onClick={(e) => e.stopPropagation()}>
         {/* Header FIXO: fechar sem rolar (em laptop de pouca altura a caixa TODA rolava). */}
         <div className="card-title">
-          <Icon name="list-check" size={15} color="#4ec9b0" /> Perfil do projeto
+          <Icon name="list-check" size={15} color="#4ec9b0" /> {t("prof.title")}
           <div className="spacer" />
-          <span className="icon-btn" title="Fechar" onClick={onClose}>
+          <span className="icon-btn" title={t("common.close")} onClick={onClose}>
             <Icon name="x" size={15} />
           </span>
         </div>
@@ -1457,11 +1472,11 @@ function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | n
         <div className="profile-body">
           <div className="profile-grid">
             <div>
-              <div className="profile-sec">Stack detectada · automática</div>
+              <div className="profile-sec">{t("prof.stack")}</div>
               {!profile ? (
-                <div className="profile-empty">carregando…</div>
+                <div className="profile-empty">{t("common.loading")}</div>
               ) : detected.length === 0 ? (
-                <div className="profile-empty">nada detectado neste workspace</div>
+                <div className="profile-empty">{t("prof.nothingDetected")}</div>
               ) : (
                 <div className="profile-stack">
                   {detected.map(([k, v]) => (
@@ -1474,18 +1489,18 @@ function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | n
               )}
             </div>
             <div>
-              <div className="profile-sec">Papel</div>
+              <div className="profile-sec">{t("prof.role")}</div>
               <div className="profile-row">
-                <span style={{ color: profile?.role ? "#cfcfcf" : "#7a7a7a" }}>{profile?.role ?? "não definido"}</span>
+                <span style={{ color: profile?.role ? "#cfcfcf" : "#7a7a7a" }}>{profile?.role ?? t("prof.roleUndefined")}</span>
                 <div className="spacer" />
                 <button className="btn" onClick={() => post({ type: "profile/pickRole" })}>
-                  <Icon name="users" size={12} /> {profile?.role ? "Alterar" : "Definir"}
+                  <Icon name="users" size={12} /> {profile?.role ? t("prof.change") : t("prof.define")}
                 </button>
               </div>
 
-              <div className="profile-sec">Regras · {profile?.rules.length ?? 0}</div>
+              <div className="profile-sec">{t("prof.rules", { count: profile?.rules.length ?? 0 })}</div>
               <div className="profile-rules">
-                {profile && profile.rules.length === 0 && <div className="profile-empty">nenhuma regra ainda</div>}
+                {profile && profile.rules.length === 0 && <div className="profile-empty">{t("prof.noRules")}</div>}
                 {(profile?.rules ?? []).map((r, i) => (
                   <div key={i} className="profile-rule">
                     <Icon name="point" size={13} /> {r}
@@ -1498,11 +1513,11 @@ function ProfilePanel({ profile, onClose, onWizard }: { profile: ProfileView | n
 
         {/* Footer FIXO: ações sempre visíveis. */}
         <div className="actions" style={{ marginTop: 10, marginBottom: 0, justifyContent: "flex-end", gap: 8 }}>
-          <button className="btn" title="Abrir o .forge/project.md cru no editor" onClick={() => post({ type: "profile/open" })}>
-            <Icon name="code" size={13} /> abrir .md
+          <button className="btn" title={t("chart.openMdTitle")} onClick={() => post({ type: "profile/open" })}>
+            <Icon name="code" size={13} /> {t("chart.openMd")}
           </button>
-          <button className="btn p" title="Redigir propósito, regras e requisitos com o modelo" onClick={onWizard}>
-            <Icon name="sparkles" size={13} /> Editar com wizard
+          <button className="btn p" title={t("prof.wizardTitle")} onClick={onWizard}>
+            <Icon name="sparkles" size={13} /> {t("prof.wizard")}
           </button>
         </div>
       </div>
@@ -1535,7 +1550,7 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
     <div className="assistant">
       {m.skills.map((s) => (
         <div key={s} className="skill-badge">
-          <Icon name="puzzle" size={13} /> Skill aplicada · {s}
+          <Icon name="puzzle" size={13} /> {t("asst.skillApplied", { name: s })}
         </div>
       ))}
       {m.reasoning && (
@@ -1546,7 +1561,7 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
               size={12}
               style={{ transform: showReasoning ? "none" : "rotate(-90deg)", transition: "transform .12s" }}
             />
-            {thinking ? "Raciocinando…" : "Raciocínio"}
+            {thinking ? t("asst.reasoningLive") : t("asst.reasoning")}
             {thinking && <Icon name="refresh" size={11} className="spin" style={{ marginLeft: 2 }} />}
           </button>
           {showReasoning && (
@@ -1567,7 +1582,7 @@ function AssistantBlock({ m, dispatch }: { m: MessageVM; dispatch: React.Dispatc
       )}
       {!displayText && !m.reasoning && m.streaming && !hasCards && (
         <div className="assistant-text" style={{ color: "#7a7a7a" }}>
-          <Icon name="refresh" size={13} className="spin" /> gerando…
+          <Icon name="refresh" size={13} className="spin" /> {t("common.generating")}
         </div>
       )}
       {previews.map((b, idx) => (
@@ -1606,15 +1621,15 @@ function PreviewCard({ block }: { block: PartialFileBlock }): JSX.Element {
       <div className="diff-card">
         <div className="diff-head">
           <span className="left">
-            <Icon name="file-code" size={13} color="#4ec9b0" /> {block.path || "novo arquivo…"}
+            <Icon name="file-code" size={13} color="#4ec9b0" /> {block.path || t("pv.newFile")}
           </span>
           {live ? (
             <span className="gen-pill">
-              <Icon name="refresh" size={12} className="spin" /> gerando…
+              <Icon name="refresh" size={12} className="spin" /> {t("common.generating")}
             </span>
           ) : (
             <span className="gen-pill" style={{ color: "var(--green-soft)" }}>
-              <Icon name="check" size={12} /> pronto
+              <Icon name="check" size={12} /> {t("pv.ready")}
             </span>
           )}
         </div>
@@ -1624,11 +1639,11 @@ function PreviewCard({ block }: { block: PartialFileBlock }): JSX.Element {
         </pre>
       </div>
       <div className="actions">
-        <button className="btn p" disabled title="Disponível assim que a geração concluir">
-          <Icon name="check" size={13} /> Aplicar e abrir
+        <button className="btn p" disabled title={t("pv.availableAfter")}>
+          <Icon name="check" size={13} /> {t("pv.applyOpen")}
         </button>
         <button className="btn" disabled>
-          <Icon name="git-compare" size={13} /> Ver diff
+          <Icon name="git-compare" size={13} /> {t("common.viewDiff")}
         </button>
       </div>
     </div>
@@ -1638,14 +1653,14 @@ function PreviewCard({ block }: { block: PartialFileBlock }): JSX.Element {
 function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch<Action> }): JSX.Element {
   const v = p.validation;
   const gateFailed = v && !v.running && !v.gateOk;
-  const labels = v?.results.map((r) => r.label).join(" + ") || "validação";
+  const labels = v?.results.map((r) => r.label).join(" + ") || t("prop.validationFallback");
   const skipped = v?.results.filter((r) => r.status === "skipped").map((r) => r.label) ?? [];
   const cell = p.proposal.cell;
   // Artefato renderável (.html/.svg): "executar" vira "visualizar" (abre no painel de preview).
   const renderable = !cell && isRenderablePath(p.proposal.filePath);
   const openPreview = () => post({ type: "preview/open", filePath: p.proposal.filePath, proposalId: p.proposal.id });
   const [menuOpen, setMenuOpen] = useState(false);
-  const applyLabel = cell ? (cell.op === "add" ? "Inserir célula" : `Substituir célula [${cell.index}]`) : "Aplicar e abrir";
+  const applyLabel = cell ? (cell.op === "add" ? t("prop.insertCell") : t("prop.replaceCell", { index: cell.index ?? "" })) : t("pv.applyOpen");
 
   return (
     <div>
@@ -1653,16 +1668,16 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
         <div className="diff-head">
           <span className="left">
             <Icon name={cell ? "terminal" : "code"} size={13} color="#4ec9b0" />{" "}
-            {cell ? `célula · ${p.proposal.filePath} · ${p.proposal.summary}` : `diff · ${p.proposal.filePath}`}
+            {cell ? `${t("prop.cell")} · ${p.proposal.filePath} · ${p.proposal.summary}` : `diff · ${p.proposal.filePath}`}
           </span>
           {!cell && (
             // O detector de completude (cerca-aberta/elipse) só roda em blocos forge-file; para células
             // não há verificação, então não afirmamos completude que não checamos.
             <span
               className={`seal ${p.proposal.partial ? "partial" : "ok"}`}
-              title={p.proposal.partial ? "Geração parcial — o arquivo pode estar incompleto" : "Arquivo completo (sem truncamento nem elipses)"}
+              title={p.proposal.partial ? t("prop.partialSealTitle") : t("prop.completeSealTitle")}
             >
-              {p.proposal.partial ? "⚠ parcial" : "✓ completo"}
+              {p.proposal.partial ? t("prop.partialSeal") : t("prop.completeSeal")}
             </span>
           )}
           <span className="diff-lang">{p.proposal.language}</span>
@@ -1672,8 +1687,7 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
 
       {p.proposal.partial && p.status !== "applied" && (
         <div className="assistant-warning" style={{ marginTop: 4 }}>
-          <Icon name="alert-triangle" size={14} /> Geração parcial — o arquivo pode estar incompleto. Peça para
-          continuar ou regenerar antes de aplicar.
+          <Icon name="alert-triangle" size={14} /> {t("prop.partialWarning")}
         </div>
       )}
 
@@ -1681,16 +1695,16 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
         <div className={`validation ${v.running ? "run" : v.gateOk ? "ok" : "fail"}`}>
           <Icon name={v.running ? "refresh" : "list-check"} size={14} className={v.running ? "spin" : ""} />
           {v.running ? (
-            "Validação local · executando…"
+            t("prop.validationRunning")
           ) : (
             <>
-              Validação local · {labels}
+              {t("prop.validation")} · {labels}
               <span className="sep">·</span>
               <span className="gate">
                 <Icon name={v.gateOk ? "shield-check" : "alert-triangle"} size={13} />
-                {v.gateOk ? "gate ok" : "gate reprovado"}
+                {v.gateOk ? t("prop.gateOk") : t("prop.gateFailed")}
               </span>
-              {skipped.length > 0 && <span style={{ color: "#7a7a7a" }}>· {skipped.join(", ")} indisponível</span>}
+              {skipped.length > 0 && <span style={{ color: "#7a7a7a" }}>· {t("prop.unavailable", { labels: skipped.join(", ") })}</span>}
             </>
           )}
         </div>
@@ -1699,45 +1713,39 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
       {p.status === "applied" ? (
         <div className="actions">
           <div className="status-applied" style={{ marginBottom: 0 }}>
-            <Icon name="check" size={13} /> {cell ? "Célula aplicada" : `Aplicado em ${p.proposal.filePath}`}
+            <Icon name="check" size={13} /> {cell ? t("prop.cellApplied") : t("prop.appliedAt", { path: p.proposal.filePath })}
           </div>
           <div className="spacer" />
           {cell ? (
-            <button className="btn" title="Executar esta célula (captura a saída)" onClick={() => post({ type: "cell/run", proposalId: p.proposal.id })}>
-              <Icon name="player-play" size={12} /> Executar célula
+            <button className="btn" title={t("prop.runCellTitle")} onClick={() => post({ type: "cell/run", proposalId: p.proposal.id })}>
+              <Icon name="player-play" size={12} /> {t("prop.runCell")}
             </button>
           ) : renderable ? (
-            <button className="btn" title="Abrir o preview deste arquivo (painel ao lado)" onClick={openPreview}>
-              <Icon name="eye" size={12} /> Visualizar
+            <button className="btn" title={t("prop.previewTitle")} onClick={openPreview}>
+              <Icon name="eye" size={12} /> {t("prop.preview")}
             </button>
           ) : p.run?.running ? (
-            <button className="btn" disabled title="Execução em andamento">
-              <Icon name="refresh" size={12} className="spin" /> Executando…
+            <button className="btn" disabled title={t("prop.runningTitle")}>
+              <Icon name="refresh" size={12} className="spin" /> {t("prop.running")}
             </button>
           ) : (
             <button
               className="btn"
-              title="Executar este arquivo no terminal (com auto-cura)"
+              title={t("prop.runFileTitle")}
               onClick={() => post({ type: "run/file", filePath: p.proposal.filePath, proposalId: p.proposal.id })}
             >
-              <Icon name="player-play" size={12} /> {p.run ? "Reexecutar" : "Executar"}
+              <Icon name="player-play" size={12} /> {p.run ? t("prop.rerun") : t("prop.run")}
             </button>
           )}
         </div>
       ) : p.status === "discarded" ? (
-        <div className="status-discarded">Descartado.</div>
+        <div className="status-discarded">{t("prop.discarded")}</div>
       ) : (
         <div className="actions">
           <button
             className="btn p"
             disabled={!!(v && (v.running || gateFailed))}
-            title={
-              gateFailed
-                ? "Quality gate reprovado — corrija antes de aplicar"
-                : cell
-                ? "Aplicar a célula e abrir o notebook"
-                : "Gravar o arquivo e abri-lo no editor"
-            }
+            title={gateFailed ? t("prop.applyGateFailedTitle") : cell ? t("prop.applyCellTitle") : t("prop.applyFileTitle")}
             onClick={() => post({ type: "proposal/apply", proposalId: p.proposal.id })}
           >
             <Icon name="check" size={13} /> {applyLabel}
@@ -1748,30 +1756,30 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
             <button
               className="btn"
               style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
-              title="Aplicar por cima do gate reprovado — você revisou e assume a responsabilidade. Fica registrado no diagnóstico."
+              title={t("prop.forceTitle")}
               onClick={() => post({ type: "proposal/apply", proposalId: p.proposal.id, force: true })}
             >
-              <Icon name="alert-triangle" size={13} /> Aplicar assim mesmo, revisei
+              <Icon name="alert-triangle" size={13} /> {t("prop.force")}
             </button>
           )}
           {!cell && (
             <button
               className="btn"
               disabled={!!(v && (v.running || gateFailed))}
-              title={renderable ? "Gravar o arquivo e abrir o preview" : "Aplicar o arquivo e executá-lo no terminal"}
+              title={renderable ? t("prop.applyPreviewTitle") : t("prop.applyRunTitle")}
               onClick={() =>
                 post({ type: renderable ? "proposal/applyAndPreview" : "proposal/applyAndRun", proposalId: p.proposal.id })
               }
             >
-              <Icon name={renderable ? "eye" : "player-play"} size={13} /> {renderable ? "Aplicar e visualizar" : "Aplicar e executar"}
+              <Icon name={renderable ? "eye" : "player-play"} size={13} /> {renderable ? t("prop.applyPreview") : t("prop.applyRun")}
             </button>
           )}
           <button className="btn" onClick={() => post({ type: "proposal/viewDiff", proposalId: p.proposal.id })}>
-            <Icon name="git-compare" size={13} /> Ver diff
+            <Icon name="git-compare" size={13} /> {t("common.viewDiff")}
           </button>
           <div className="spacer" />
           <div className="ovf">
-            <button className="btn ovf-btn" title="Mais ações" onClick={() => setMenuOpen((vv) => !vv)}>
+            <button className="btn ovf-btn" title={t("prop.moreActions")} onClick={() => setMenuOpen((vv) => !vv)}>
               <Icon name="dots" size={14} />
             </button>
             {menuOpen && (
@@ -1784,7 +1792,7 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
                       post({ type: "proposal/copy", proposalId: p.proposal.id });
                     }}
                   >
-                    <Icon name="copy" size={13} /> Copiar conteúdo
+                    <Icon name="copy" size={13} /> {t("prop.copyContent")}
                   </button>
                   <button
                     onClick={() => {
@@ -1792,7 +1800,7 @@ function ProposalCard({ p, dispatch }: { p: ProposalVM; dispatch: React.Dispatch
                       post({ type: "proposal/discard", proposalId: p.proposal.id });
                     }}
                   >
-                    <Icon name="x" size={13} /> Descartar
+                    <Icon name="x" size={13} /> {t("prop.discard")}
                   </button>
                 </div>
               </>
@@ -1865,7 +1873,7 @@ function RunCard({
     !running &&
     /ModuleNotFoundError|No module named/.test(run.output) &&
     ((!isTests && status === "fail") || (isTests && outcome === "error"));
-  const title = run.label ? run.label : run.command || "execução";
+  const title = run.label ? run.label : run.command || t("run.fallbackTitle");
   const headIcon = running ? "refresh" : status === "ok" ? "check" : status === "skip" ? "info-circle" : isTests ? "terminal" : "alert-triangle";
   // O conserto precisa voltar como bloco forge-file — o ÚNICO formato que o FORGE transforma numa
   // proposta com botão "Aplicar". Sem reforçar isto, o modelo tende a devolver o código em cerca
@@ -1889,16 +1897,16 @@ function RunCard({
         <div className="spacer" />
         {running ? (
           <span>
-            {run.where === "terminal" ? "no terminal" : "executando"} · {(elapsed / 1000).toFixed(1)}s
+            {run.where === "terminal" ? t("run.inTerminal") : t("run.executing")} · {(elapsed / 1000).toFixed(1)}s
           </span>
         ) : run.skippedReason ? (
-          <span>indisponível</span>
+          <span>{t("run.unavailable")}</span>
         ) : (
           <span>
             {outcome
               ? npmTests && outcome === "env-missing"
-                ? "runner ausente — rode npm install"
-                : testOutcomeLabel(outcome, run.exitCode)
+                ? t("run.npmMissing")
+                : outcomeLabel(outcome, run.exitCode)
               : run.ok
               ? "ok"
               : `exit ${run.exitCode}`}{" "}
@@ -1911,20 +1919,20 @@ function RunCard({
       </div>
       {open && (run.skippedReason || run.output || running) && (
         <pre className="run-output" ref={outRef}>
-          {run.skippedReason ? run.skippedReason : run.output || (running ? "iniciando…" : "(sem saída)")}
+          {run.skippedReason ? run.skippedReason : run.output || (running ? t("run.starting") : t("run.noOutput"))}
         </pre>
       )}
       {running ? (
         <div className="actions" style={{ marginTop: 7 }}>
           {run.where === "terminal" && run.runId && (
-            <button className="btn" title="Focar o terminal de execução" onClick={() => post({ type: "run/focusTerminal", runId: run.runId! })}>
-              <Icon name="terminal" size={12} /> Ver no terminal
+            <button className="btn" title={t("run.viewTerminalTitle")} onClick={() => post({ type: "run/focusTerminal", runId: run.runId! })}>
+              <Icon name="terminal" size={12} /> {t("run.viewTerminal")}
             </button>
           )}
           <div className="spacer" />
           {run.runId && (
-            <button className="btn" title="Interromper a execução" onClick={() => post({ type: "run/cancel", runId: run.runId! })}>
-              <Icon name="x" size={12} /> Cancelar
+            <button className="btn" title={t("run.cancelTitle")} onClick={() => post({ type: "run/cancel", runId: run.runId! })}>
+              <Icon name="x" size={12} /> {t("common.cancel")}
             </button>
           )}
         </div>
@@ -1932,21 +1940,13 @@ function RunCard({
         (canFix || envIssue || testsEnvMissing || onDismiss) && (
           <div className="actions" style={{ marginTop: 7 }}>
             {testsEnvMissing && (
-              <button
-                className="btn p"
-                title="Instalar o pytest no venv do projeto (cria o .venv se preciso) e rodar os testes"
-                onClick={() => post({ type: "tests/run" })}
-              >
-                <Icon name="plug" size={12} /> Instalar pytest e rodar
+              <button className="btn p" title={t("run.installPytestTitle")} onClick={() => post({ type: "tests/run" })}>
+                <Icon name="plug" size={12} /> {t("run.installPytest")}
               </button>
             )}
             {envIssue && (
-              <button
-                className="btn p"
-                title="Criar o venv e instalar as dependências detectadas (depois clique em Reexecutar)"
-                onClick={() => post({ type: "env/prepare" })}
-              >
-                <Icon name="plug" size={12} /> Preparar ambiente
+              <button className="btn p" title={t("run.prepareEnvTitle")} onClick={() => post({ type: "env/prepare" })}>
+                <Icon name="plug" size={12} /> {t("run.prepareEnv")}
               </button>
             )}
             {canFix && (
@@ -1957,13 +1957,13 @@ function RunCard({
                   post({ type: "chat/send", text: fixText });
                 }}
               >
-                <Icon name="refresh" size={12} /> Corrigir com FORGE
+                <Icon name="refresh" size={12} /> {t("run.fix")}
               </button>
             )}
             <div className="spacer" />
             {onDismiss && (
-              <button className="btn" title="Ocultar este cartão da conversa" onClick={onDismiss}>
-                <Icon name="x" size={12} /> Ocultar
+              <button className="btn" title={t("run.hideTitle")} onClick={onDismiss}>
+                <Icon name="x" size={12} /> {t("run.hide")}
               </button>
             )}
           </div>
@@ -1978,27 +1978,48 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+// Rótulo exibido do outcome de testes — camada de i18n da webview (o outcome semântico continua em
+// src/util/testOutcome.ts; rótulo é apresentação, então mora aqui com t()).
+function outcomeLabel(o: TestOutcome, exitCode: number | null): string {
+  switch (o) {
+    case "passed":
+      return t("run.outcome.passed");
+    case "failed":
+      return t("run.outcome.failed");
+    case "no-tests":
+      return t("run.outcome.noTests");
+    case "env-missing":
+      return t("run.outcome.envMissing");
+    default:
+      return t("run.outcome.error", { code: exitCode ?? "?" });
+  }
+}
+
 // Cartão pós-seleção do PAPEL: mostra a linha de estilo que passa a entrar em todo prompt e as
 // skills relacionadas (chips clicáveis → Índice). Substitui o toast de 5s que sumia antes de ler.
 function RoleCardView({ card, onDismiss, onOpenSkill }: { card: RoleCard; onDismiss: () => void; onOpenSkill: (name: string) => void }): JSX.Element {
   return (
     <div className="role-card">
       <div className="role-card-head">
-        <Icon name="users" size={14} color="#c9a26d" /> Papel definido: <b>{card.label}</b>
+        <Icon name="users" size={14} color="#c9a26d" /> {t("role.defined")} <b>{card.label}</b>
         <div className="spacer" />
-        <span className="icon-btn" title="Dispensar" onClick={onDismiss}>
+        <span className="icon-btn" title={t("common.dismiss")} onClick={onDismiss}>
           <Icon name="x" size={13} />
         </span>
       </div>
       <div className="role-card-guidance">{card.guidance}</div>
       {card.skills.length > 0 && (
         <div className="role-card-skills">
-          <span className="role-card-cap">skills relacionadas:</span>
+          <span className="role-card-cap">{t("role.relatedSkills")}</span>
           {card.skills.map((s) => (
             <span
               key={s.name}
               className={`role-chip${s.installed ? "" : " off"}`}
-              title={s.installed ? `${s.name} · ${s.enabled ? "habilitada" : "desabilitada"} — clique para ver o SKILL.md no Índice` : `${s.name} · não instalada neste ambiente`}
+              title={
+                s.installed
+                  ? t("role.chipTitle", { name: s.name, state: s.enabled ? t("role.enabled") : t("role.disabled") })
+                  : t("role.notInstalled", { name: s.name })
+              }
               onClick={s.installed ? () => onOpenSkill(s.name) : undefined}
             >
               <span className="dot" style={{ background: s.installed ? (s.enabled ? "#86c98e" : "#c9a26d") : "#555" }} />
@@ -2012,11 +2033,12 @@ function RoleCardView({ card, onDismiss, onOpenSkill }: { card: RoleCard; onDism
 }
 
 // Heurística conservadora: mensagens em tom de diretiva (proibição/preferência) são candidatas a
-// virar regra do projeto. Evita perguntas e tarefas longas; foca em "nunca/sempre/evite/prefira…".
+// virar regra do projeto. Evita perguntas e tarefas longas; foca em "nunca/sempre/evite/prefira…"
+// (e nos equivalentes en — o usuário en escreve diretivas em inglês).
 function looksLikeRule(text: string): boolean {
-  const t = text.trim();
-  if (!t || t.length > 200 || t.includes("?")) return false;
-  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use)\b/i.test(t);
+  const s = text.trim();
+  if (!s || s.length > 200 || s.includes("?")) return false;
+  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use|never|always|avoid|prefer|standardiz|do not use|don'?t use)\b/i.test(s);
 }
 
 // "Promover correção a regra": quando a última mensagem do usuário soa como diretiva, oferece
@@ -2025,13 +2047,15 @@ function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   if (!lastUser || dismissed.has(lastUser.id)) return null;
-  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*)\]\s*/, "").trim();
+  // O prefixo de eco "[TDD]/[Projeto · …]" é gerado com o rótulo TRADUZIDO (t("comp.project")) — o
+  // strip precisa casar as duas formas (label traduzido não é chave: aqui a comparação lista ambas).
+  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*|Project[^\]]*)\]\s*/, "").trim();
   if (!looksLikeRule(rule)) return null;
   const close = () => setDismissed((s) => new Set(s).add(lastUser.id));
   return (
     <div className="profile-suggest">
       <Icon name="list-check" size={13} />
-      <span>Salvar como regra do projeto?</span>
+      <span>{t("sugg.saveRule")}</span>
       <span className="rule-preview" title={rule}>“{rule.length > 60 ? rule.slice(0, 60) + "…" : rule}”</span>
       <div className="spacer" />
       <button
@@ -2041,9 +2065,9 @@ function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element
           close();
         }}
       >
-        <Icon name="check" size={12} /> Salvar
+        <Icon name="check" size={12} /> {t("common.save")}
       </button>
-      <button className="icon-btn" title="Dispensar" onClick={close}>
+      <button className="icon-btn" title={t("common.dismiss")} onClick={close}>
         <Icon name="x" size={13} />
       </button>
     </div>
@@ -2080,23 +2104,23 @@ function DodBar({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<
     if (lastApplied) post({ type: "run/file", filePath: lastApplied.proposal.filePath, proposalId: lastApplied.proposal.id });
   };
   const doReview = () => {
-    dispatch({ kind: "pushUser", text: "Revisar minhas alterações (git diff)." });
+    dispatch({ kind: "pushUser", text: t("echo.review") });
     post({ type: "review/changes" });
   };
 
   const items: { key: string; label: string; status: DodStatus; onClick?: () => void; title: string }[] = [
-    { key: "aplicado", label: "Aplicado", status: applied, title: "Há alteração aplicada ao arquivo" },
-    { key: "gate", label: "Gate", status: gate, title: "Validação local (lint/tipos) da última alteração aplicada" },
-    { key: "executa", label: "Executa", status: run, onClick: runLastApplied, title: "Executar o último arquivo aplicado" },
-    { key: "testes", label: "Testes", status: tests, onClick: () => post({ type: "tests/run" }), title: "Rodar a suíte de testes" },
-    { key: "revisao", label: "Revisão", status: review, onClick: doReview, title: "Revisar as alterações (IA in-network)" },
+    { key: "aplicado", label: t("dod.applied"), status: applied, title: t("dod.appliedTitle") },
+    { key: "gate", label: t("dod.gate"), status: gate, title: t("dod.gateTitle") },
+    { key: "executa", label: t("dod.run"), status: run, onClick: runLastApplied, title: t("dod.runTitle") },
+    { key: "testes", label: t("dod.tests"), status: tests, onClick: () => post({ type: "tests/run" }), title: t("dod.testsTitle") },
+    { key: "revisao", label: t("dod.review"), status: review, onClick: doReview, title: t("dod.reviewTitle") },
   ];
 
   return (
     <div className={`dod ${ready ? "ready" : ""}`}>
       <span className="dod-title">
         <Icon name={ready ? "circle-check" : "list-check"} size={13} color={ready ? "#3fb950" : "#8b8b8b"} />
-        {ready ? "Pronto" : "Definição de Pronto"}
+        {ready ? t("dod.ready") : t("dod.title")}
       </span>
       {items.map((it) => (
         <span

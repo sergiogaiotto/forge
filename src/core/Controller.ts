@@ -1380,7 +1380,7 @@ export class Controller {
       network: { internalOnly: !policy.allowExternal, allowedHosts: policy.allowedHosts },
       observability: { traceActive: this.config.gatewayUrl() !== "", managedByAdmin: true, login: osLogin() },
       identity,
-      search: { enabled: this.config.search().server !== "", label: "Buscar (rede interna)" },
+      search: { enabled: this.config.search().server !== "", label: hostT("search.label") },
       mcp: this.registry.toViews(),
       skills: this.skills.map(this.toSkillView),
       rag: {

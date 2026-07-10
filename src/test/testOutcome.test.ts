@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { pytestOutcome, testOutcomeLabel } from "../util/testOutcome";
+import { pytestOutcome } from "../util/testOutcome";
+import { setLocaleForTest, t } from "../../webview-ui/src/i18n";
 
 test("pytestOutcome: mapeia os exit codes do pytest (0/1/5/erro)", () => {
   assert.equal(pytestOutcome(0, ""), "passed");
@@ -40,10 +41,17 @@ test("pytestOutcome: 'No module named' de OUTRO pacote não é erro de ambiente 
   assert.equal(pytestOutcome(1, "No module named pytest_cov"), "failed");
 });
 
-test("testOutcomeLabel: rótulos legíveis por outcome", () => {
-  assert.match(testOutcomeLabel("passed", 0), /verdes/);
-  assert.match(testOutcomeLabel("failed", 1), /falharam/);
-  assert.match(testOutcomeLabel("no-tests", 5), /nenhum teste/);
-  assert.match(testOutcomeLabel("env-missing", 9009), /pytest ausente/);
-  assert.match(testOutcomeLabel("error", 3), /erro do pytest/);
+// PR7 (i18n): o rótulo do outcome saiu do util (semântica) e virou catálogo da webview — rótulo é
+// apresentação e traduz por locale (o DevPanel resolve via outcomeLabel/t()).
+test("rótulos do outcome: catálogo cobre os dois locales (o util manteve só a semântica)", () => {
+  setLocaleForTest("pt-BR");
+  assert.match(t("run.outcome.passed"), /verdes/);
+  assert.match(t("run.outcome.failed"), /falharam/);
+  assert.match(t("run.outcome.noTests"), /nenhum teste/);
+  assert.match(t("run.outcome.envMissing"), /pytest ausente/);
+  assert.equal(t("run.outcome.error", { code: 3 }), "erro do pytest (exit 3)");
+  setLocaleForTest("en");
+  assert.match(t("run.outcome.passed"), /green/);
+  assert.equal(t("run.outcome.error", { code: "?" }), "pytest error (exit ?)");
+  setLocaleForTest("pt-BR");
 });
