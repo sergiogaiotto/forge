@@ -7,6 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { buildManifest, verifyManifest } from "./integrity.mjs";
 
 export const VERSION = "1.0.0";
 
@@ -262,6 +263,114 @@ function hardenFile(file, io) {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Gera o manifesto de integridade `<file>.integrity.json` (SHA-256 + assinatura Ed25519 dos bytes do
+ * .vsix, se a chave privada do admin estiver disponível). O admin PUBLICA esse manifesto ao lado do
+ * .vsix; o destinatário verifica com `verify-vsix` antes de instalar.
+ */
+export function signVsix({ args, keysDir, io }) {
+  const file = args.file && args.file !== "true" ? path.resolve(String(args.file)) : "";
+  if (!file) {
+    io.err("✗ informe --file <caminho-do-.vsix>");
+    return 2;
+  }
+  if (!fs.existsSync(file)) {
+    io.err(`✗ arquivo não encontrado: ${file}`);
+    return 1;
+  }
+  const bytes = fs.readFileSync(file);
+  const fileName = path.basename(file);
+  // Versão: extrai de forge-<ver>.vsix quando possível (só rótulo do manifesto).
+  const vm = /-(\d+\.\d+\.\d+)\.vsix$/.exec(fileName);
+  const version = vm ? vm[1] : null;
+
+  // Assinatura é OPCIONAL: sem private.pem, gera só o hash (integridade) e avisa.
+  const privPath = path.join(keysDir, "private.pem");
+  const infoPath = path.join(keysDir, "keyinfo.json");
+  let signer;
+  if (fs.existsSync(privPath) && fs.existsSync(infoPath)) {
+    const { keyId } = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+    signer = { privateKeyPem: fs.readFileSync(privPath, "utf8"), keyId };
+  }
+  const manifest = buildManifest({ fileName, version, bytes, signer });
+  const outPath = file + ".integrity.json";
+  fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n");
+
+  if (args.json === "true") {
+    io.out(JSON.stringify({ ok: true, manifest: outPath, signed: !!manifest.signature, ...manifest }, null, 2));
+    return 0;
+  }
+  io.out(`✓ Manifesto de integridade gerado: ${outPath}`);
+  io.out(`  sha256: ${manifest.sha256}`);
+  io.out(`  size:   ${manifest.size} bytes`);
+  if (manifest.signature) {
+    io.out(`  assinado com a chave ${manifest.keyId} (proveniência garantida).`);
+  } else {
+    io.err("  ⚠ SEM assinatura (chave privada ausente em " + keysDir + "): só a integridade (hash) está garantida.");
+    io.err("    Rode este comando na máquina do admin (com private.pem) para assinar antes de publicar.");
+  }
+  io.out("  Publique o .integrity.json ao lado do .vsix; o destinatário verifica com 'verify-vsix'.");
+  return 0;
+}
+
+/**
+ * Verifica um .vsix contra seu manifesto (`<file>.integrity.json` por padrão) e a chave pública.
+ * A pública vem de --pubkey <b64>, senão do keyinfo.json do keysDir. Integridade (hash) sempre;
+ * proveniência (assinatura) quando o manifesto está assinado.
+ */
+export function verifyVsix({ args, keysDir, io, embeddedKeyPath }) {
+  const file = args.file && args.file !== "true" ? path.resolve(String(args.file)) : "";
+  if (!file) {
+    io.err("✗ informe --file <caminho-do-.vsix>");
+    return 2;
+  }
+  if (!fs.existsSync(file)) {
+    io.err(`✗ arquivo não encontrado: ${file}`);
+    return 1;
+  }
+  const manifestPath = args.manifest && args.manifest !== "true" ? path.resolve(String(args.manifest)) : file + ".integrity.json";
+  if (!fs.existsSync(manifestPath)) {
+    io.err(`✗ manifesto não encontrado: ${manifestPath} (gere com 'sign-vsix')`);
+    return 1;
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch (e) {
+    io.err(`✗ manifesto ilegível: ${e.message}`);
+    return 1;
+  }
+  // Chave pública, em ordem de precedência: --pubkey → keyinfo.json do keys-dir → chave EMBUTIDA no
+  // cliente (src/license/embeddedKey.ts). O fallback embutido é o que permite verificar a proveniência
+  // num checkout do repo SEM --pubkey — é a MESMA chave que o cliente confia para validar licenças.
+  let publicKeyB64 = args.pubkey && args.pubkey !== "true" ? String(args.pubkey) : "";
+  if (!publicKeyB64) {
+    const infoPath = path.join(keysDir, "keyinfo.json");
+    if (fs.existsSync(infoPath)) publicKeyB64 = JSON.parse(fs.readFileSync(infoPath, "utf8")).publicKeyB64 || "";
+  }
+  if (!publicKeyB64 && embeddedKeyPath && fs.existsSync(embeddedKeyPath)) {
+    const m = /EMBEDDED_PUBLIC_KEY_B64\s*=\s*"([^"]+)"/.exec(fs.readFileSync(embeddedKeyPath, "utf8"));
+    if (m) publicKeyB64 = m[1];
+  }
+  const requireSignature = args.strict === "true" || args["require-signature"] === "true";
+  const bytes = fs.readFileSync(file);
+  const r = verifyManifest({ bytes, manifest, publicKeyB64: publicKeyB64 || undefined, requireSignature });
+
+  if (args.json === "true") {
+    io.out(JSON.stringify({ ...r, file: path.basename(file), manifest: path.basename(manifestPath) }, null, 2));
+    return r.ok ? 0 : 1;
+  }
+  if (r.ok && r.provenance === "signed") {
+    io.out(`✓ ${path.basename(file)}: íntegro E assinado pela chave do admin.`);
+  } else if (r.ok && r.provenance === "unsigned") {
+    io.out(`✓ ${path.basename(file)}: íntegro (hash confere).`);
+    io.err("  ⚠ manifesto SEM assinatura — a proveniência (veio do admin?) não foi verificada. Use --strict para EXIGIR assinatura.");
+  } else {
+    io.err(`✗ ${path.basename(file)}: FALHOU — ${r.reason}`);
+  }
+  return r.ok ? 0 : 1;
+}
+
 export function helpText(bin) {
   return [
     `FORGE admin CLI — gestão de chaves Ed25519 e emissão de licenças (v${VERSION})`,
@@ -270,10 +379,12 @@ export function helpText(bin) {
     `  ${bin} <comando> [opções]`,
     "",
     "COMANDOS:",
-    "  keygen    Gera o par Ed25519 (uma vez / rotação). Emite a chave pública embutida.",
-    "  issue     Emite uma licença assinada.",
-    "  revoke    Adiciona um subject à lista de revogação.",
-    "  help      Mostra esta ajuda.  version  Mostra a versão.",
+    "  keygen       Gera o par Ed25519 (uma vez / rotação). Emite a chave pública embutida.",
+    "  issue        Emite uma licença assinada.",
+    "  revoke       Adiciona um subject à lista de revogação.",
+    "  sign-vsix    Gera o manifesto de integridade (SHA-256 + assinatura) de um .vsix.",
+    "  verify-vsix  Verifica a integridade/proveniência de um .vsix contra seu manifesto.",
+    "  help         Mostra esta ajuda.  version  Mostra a versão.",
     "",
     "GLOBAIS:",
     "  --keys-dir <dir>   Diretório das chaves (default: ao lado do executável).",
@@ -297,11 +408,19 @@ export function helpText(bin) {
     "revoke:",
     "  --subject <email>      Titular a revogar.  --reason <texto>  Motivo (opcional).",
     "",
+    "sign-vsix / verify-vsix:",
+    "  --file <arq.vsix>      O pacote a assinar/verificar (obrigatório).",
+    "  --manifest <arq>       Manifesto a verificar (default: <file>.integrity.json).",
+    "  --pubkey <b64>         Chave pública (default: keyinfo.json do keys-dir; senão a embutida no cliente).",
+    "  --strict               (verify) EXIGE assinatura válida — sem ela, falha (exit≠0). Use em CI/release.",
+    "",
     "EXEMPLOS:",
     `  ${bin} keygen --key-id ed25519-2026-01`,
     `  ${bin} issue --subject dev@claro.com --org claro --scope codegen,skills --days 365`,
     `  ${bin} issue --subject dev@claro.com --expires-at 2027-01-01 --out licenca.txt`,
     `  ${bin} revoke --subject dev@claro.com --reason "desligamento"`,
+    `  ${bin} sign-vsix --file forge-2.9.0.vsix`,
+    `  ${bin} verify-vsix --file forge-2.9.0.vsix`,
   ].join("\n");
 }
 
@@ -339,6 +458,10 @@ export function runCli(argv, ctx) {
         return issue({ args, keysDir, io });
       case "revoke":
         return revoke({ args, keysDir, io });
+      case "sign-vsix":
+        return signVsix({ args, keysDir, io });
+      case "verify-vsix":
+        return verifyVsix({ args, keysDir, io, embeddedKeyPath: ctx.defaultEmbeddedTarget });
       default:
         io.err(`✗ comando desconhecido: ${cmd}\n`);
         io.out(helpText(ctx.bin));
