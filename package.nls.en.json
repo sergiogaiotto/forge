@@ -1,0 +1,21 @@
+{
+  "cmd.focus": "Open panel",
+  "cmd.openOnRight": "Open on the right (secondary side bar)",
+  "cmd.newTask": "New task",
+  "cmd.activateLicense": "Activate license",
+  "cmd.setupProvider": "Configure provider",
+  "cmd.reindexSkills": "Reindex skills",
+  "cmd.reindexCodebase": "Reindex codebase (RAG)",
+  "cmd.runActiveFile": "Run active file",
+  "cmd.reviewChanges": "Review changes (in-network AI)",
+  "cmd.runTests": "Run tests (pytest)",
+  "cmd.signOut": "Sign out (clear license and credentials)",
+  "cmd.showOutput": "Show logs",
+  "cmd.exportDiagnostics": "Export diagnostics (redacted bundle)",
+  "cmd.setupObservability": "Configure observability (Langfuse)",
+  "cmd.setMaxOutput": "Set max output tokens",
+  "cmd.prepareEnv": "Prepare environment (venv + dependencies)",
+  "cmd.pickRole": "Set project role",
+  "cmd.inspectIndex": "Inspect index (skills + RAG)",
+  "cmd.openProfile": "Open project profile"
+}

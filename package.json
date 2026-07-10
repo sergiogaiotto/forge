@@ -82,111 +82,111 @@
     "commands": [
       {
         "command": "forge.focus",
-        "title": "Abrir painel",
+        "title": "%cmd.focus%",
         "category": "FORGE",
         "icon": "$(flame)"
       },
       {
         "command": "forge.openOnRight",
-        "title": "Abrir na direita (barra secundária)",
+        "title": "%cmd.openOnRight%",
         "category": "FORGE",
         "icon": "$(layout-sidebar-right)"
       },
       {
         "command": "forge.newTask",
-        "title": "Nova tarefa",
+        "title": "%cmd.newTask%",
         "category": "FORGE",
         "icon": "$(add)"
       },
       {
         "command": "forge.activateLicense",
-        "title": "Ativar licença",
+        "title": "%cmd.activateLicense%",
         "category": "FORGE"
       },
       {
         "command": "forge.setupProvider",
-        "title": "Configurar provedor",
+        "title": "%cmd.setupProvider%",
         "category": "FORGE"
       },
       {
         "command": "forge.reindexSkills",
-        "title": "Reindexar skills",
+        "title": "%cmd.reindexSkills%",
         "category": "FORGE",
         "icon": "$(refresh)"
       },
       {
         "command": "forge.reindexCodebase",
-        "title": "Reindexar codebase (RAG)",
+        "title": "%cmd.reindexCodebase%",
         "category": "FORGE",
         "icon": "$(database)"
       },
       {
         "command": "forge.runActiveFile",
-        "title": "Executar arquivo atual",
+        "title": "%cmd.runActiveFile%",
         "category": "FORGE",
         "icon": "$(play)"
       },
       {
         "command": "forge.reviewChanges",
-        "title": "Revisar alterações (IA in-network)",
+        "title": "%cmd.reviewChanges%",
         "category": "FORGE",
         "icon": "$(checklist)"
       },
       {
         "command": "forge.runTests",
-        "title": "Rodar testes (pytest)",
+        "title": "%cmd.runTests%",
         "category": "FORGE",
         "icon": "$(beaker)"
       },
       {
         "command": "forge.signOut",
-        "title": "Sair (limpar licença e credenciais)",
+        "title": "%cmd.signOut%",
         "category": "FORGE"
       },
       {
         "command": "forge.showOutput",
-        "title": "Mostrar logs",
+        "title": "%cmd.showOutput%",
         "category": "FORGE",
         "icon": "$(output)"
       },
       {
         "command": "forge.exportDiagnostics",
-        "title": "Exportar diagnóstico (bundle redigido)",
+        "title": "%cmd.exportDiagnostics%",
         "category": "FORGE",
         "icon": "$(bug)"
       },
       {
         "command": "forge.setupObservability",
-        "title": "Configurar observabilidade (Langfuse)",
+        "title": "%cmd.setupObservability%",
         "category": "FORGE"
       },
       {
         "command": "forge.setMaxOutput",
-        "title": "Definir máximo de tokens de saída",
+        "title": "%cmd.setMaxOutput%",
         "category": "FORGE",
         "icon": "$(symbol-numeric)"
       },
       {
         "command": "forge.prepareEnv",
-        "title": "Preparar ambiente (venv + dependências)",
+        "title": "%cmd.prepareEnv%",
         "category": "FORGE",
         "icon": "$(plug)"
       },
       {
         "command": "forge.pickRole",
-        "title": "Definir papel no projeto",
+        "title": "%cmd.pickRole%",
         "category": "FORGE",
         "icon": "$(person)"
       },
       {
         "command": "forge.inspectIndex",
-        "title": "Inspecionar índice (skills + RAG)",
+        "title": "%cmd.inspectIndex%",
         "category": "FORGE",
         "icon": "$(database)"
       },
       {
         "command": "forge.openProfile",
-        "title": "Abrir perfil do projeto",
+        "title": "%cmd.openProfile%",
         "category": "FORGE",
         "icon": "$(list-tree)"
       }
