@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ValidatorResult } from "../shared/protocol";
 import {
+  contractGateDecision,
+  contractUnverified,
   GateCheckResult,
   isTscSyntaxError,
   mypyUnavailable,
@@ -25,6 +27,30 @@ test("requiresContractConfirmation: só Python + partial exige confirmação (Go
   assert.equal(requiresContractConfirmation("go", true), false);
   assert.equal(requiresContractConfirmation("java", true), false);
   assert.equal(requiresContractConfirmation("typescript", true), false);
+});
+
+test("contractGateDecision: contrato verificado segue; sem política, confirmação (force fura); com política, BLOQUEIO (force NÃO fura)", () => {
+  // contrato verificado (ou não-Python): segue direto, política e force irrelevantes (matriz completa)
+  assert.equal(contractGateDecision(false, false, false), "proceed");
+  assert.equal(contractGateDecision(false, false, true), "proceed");
+  assert.equal(contractGateDecision(false, true, false), "proceed");
+  assert.equal(contractGateDecision(false, true, true), "proceed");
+  // padrão (sem política): confirmação explícita — "Aplicar sem verificar contrato" (force) fura
+  assert.equal(contractGateDecision(true, false, false), "confirm");
+  assert.equal(contractGateDecision(true, false, true), "proceed");
+  // política do admin (blockUnverifiedContract): bloqueio SEM escape — nem o force fura
+  assert.equal(contractGateDecision(true, true, false), "block");
+  assert.equal(contractGateDecision(true, true, true), "block");
+});
+
+test("contractUnverified: Python parcial OU advisory conta como não-verificado (degradar o ambiente não pode furar a política); verde e não-Python, não", () => {
+  assert.equal(contractUnverified("python", true, false), true); // compilou sem mypy (parcial)
+  assert.equal(contractUnverified("python", false, true), true); // NADA rodou (sem python) — estado mais fraco não pode ter enforcement mais fraco
+  assert.equal(contractUnverified("python", false, false), false); // gate verde: contrato verificado
+  // fora de Python o mypy não é o contrato — política não se aplica
+  assert.equal(contractUnverified("go", true, true), false);
+  assert.equal(contractUnverified("typescript", true, true), false);
+  assert.equal(contractUnverified("java", true, true), false);
 });
 
 test("normGatePath: separadores pra frente, sem ./ inicial nem / final", () => {

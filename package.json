@@ -340,6 +340,12 @@
           "default": true,
           "markdownDescription": "Gate de **definição de pronto** (P2) no **Modo Projeto**: quando o projeto foi gerado por completo mas falta **manifesto de dependências** (requirements.txt / pyproject.toml), **qualquer teste** (test_*.py / tests/) ou um **README com \"## Como rodar\"**, bloqueia o **Aplicar** de todos os arquivos (bloqueio + aviso, sem auto-reparo). Determinístico e conservador — só acusa ausência real. Desligue (`false`) para projetos onde teste/README não se aplicam. Respeita o `forge.validation.gateBlocksApply` mestre."
         },
+        "forge.gate.blockUnverifiedContract": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "Política do admin (**Modo Projeto**, projetos **Python**): enquanto o **contrato cross-file NÃO foi verificado** (o mypy não rodou — sem venv/mypy; ou o gate inteiro não pôde rodar), **BLOQUEIA sem escape** o Aplicar tudo, o \"Forçar bloqueados\" **e o Aplicar de cada cartão** do projeto. O caminho de saída é **Preparar ambiente** (cria o venv) e **Re-verificar contrato** (o gate instala o mypy no venv e re-verifica as MESMAS propostas, sem regenerar). Escopo `machine`: valor em `.vscode/settings.json` do repositório é **ignorado** (workspace não desliga a política); deliberadamente **não** respeita o mestre `forge.validation.gateBlocksApply` (que é sobrescritível por workspace). Em rede sem PyPI, disponibilize um mirror interno (`pip config set global.index-url …`) antes de ligar — sem mypy instalável, projetos Python ficam bloqueados. Default `false` (confirmação explícita, comportamento clássico)."
+        },
         "forge.gate.security": {
           "type": "string",
           "enum": [

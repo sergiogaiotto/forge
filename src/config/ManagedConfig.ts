@@ -86,6 +86,15 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("gate.definitionOfDone", true);
   }
 
+  // Política do admin (gate autossuficiente): contrato cross-file NÃO verificado (Python — mypy não
+  // rodou, ou o gate inteiro não rodou) BLOQUEIA sem escape o Aplicar tudo, o "Forçar bloqueados" e o
+  // apply por-arquivo. Saída: "Preparar ambiente" + "Re-verificar contrato" (sem regenerar). Escopo
+  // machine (workspace não desliga) e deliberadamente NÃO respeita o mestre gateBlocksApply — o mestre é
+  // sobrescritível por workspace e o AND reabriria o bypass. Default false (confirmação explícita).
+  blockUnverifiedContract(): boolean {
+    return this.cfg().get<boolean>("gate.blockUnverifiedContract", false);
+  }
+
   // Gate de SEGURANÇA (P2) no Modo Projeto: roda o bandit (SAST) sobre o projeto gerado. "conservative"
   // (padrão): só achados de severidade ALTA E confiança ALTA bloqueiam o Aplicar (senha hardcoded, eval de
   // input, cripto fraca); o resto é advisory. "advisory": nada bloqueia (só surface). "off": não roda.

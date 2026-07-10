@@ -65,7 +65,7 @@ import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/i
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
 import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
-import { GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, requiresContractConfirmation, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
+import { contractGateDecision, contractUnverified, GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, requiresContractConfirmation, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
 import { parseFileBlocks } from "../util/fileBlocks";
@@ -152,7 +152,15 @@ export class Controller {
   private projectSession: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework; brief: string; files: BlueprintFileView[] } | null = null;
   // Última geração fechou o gate como PARCIAL num projeto Python (compilou, mas o mypy não verificou o
   // contrato cross-file) → "Aplicar tudo" exige confirmação explícita (forceBlocked). Ver runProjectGate.
+  // Suprimido quando há OUTRO bloqueio duro (o dev resolve/força esse primeiro) — semântica de CONFIRMAÇÃO.
   private gateContractUnverified = false;
+  // A verdade CRUA para a POLÍTICA (forge.gate.blockUnverifiedContract): contrato não verificado em
+  // Python, SEM carve-out por outros bloqueios e contando advisory/falha do gate (nada rodou = nada
+  // verificado). Guarda o "Aplicar tudo", o "Forçar bloqueados" E o apply por-arquivo. Ver runProjectGate.
+  private gateContractUnverifiedHard = false;
+  // Argumentos do último runProjectGate — permitem RE-RODAR o gate sobre as propostas existentes
+  // ("Re-verificar contrato" pós-"Preparar ambiente") sem regenerar o projeto via LLM.
+  private lastGateRun: { language: ProjectLanguage; architecture: ProjectArchitecture; complete: boolean } | null = null;
   // Cache da janela de contexto SERVIDA pelo gateway, por (type::baseUrl::modelId). Auto-detectada uma vez
   // via GET /v1/models quando a config maxContextWindow é 0. Presença = já probado (valor 0 = sem detecção;
   // não re-proba). Ver util/servedWindow.ts e ensureServedWindow.
@@ -1084,6 +1092,7 @@ export class Controller {
       return;
     }
     this.gateContractUnverified = false; // nova geração: zera o estado; o gate repõe o valor correto ao rodar
+    this.gateContractUnverifiedHard = false;
     // Pré-checagens (as mesmas do startTask) ANTES de marcar "gerando" — senão uma falha precoce (licença/
     // e-mail/provedor) deixaria o modal preso em "gerando…" (o project/done só é postado após o run).
     if (!(await this.ensureSession())) {
@@ -1135,14 +1144,33 @@ export class Controller {
   // cartão individual (que avisa). Ao final, resumo honesto (aplicados/bloqueados/parciais pulados).
   async applyAllProposals(opts?: { forceBlocked?: boolean }): Promise<void> {
     if (!this.currentTask) return;
-    // Contrato cross-file NÃO verificado (Python compilou mas o mypy não rodou): exige confirmação explícita
-    // antes de gravar tudo — evita selar como "pronto" um projeto que pode ter drift de contrato (import/
-    // atributo fantasma) e não rodar. `forceBlocked` = o dev confirmou ("Aplicar sem verificar contrato").
-    if (this.gateContractUnverified && !opts?.forceBlocked) {
-      this.post({ type: "notice", level: "warn", message: 'O contrato cross-file NÃO foi verificado (o mypy não rodou — sem venv/mypy). Rode "Preparar ambiente" para verificar de fato, ou clique "Aplicar sem verificar contrato" se revisou e assume.' });
+    // Contrato cross-file NÃO verificado: por padrão exige confirmação explícita (`forceBlocked` =
+    // "Aplicar sem verificar contrato") antes de gravar tudo — evita selar como "pronto" um projeto com
+    // drift de contrato (import/atributo fantasma). Com a política do admin
+    // `forge.gate.blockUnverifiedContract`, vira BLOQUEIO sem escape: o force NÃO fura — nem pelo
+    // "Forçar bloqueados" (a política usa o flag CRU, sem o carve-out por outros bloqueios da confirmação).
+    const policyOn = this.config.blockUnverifiedContract();
+    const decision = contractGateDecision(policyOn ? this.gateContractUnverifiedHard : this.gateContractUnverified, policyOn, !!opts?.forceBlocked);
+    if (decision === "block") {
+      this.post({ type: "notice", level: "warn", message: 'Bloqueado por política do admin (forge.gate.blockUnverifiedContract): o contrato cross-file precisa ser VERIFICADO antes de aplicar tudo. Rode "Preparar ambiente" (cria o venv) e depois "Re-verificar contrato" (o gate instala o mypy no venv e verifica as MESMAS propostas, sem regenerar).' });
+      log.info("Aplicar tudo bloqueado: contrato cross-file não verificado + política blockUnverifiedContract");
       return;
     }
+    if (decision === "confirm") {
+      // Diálogo NATIVO (não depende do estado do webview): se a política foi desligada depois do gate
+      // ter postado contractBlocked, o botão de confirmação não está renderizado — o diálogo garante
+      // que o caminho recomendado pelo aviso sempre exista.
+      const confirmLabel = "Aplicar sem verificar contrato";
+      const pick = await vscode.window.showWarningMessage(
+        "O contrato cross-file NÃO foi verificado (o mypy não rodou — sem venv/mypy). Aplicar tudo assim mesmo?",
+        { modal: true, detail: 'Para verificar de fato: "Preparar ambiente" e depois "Re-verificar contrato". Aplicar sem verificação fica registrado no diagnóstico.' },
+        confirmLabel
+      );
+      if (pick !== confirmLabel) return;
+      log.info("Aplicar tudo com contrato não verificado — confirmado pelo dev (diálogo nativo)");
+    }
     this.gateContractUnverified = false; // seguimos para aplicar (verificado, ou confirmado) → limpa o estado
+    this.gateContractUnverifiedHard = false;
     const norm = (p: string) => p.replace(/^[./\\]+/, ""); // casa './x' com 'x' do blueprint
     const order = this.projectSession ? this.projectSession.files.map((f) => norm(f.path)) : [];
     const rank = (fp: string) => {
@@ -1487,6 +1515,9 @@ export class Controller {
         break;
       case "env/prepare":
         await this.prepareEnv();
+        break;
+      case "project/regate":
+        await this.reRunProjectGate();
         break;
       case "chat/abort":
         this.currentTask?.abort();
@@ -2040,6 +2071,10 @@ export class Controller {
         mode === "project" && this.projectSession ? (filePath) => this.markProjectFileComplete(filePath) : undefined,
     });
     this.currentTask = task;
+    // Nova geração substitui as propostas — o veredito de contrato do fluxo ANTERIOR não pode vazar
+    // para as propostas novas (o gate desta geração repõe os valores corretos ao rodar).
+    this.gateContractUnverified = false;
+    this.gateContractUnverifiedHard = false;
 
     // Registra o turno do usuário; o turno do assistente é anexado após a conclusão.
     this.history.push({ role: "user", content: text });
@@ -2205,6 +2240,19 @@ export class Controller {
     }
   }
 
+  // "Re-verificar contrato": re-roda o gate sobre as propostas EXISTENTES — o caminho legítimo pós-
+  // "Preparar ambiente" (o venv novo permite ao ensureGateMypy instalar o mypy e verificar de fato),
+  // sem regenerar o projeto via LLM (que descartaria exatamente o artefato que o dev revisou).
+  async reRunProjectGate(): Promise<void> {
+    if (!this.currentTask || !this.lastGateRun || this.currentTask.proposals.size === 0) {
+      this.post({ type: "notice", level: "warn", message: "Nada para re-verificar — gere o projeto primeiro." });
+      return;
+    }
+    this.post({ type: "notice", level: "info", message: "Re-rodando a verificação sobre as propostas existentes…" });
+    const g = this.lastGateRun;
+    await this.runProjectGate(g.language, g.architecture, g.complete);
+  }
+
   // Gate workspace-wide do Modo Projeto (Onda 1). Materializa TODAS as propostas juntas numa árvore temp
   // (contida via safeWorkspacePath), semeia `__init__.py` sintéticos e roda compileall + mypy sobre o
   // CONJUNTO — pegando o drift de contrato que a validação por-arquivo (isolada) não vê. O resultado por
@@ -2226,6 +2274,9 @@ export class Controller {
     const codeRe = language === "typescript" ? /\.[tj]sx?$/i : language === "go" ? /\.go$/i : language === "java" ? /\.java$/i : /\.py$/i;
     const hasCode = props.some((e) => codeRe.test(e.proposal.filePath));
     if (!hasCode) return null; // nada compilável na linguagem do projeto — gate não se aplica
+    // Guarda os args para o "Re-verificar contrato" (re-rodar o gate sobre as MESMAS propostas depois
+    // de "Preparar ambiente", sem regenerar via LLM).
+    this.lastGateRun = { language, architecture, complete };
 
     const gateStart = Date.now(); // P3: span do gate (compileall/mypy/arquitetura/DoD/segurança)
     let root: string | undefined;
@@ -2388,16 +2439,26 @@ export class Controller {
       // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
       const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), `… e mais ${securityAdvisories.length - 12} aviso(s) — veja o log de diagnóstico.`] : securityAdvisories;
       // Contrato cross-file NÃO verificado (Python compilou mas o mypy não rodou): "Aplicar tudo" passa a
-      // exigir confirmação. NÃO conta se já há bloqueio duro (o dev corrige/força esse primeiro).
+      // exigir confirmação. NÃO conta se já há bloqueio duro (o dev corrige/força esse primeiro) — a
+      // supressão vale SÓ para a semântica de confirmação; a POLÍTICA usa o flag CRU abaixo (senão
+      // qualquer outro bloqueio + "Forçar bloqueados" viraria bypass da política).
       this.gateContractUnverified = requiresContractConfirmation(language, gate.partial) && totalBlocked === 0 && !dodBlocksAll;
-      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: this.gateContractUnverified, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView });
+      this.gateContractUnverifiedHard = contractUnverified(language, gate.partial, gate.advisory);
+      // contractBlocked: a política do admin transforma a confirmação em bloqueio — a UI troca o botão
+      // "Aplicar sem verificar contrato" pelo caminho de verificação real (Preparar ambiente → Re-verificar).
+      const contractBlocked = this.gateContractUnverifiedHard && this.config.blockUnverifiedContract();
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: this.gateContractUnverified, contractBlocked, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView });
       log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
       return { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories };
     } catch (e) {
-      // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo.
+      // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo. MAS
+      // para a POLÍTICA, gate que não rodou = contrato não verificado (senão quebrar o gate seria o
+      // bypass): o flag CRU fica ligado em Python e o "Re-verificar contrato" permite re-tentar.
       log.warn("Gate do projeto falhou ao executar — seguindo consultivo", e);
-      this.gateContractUnverified = false; // gate não rodou (advisory) → não trava o Aplicar por confirmação
-      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, summary: "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [], security: [] });
+      this.gateContractUnverified = false; // não trava o Aplicar por CONFIRMAÇÃO (retrocompat)
+      this.gateContractUnverifiedHard = contractUnverified(language, false, true);
+      const contractBlocked = this.gateContractUnverifiedHard && this.config.blockUnverifiedContract();
+      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, contractBlocked, summary: contractBlocked ? "Não consegui rodar o gate de compilação — e a política do admin exige contrato verificado. Prepare o ambiente e re-verifique." : "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [], security: [] });
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -3518,6 +3579,14 @@ export class Controller {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry) {
       this.post({ type: "notice", level: "warn", message: "Proposta não encontrada (expirada)." });
+      return false;
+    }
+    // Política do admin (blockUnverifiedContract): o contrato não verificado bloqueia TAMBÉM o apply
+    // POR-ARQUIVO (e por consequência "Aplicar e executar/visualizar") — senão N cliques nos cartões
+    // selariam exatamente o projeto que o "Aplicar tudo" recusa. Sem política: comportamento antigo
+    // (cartão individual não exige confirmação de contrato).
+    if (this.gateContractUnverifiedHard && this.config.blockUnverifiedContract()) {
+      this.post({ type: "notice", level: "warn", message: 'Bloqueado por política do admin (forge.gate.blockUnverifiedContract): o contrato cross-file precisa ser VERIFICADO antes de aplicar arquivos do projeto. Rode "Preparar ambiente" e depois "Re-verificar contrato".' });
       return false;
     }
     // Escape CONSCIENTE do gate: "Aplicar assim mesmo, revisei" (opts.force) pula a recusa, mas o override é

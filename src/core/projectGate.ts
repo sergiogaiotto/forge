@@ -279,6 +279,27 @@ export function requiresContractConfirmation(language: ProjectLanguage, partial:
   return language === "python" && partial;
 }
 
+// A verdade CRUA para a política do admin: o contrato cross-file está verificado? Diferente da
+// confirmação acima, aqui `advisory` (NADA rodou — sem Python nenhum, ou o próprio gate falhou) TAMBÉM
+// conta como não-verificado: um estado estritamente mais fraco que o "parcial" não pode ter enforcement
+// mais fraco (senão degradar o ambiente viraria o bypass da política). E não há carve-out por outros
+// bloqueios — a supressão `totalBlocked===0` vale só para a SEMÂNTICA de confirmação. Puro/testável.
+export function contractUnverified(language: ProjectLanguage, partial: boolean, advisory: boolean): boolean {
+  return language === "python" && (partial || advisory);
+}
+
+// Decide o destino do "Aplicar tudo" quando o contrato cross-file não foi verificado. Padrão
+// (blockPolicy=false): confirmação explícita — o dev pode assumir com "Aplicar sem verificar contrato"
+// (force). Com a política do admin `forge.gate.blockUnverifiedContract`, NÃO há escape: bloqueia até o
+// contrato ser verificado de fato ("Preparar ambiente" + "Re-verificar contrato") — "projeto que roda"
+// deixa de depender do toolchain presente no ambiente do dev. Puro/testável.
+export type ContractGateDecision = "proceed" | "confirm" | "block";
+export function contractGateDecision(unverified: boolean, blockPolicy: boolean, force: boolean): ContractGateDecision {
+  if (!unverified) return "proceed";
+  if (blockPolicy) return "block";
+  return force ? "proceed" : "confirm";
+}
+
 // Consolida os resultados das checagens numa decisão de gate. Só uma checagem de GATE (gate:true) que
 // REALMENTE rodou e reprovou (status "failed") contribui bloqueio — skipped nunca bloqueia (degradação
 // segura). Uma reprovação sem erro atribuível a arquivo vira `projectErrors` (bloqueio amplo). Puro.

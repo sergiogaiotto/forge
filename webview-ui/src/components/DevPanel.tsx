@@ -1069,9 +1069,10 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                   <button className="btn" onClick={close}>
                     Fechar
                   </button>
-                  {gate && (gate.files.length > 0 || gate.dod.length > 0) && (
+                  {gate && (gate.files.length > 0 || gate.dod.length > 0) && !gate.contractBlocked && (
                     // Escape consciente do gate no lote: aplica TAMBÉM os arquivos reprovados (revisados pelo
-                    // dev). Auditável (cada um vira proposal.applied {forced}). Só aparece se há bloqueados.
+                    // dev). Auditável (cada um vira proposal.applied {forced}). Só aparece se há bloqueados —
+                    // e some sob a política de contrato (o host recusaria: o force não fura a política).
                     <button
                       className="btn"
                       style={{ borderColor: "#d1a13a", color: "#d1a13a" }}
@@ -1081,7 +1082,7 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                       <Icon name="alert-triangle" size={13} /> Forçar bloqueados
                     </button>
                   )}
-                  {gate && gate.requiresContractConfirm && !(gate.files.length > 0 || gate.dod.length > 0) && (
+                  {gate && gate.requiresContractConfirm && !gate.contractBlocked && !(gate.files.length > 0 || gate.dod.length > 0) && (
                     // Contrato cross-file NÃO verificado (o mypy não rodou): o "Aplicar tudo" pede confirmação.
                     // Este é o "sim, gravar sem verificação" — o dev revisou e assume. forceBlocked = confirmo.
                     <button
@@ -1091,6 +1092,30 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                       onClick={() => post({ type: "proposal/applyAll", forceBlocked: true })}
                     >
                       <Icon name="alert-triangle" size={13} /> Aplicar sem verificar contrato
+                    </button>
+                  )}
+                  {gate && gate.contractBlocked && (
+                    // Política do admin (forge.gate.blockUnverifiedContract): SEM escape — o contrato precisa
+                    // ser verificado de fato. Caminho: preparar o ambiente (venv) e re-verificar as MESMAS
+                    // propostas; o host recusa Aplicar tudo/Forçar/cartões enquanto isso.
+                    <button
+                      className="btn"
+                      style={{ borderColor: "#d16969", color: "#d16969" }}
+                      title="Política do admin: o contrato cross-file precisa ser verificado (mypy) antes de aplicar — sem escape. Preparar o ambiente cria o venv; depois clique em Re-verificar contrato."
+                      onClick={() => post({ type: "env/prepare" })}
+                    >
+                      <Icon name="plug" size={13} /> Verificação exigida — Preparar ambiente
+                    </button>
+                  )}
+                  {gate && (gate.contractBlocked || gate.requiresContractConfirm) && (
+                    // Re-roda o gate sobre as propostas EXISTENTES (sem regenerar): com o venv preparado, o
+                    // gate instala o mypy nele e verifica de fato — fecha o ciclo da política sem custo de LLM.
+                    <button
+                      className="btn"
+                      title="Re-rodar a verificação (compileall/mypy) sobre as propostas já geradas — sem regenerar. Use depois de Preparar ambiente."
+                      onClick={() => post({ type: "project/regate" })}
+                    >
+                      <Icon name="refresh" size={13} /> Re-verificar contrato
                     </button>
                   )}
                   <button className="btn p" disabled={!anyComplete} title="Aplicar todos os arquivos gerados, na ordem de dependência" onClick={() => post({ type: "proposal/applyAll" })}>

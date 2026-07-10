@@ -436,6 +436,30 @@ Exemplo de bloco padrão para o time:
 }
 ```
 
+**Endurecer o gate do Modo Projeto (opcional).** Por padrão, num projeto **Python** gerado sem
+`mypy` disponível, o conjunto compila mas o **contrato cross-file** (import/atributo fantasma) fica
+sem verificação — o dev vê um aviso e pode clicar *"Aplicar sem verificar contrato"*. Com:
+```jsonc
+"forge.gate.blockUnverifiedContract": true
+```
+esse escape **some**: enquanto o contrato não for verificado de fato, ficam bloqueados o **Aplicar
+tudo**, o **"Forçar bloqueados"** e o **Aplicar de cada cartão** do projeto (senão bastaria aplicar
+arquivo a arquivo). Vale também quando o gate inteiro não pôde rodar (ex.: máquina **sem Python**) —
+menos verificação nunca significa menos bloqueio. O caminho do dev: **Preparar ambiente** (cria o
+venv) e **Re-verificar contrato** (o gate instala o mypy no venv e re-verifica as **mesmas**
+propostas, sem regenerar nada).
+
+Detalhes que importam para a política valer:
+- O setting tem **escopo `machine`**: um `.vscode/settings.json` commitado no repositório **não**
+  consegue desligá-lo (distribua-o via **managed settings de usuário** — Intune/GPO — e não pelo
+  settings do repo). Ele também **ignora de propósito** o mestre `forge.validation.gateBlocksApply`,
+  que é sobrescritível por workspace.
+- A política se aplica a projetos **Python** (é onde o mypy é o verificador de contrato); demais
+  linguagens seguem o comportamento padrão.
+- Em rede **sem acesso ao PyPI**, disponibilize um **mirror interno**
+  (`pip config set global.index-url …`) antes de ligar — sem mypy instalável, projetos Python ficam
+  bloqueados até o ambiente ser preparado.
+
 ---
 
 ## 13. Revogar e rotacionar chaves
