@@ -178,7 +178,29 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       case "auditoria-pii":
         runData("auditoria-pii");
         break;
+      case "git-status":
+        runGit("status");
+        break;
+      case "git-diff":
+        runGit("diff");
+        break;
+      case "git-log":
+        runGit("log");
+        break;
+      case "git-commit":
+        // mensagem é obrigatória — orienta sem apagar o rascunho
+        dispatch({ kind: "pushLocal", text: 'Informe a mensagem: `/git-commit "sua mensagem de commit"`. Commita os arquivos rastreados modificados (com confirmação).' });
+        break;
     }
+  };
+
+  // Git GOVERNADO (Fase 4): status/diff/log são leitura; commit é escrita (o host pede confirmação via
+  // permission model). Host executa e responde com data/card — nenhum LLM no caminho.
+  const runGit = (op: "status" | "diff" | "log" | "commit", args?: string) => {
+    dispatch({ kind: "pushUser", text: `[/git-${op}]${args ? " " + args : ""}` });
+    post({ type: "git/command", op, args });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
   };
 
   // /diagrama [tema]: geração normal com prompt craftado — o diagrama nasce como PROPOSTA de arquivo
@@ -290,6 +312,11 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       }
       if (withArgs.cmd.id === "paridade" && /^[\w.:-]+\s+[\w.:-]+$/.test(withArgs.args.trim())) {
         runData("paridade", withArgs.args.trim());
+        return;
+      }
+      // /git-commit "mensagem": a cauda É a mensagem (qualquer texto). Aspas opcionais — removidas.
+      if (withArgs.cmd.id === "git-commit") {
+        runGit("commit", withArgs.args.trim().replace(/^["']|["']$/g, ""));
         return;
       }
       // Cauda que NÃO é o argumento esperado ("/sumario o que ficou pendente?") é mensagem do dev —

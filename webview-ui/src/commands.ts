@@ -105,6 +105,17 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ["dbt-tests", "testes-modelo"],
     acceptsArgs: true, // cauda = nome do modelo; sem cauda usa o arquivo ativo
   },
+  { id: "git-status", label: "/git-status", hint: "Status do repositório (branch, arquivos modificados, à frente/atrás)", icon: "git-compare", aliases: ["gs", "status-git"] },
+  { id: "git-diff", label: "/git-diff", hint: "Diferenças do working tree vs. o último commit (HEAD)", icon: "git-compare", aliases: ["gd", "diff-git"] },
+  { id: "git-log", label: "/git-log", hint: "Últimos commits (hash, autor, quando, assunto)", icon: "history", aliases: ["gl", "log-git"] },
+  {
+    id: "git-commit",
+    label: "/git-commit",
+    hint: 'Commita os arquivos RASTREADOS modificados (confirmação obrigatória). Uso: /git-commit "mensagem"',
+    icon: "check",
+    aliases: ["gc", "commit"],
+    acceptsArgs: true, // cauda = mensagem do commit
+  },
 ];
 
 // Normalização para matching: minúsculas + remoção de diacríticos (á→a, ç→c) — o dev digita

@@ -327,6 +327,23 @@ Tecle `Ctrl+Shift+P` (abre a "paleta de comandos"), digite **"FORGE"** e escolha
 | **FORGE: Mostrar logs** | abre o registro técnico (útil para reportar erros) |
 | **FORGE: Sair** | remove sua licença e credenciais (logout) |
 
+### Comandos "/" no chat (digite `/` para ver a paleta)
+
+Além dos comandos de dados (`/conexoes`, `/executar-sql`…), o FORGE tem **git governado** direto no chat:
+
+| Comando | O que faz |
+|---|---|
+| `/git-status` | branch, arquivos modificados, quantos commits à frente/atrás |
+| `/git-diff` | o que mudou no working tree vs. o último commit |
+| `/git-log` | os últimos commits (hash, autor, quando, assunto) |
+| `/git-commit "mensagem"` | commita os arquivos **rastreados** modificados — **com confirmação** |
+
+Status, diff e log são **só leitura**. O commit é **escrita**: o FORGE mostra a lista exata de arquivos que
+serão selados e **pede sua confirmação** antes de gravar, e a decisão fica **registrada na auditoria**
+(como toda escrita no FORGE). Arquivos **novos** (não rastreados) não entram — use `git add` (ou o painel
+Git do VSCode) antes. `push`, `pull` e comandos destrutivos (`reset`/`checkout`) ficam **de fora** de
+propósito — para essas use o git nativo do VSCode.
+
 ---
 
 ## 9. Problemas comuns (FAQ)

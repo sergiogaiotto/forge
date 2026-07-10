@@ -18,6 +18,7 @@ import { McpManager } from "../mcp/McpManager";
 import { McpRegistry } from "../mcp/McpRegistry";
 import { ToolApprovalGate } from "../mcp/ToolApprovalGate";
 import { PermissionAuditor, PermissionService } from "../security/permissions";
+import { buildGitArgs, commitTargets, GitOp, parseLog, parseStatusPorcelain, renderCommitResult, renderDiffCard, renderLogCard, renderStatusCard, sanitizeCommitMessage } from "../git/gitCommands";
 import { CodebaseIndex } from "../rag/CodebaseIndex";
 import { EgressEnforcer } from "../net/EgressEnforcer";
 import { SecretsStore } from "../secrets/SecretsStore";
@@ -84,6 +85,7 @@ import { renderLineage, selectLineage } from "../sql/lineage";
 import { WarehouseService } from "../warehouse/WarehouseService";
 import { decideSqlRun } from "../warehouse/governance";
 import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
+import { resolveExecutable } from "../warehouse/exec";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -1521,6 +1523,9 @@ export class Controller {
         break;
       case "data/command":
         await this.dispatchDataCommand(msg.cmd, msg.args);
+        break;
+      case "git/command":
+        await this.dispatchGitCommand(msg.op, msg.args);
         break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui, framework: msg.framework });
@@ -3116,6 +3121,77 @@ export class Controller {
 
   private dataCard(markdown: string): void {
     this.post({ type: "data/card", markdown });
+  }
+
+  // Spawn seguro do git no workspace: resolve o binário no PATH e roda com shell:FALSE — a mensagem de
+  // commit (input do dev) vai como arg de ARRAY, nunca interpretada pelo shell (mesmo racional do
+  // warehouse exec). Retorna { ok, output } capado; nunca lança para cima (fail-open).
+  private runGit(args: string[]): Promise<{ ok: boolean; output: string }> {
+    return new Promise((resolve) => {
+      const ws = this.workspaceRoot();
+      if (!ws) return resolve({ ok: false, output: "Abra uma pasta no VSCode para usar o git." });
+      const bin = resolveExecutable("git") ?? "git";
+      execFile(bin, args, { cwd: ws, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+        const output = (stdout || "") + (stderr ? (stdout ? "\n" : "") + stderr : "");
+        resolve({ ok: !err, output });
+      });
+    });
+  }
+
+  // Git GOVERNADO (Fase 4 — capacidade seletiva). status/diff/log são LEITURA (card direto); commit é
+  // ESCRITA e passa pelo PermissionService (confirmação + trail de auditoria unificado), mostrando os
+  // arquivos que serão selados. Não é agente: o dev opera cada comando. Fail-open: erro vira card.
+  async dispatchGitCommand(op: GitOp, args?: string): Promise<void> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) {
+        this.dataCard("### Git\n\nAbra uma pasta no VSCode para usar os comandos de git.");
+        return;
+      }
+      if (op === "status") {
+        const r = await this.runGit(buildGitArgs("status"));
+        if (!r.ok) return this.dataCard(renderCommitResult(false, r.output || "git indisponível ou não é um repositório."));
+        this.dataCard(renderStatusCard(parseStatusPorcelain(r.output)));
+        return;
+      }
+      if (op === "diff") {
+        const r = await this.runGit(buildGitArgs("diff"));
+        if (!r.ok) return this.dataCard(renderCommitResult(false, r.output || "git indisponível ou não é um repositório."));
+        this.dataCard(renderDiffCard(r.output));
+        return;
+      }
+      if (op === "log") {
+        const r = await this.runGit(buildGitArgs("log"));
+        if (!r.ok) return this.dataCard(renderCommitResult(false, r.output || "git indisponível ou não é um repositório."));
+        this.dataCard(renderLogCard(parseLog(r.output)));
+        return;
+      }
+      // commit: valida a mensagem, mostra o que será selado e EXIGE confirmação (permission model).
+      const msg = sanitizeCommitMessage(args);
+      if (!msg.ok) return this.dataCard(`### Git · commit\n\n${msg.error}`);
+      const st = await this.runGit(buildGitArgs("status"));
+      if (!st.ok) return this.dataCard(renderCommitResult(false, st.output || "git indisponível ou não é um repositório."));
+      const targets = commitTargets(parseStatusPorcelain(st.output));
+      if (targets.length === 0) {
+        this.dataCard("### Git · commit\n\n_Nada a commitar: nenhum arquivo **rastreado** foi modificado. (Arquivos novos exigem `git add` antes — use o painel Git do VSCode.)_");
+        return;
+      }
+      const ok = await this.permissions.confirm(
+        {
+          kind: "git.commit",
+          action: `Commit de ${targets.length} arquivo(s) rastreado(s)`,
+          subject: `${targets.length} arquivo(s)`,
+          scope: "write",
+          detail: `Mensagem: ${msg.message}\n\nArquivos:\n${targets.slice(0, 40).map((t) => "  " + t).join("\n")}${targets.length > 40 ? `\n  … e mais ${targets.length - 40}` : ""}`,
+        },
+        { confirmLabel: "Commitar" }
+      );
+      if (!ok) return this.dataCard("### Git · commit\n\n_Commit cancelado._");
+      const r = await this.runGit(buildGitArgs("commit", { message: msg.message }));
+      this.dataCard(renderCommitResult(r.ok, r.output));
+    } catch (e) {
+      this.dataCard(`### Git\n\nFalha ao executar: ${(e as Error).message}`);
+    }
   }
 
   // Despacho dos comandos de dados da paleta (Ondas 3/4). Tudo fail-open: erro vira card explicativo.
