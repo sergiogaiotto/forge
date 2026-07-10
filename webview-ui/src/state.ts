@@ -26,6 +26,7 @@ export type ProjectBrief = { text: string; language: ProjectLanguage; architectu
 export type ProjectGateState = { advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; contractBlocked?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[] };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 import { renderContextReport, renderSummarized } from "./commands";
+import { t } from "./i18n";
 export type { ProfileView } from "../../src/shared/protocol";
 
 // Re-exporta os parsers de bloco (compartilhados com o host) para os componentes da webview.
@@ -397,7 +398,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
           notes: {
             ...state.charter.notes,
             [msg.section]: empty
-              ? { level: "error" as const, message: "O modelo não retornou conteúdo para a seção. Tente de novo." }
+              ? { level: "error" as const, message: t("charter.emptyDraft") }
               : msg.warning
                 ? { level: "warn" as const, message: msg.warning }
                 : undefined,

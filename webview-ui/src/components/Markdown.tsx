@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { fileExtForLang } from "../../../src/util/codeLang";
 import { Block, Inline, parseMarkdownBlocks } from "../markdown";
 import { Icon } from "../icons";
+import { t } from "../i18n";
 import { post } from "../vscode";
 
 // Renderiza a AST de markdown (ver ../markdown.ts) como nós React. Nunca usa HTML cru: cada nó é um
@@ -56,7 +57,7 @@ function CodeBox({ lang, code, open }: { lang: string; code: string; open: boole
     );
   };
   const beginSave = () => {
-    setSavePath((p) => p || `novo_arquivo.${ext}`);
+    setSavePath((p) => p || t("md.code.newFile", { ext: ext ?? "" }));
     setSaving(true);
   };
   const confirmSave = () => {
@@ -71,29 +72,25 @@ function CodeBox({ lang, code, open }: { lang: string; code: string; open: boole
     <div className={open ? "md-code md-code-open" : "md-code"}>
       <div className="md-code-head">
         <span className="md-code-lang">
-          <Icon name="code" size={12} /> {lang || "código"}
+          <Icon name="code" size={12} /> {lang || t("md.code.lang")}
         </span>
         {open ? (
           <span className="md-code-progress">
-            <Icon name="refresh" size={11} className="spin" /> gerando…
+            <Icon name="refresh" size={11} className="spin" /> {t("md.code.generating")}
           </span>
         ) : saved ? (
           <span className="md-code-progress">
-            <Icon name="check" size={12} /> proposta criada
+            <Icon name="check" size={12} /> {t("md.code.proposalCreated")}
           </span>
         ) : (
           <span className="md-code-actions">
             {ext && (
-              <button
-                className="md-code-copy"
-                onClick={beginSave}
-                title="Salvar este código como um arquivo (vira uma proposta aplicável, com diff e gate)"
-              >
-                <Icon name="file" size={12} /> Salvar como arquivo
+              <button className="md-code-copy" onClick={beginSave} title={t("md.code.saveTitle")}>
+                <Icon name="file" size={12} /> {t("md.code.saveAsFile")}
               </button>
             )}
-            <button className="md-code-copy" onClick={copy} title="Copiar">
-              <Icon name={copied ? "check" : "copy"} size={12} /> {copied ? "Copiado" : "Copiar"}
+            <button className="md-code-copy" onClick={copy} title={t("md.code.copy")}>
+              <Icon name={copied ? "check" : "copy"} size={12} /> {copied ? t("md.code.copied") : t("md.code.copy")}
             </button>
           </span>
         )}
@@ -108,15 +105,15 @@ function CodeBox({ lang, code, open }: { lang: string; code: string; open: boole
               if (e.key === "Enter") confirmSave();
               else if (e.key === "Escape") setSaving(false);
             }}
-            placeholder="caminho/relativo/arquivo.ext"
+            placeholder={t("md.code.pathPlaceholder")}
             spellCheck={false}
             autoFocus
           />
-          <button className="md-code-copy" onClick={confirmSave} title="Criar a proposta aplicável">
-            <Icon name="check" size={12} /> Salvar
+          <button className="md-code-copy" onClick={confirmSave} title={t("md.code.confirmTitle")}>
+            <Icon name="check" size={12} /> {t("md.code.save")}
           </button>
-          <button className="md-code-copy" onClick={() => setSaving(false)} title="Cancelar">
-            <Icon name="x" size={12} /> Cancelar
+          <button className="md-code-copy" onClick={() => setSaving(false)} title={t("md.code.cancel")}>
+            <Icon name="x" size={12} /> {t("md.code.cancel")}
           </button>
         </div>
       )}

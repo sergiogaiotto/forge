@@ -317,10 +317,17 @@ export function buildDbtTestsRequest(model: string): string {
   ].join("\n");
 }
 
+// Label EXIBIDO do /limpar no locale ativo, já como código markdown. Os cards o citam na prosa —
+// referenciar o literal "/limpar" mostraria um comando pt-BR a um usuário en (o label é o que a paleta
+// exibe; id/aliases garantem que as duas formas executam).
+function clearCmdLabel(): string {
+  const cmd = SLASH_COMMANDS.find((c) => c.id === "limpar");
+  return `\`${cmd ? commandLabel(cmd) : "/limpar"}\``;
+}
+
 // Cartão do /resumir: confirma a compactação do histórico do HOST (a thread visível não muda).
 export function renderSummarized(turns: number, summary: string): string {
-  const s = turns === 1 ? "" : "s";
-  return `### Histórico compactado\n\n${turns} turno${s} ${turns === 1 ? "virou" : "viraram"} o resumo abaixo — é ISTO que o modelo passa a receber como contexto da conversa (a thread acima é só exibição; \`/limpar\` zera tudo).\n\n---\n\n${summary}`;
+  return `### ${t("sum.title")}\n\n${t("sum.body", { turns, clearCmd: clearCmdLabel() })}\n\n---\n\n${summary}`;
 }
 
 const fmtK = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
@@ -338,42 +345,42 @@ export function renderContextReport(r: ContextReport): string {
   // Ocupação do PRÓXIMO envio: fixo + histórico + anexos pendentes (entram inteiros no envio).
   const estimated = r.pinnedTokens + r.historyTokens + r.attachmentTokens;
   const attach =
-    r.attachments > 0 ? `| Anexos pendentes (${r.attachments}) | ~${fmtK(r.attachmentTokens)} |` : "";
+    r.attachments > 0 ? `| ${t("ctx.attachments", { count: r.attachments })} | ~${fmtK(r.attachmentTokens)} |` : "";
   return [
-    `### Janela de contexto · ${r.modelId}`,
+    `### ${t("ctx.title")} · ${r.modelId}`,
     "",
-    `| | tokens |`,
+    `| | ${t("ctx.colTokens")} |`,
     `|---|---|`,
-    `| Janela total | ${fmtK(r.contextWindow)} |`,
-    `| Reserva de saída | ${fmtK(r.outputReserve)} |`,
-    `| Orçamento de entrada | ${fmtK(r.inputBudget)} |`,
-    `| Fixo (prompt do chat + perfil) | ~${fmtK(r.pinnedTokens)} |`,
-    `| Histórico (${r.historyTurns} turno${r.historyTurns === 1 ? "" : "s"}) | ~${fmtK(r.historyTokens)} |`,
+    `| ${t("ctx.window")} | ${fmtK(r.contextWindow)} |`,
+    `| ${t("ctx.outputReserve")} | ${fmtK(r.outputReserve)} |`,
+    `| ${t("ctx.inputBudget")} | ${fmtK(r.inputBudget)} |`,
+    `| ${t("ctx.pinned")} | ~${fmtK(r.pinnedTokens)} |`,
+    `| ${t("ctx.history", { count: r.historyTurns })} | ~${fmtK(r.historyTokens)} |`,
     ...(attach ? [attach] : []),
     "",
-    `Ocupação estimada do próximo envio: ${bar(estimated, r.inputBudget)}`,
+    `${t("ctx.estimate")} ${bar(estimated, r.inputBudget)}`,
     "",
-    `RAG: ${r.ragChunks} chunk${r.ragChunks === 1 ? "" : "s"} indexado${r.ragChunks === 1 ? "" : "s"} (entram por consulta, conforme o orçamento)`,
-    `Sessão: ${fmtK(r.sessionInputTokens)} tokens de entrada · ${fmtK(r.sessionOutputTokens)} de saída`,
+    t("ctx.rag", { count: r.ragChunks }),
+    t("ctx.session", { input: fmtK(r.sessionInputTokens), output: fmtK(r.sessionOutputTokens) }),
     "",
-    `_Estimativas heurísticas (o tokenizer real varia; TDD/Projeto têm prompt fixo um pouco maior). \`/limpar\` zera o histórico._`,
+    `_${t("ctx.footnote", { clearCmd: clearCmdLabel() })}_`,
   ].join("\n");
 }
 
 // Cartão markdown do /tokens — dados locais da webview (usage do stream/end + acumulado da sessão).
 export function renderTokensReport(u: { lastIn: number; lastOut: number; sessionIn: number; sessionOut: number } | null): string {
   if (!u || (u.sessionIn === 0 && u.sessionOut === 0)) {
-    return "### Uso de tokens\n\nAinda não houve geração nesta sessão — os números aparecem após a primeira resposta do modelo.";
+    return `### ${t("tok.title")}\n\n${t("tok.empty")}`;
   }
   return [
-    "### Uso de tokens",
+    `### ${t("tok.title")}`,
     "",
-    "| | entrada | saída |",
+    `| | ${t("tok.colIn")} | ${t("tok.colOut")} |`,
     "|---|---|---|",
-    `| Última geração | ${fmtK(u.lastIn)} | ${fmtK(u.lastOut)} |`,
-    `| Sessão (acumulado) | ${fmtK(u.sessionIn)} | ${fmtK(u.sessionOut)} |`,
+    `| ${t("tok.last")} | ${fmtK(u.lastIn)} | ${fmtK(u.lastOut)} |`,
+    `| ${t("tok.session")} | ${fmtK(u.sessionIn)} | ${fmtK(u.sessionOut)} |`,
     "",
-    "_Continuações automáticas somam no acumulado da geração (cada passe reenvia contexto)._",
+    `_${t("tok.footnote")}_`,
   ].join("\n");
 }
 
