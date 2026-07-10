@@ -36,7 +36,8 @@ import { stripFileBlockOfPath } from "../../src/util/fileBlocks";
 export interface RunResultData {
   runId?: string;
   filePath: string;
-  label?: string;
+  label?: string; // rótulo EXIBIDO (traduzível) — nunca comparar como chave; use isTest
+  isTest?: boolean; // discriminador estável da execução de testes (chave do singleton + lastTestRun)
   command: string;
   ok: boolean;
   exitCode: number | null;
@@ -182,8 +183,8 @@ function upsertRun(
   runs: (RunResultData & { id: string })[],
   incoming: RunResultData & { id: string }
 ): (RunResultData & { id: string })[] {
-  if (incoming.label === "testes") {
-    const idx = runs.findIndex((r) => r.label === "testes");
+  if (incoming.isTest) {
+    const idx = runs.findIndex((r) => r.isTest);
     if (idx >= 0) {
       const next = runs.slice();
       next[idx] = { ...incoming, id: runs[idx].id };
@@ -434,6 +435,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         runId: msg.runId,
         filePath: msg.filePath,
         label: msg.label,
+        // run/start não carrega isTest (a suíte de testes vem só via run/result — ver Controller.runTests)
         command: msg.command,
         ok: false,
         exitCode: null,
@@ -452,6 +454,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         runId: msg.runId,
         filePath: msg.filePath,
         label: msg.label,
+        isTest: msg.isTest,
         command: msg.command,
         ok: msg.ok,
         exitCode: msg.exitCode,
@@ -461,8 +464,8 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
         running: false,
       };
       // Só execução de ARQUIVO (label indefinido) alimenta lastFileRun (o chip "Executa" da DoD);
-      // "testes" vai para lastTestRun; "ambiente"/"célula [i]" e afins são neutros (não poluem a DoD).
-      const last = data.label === "testes" ? { lastTestRun: data } : data.label ? {} : { lastFileRun: data };
+      // TESTES (isTest) vão para lastTestRun; "ambiente"/"célula [i]" e afins são neutros (não poluem a DoD).
+      const last = data.isTest ? { lastTestRun: data } : data.label ? {} : { lastFileRun: data };
       // Se já existe um cartão ao vivo (criado pelo run/start), finaliza-o no lugar (preserva `where`).
       if (msg.runId && hasRunWithId(state, msg.runId)) {
         return { ...updateRunByRunId(state, msg.runId, (r) => ({ ...data, where: r.where })), ...last };

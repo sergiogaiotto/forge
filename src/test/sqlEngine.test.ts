@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findAntipatterns, renderFindings } from "../sql/antipatterns";
+import { confidenceLabel, findAntipatterns, renderFindings } from "../sql/antipatterns";
 import { classifySql, normIdent } from "../sql/classify";
 import { analyzeSqlProposal } from "../sql/engine";
 import { looksLikeDbtModel, stripJinja } from "../sql/jinja";
@@ -176,7 +176,18 @@ test("limit-em-modelo-dbt só no contexto dbt; insert-sem-colunas; janela-sem-pa
 test("hadJinja degrada a confiança em um nível", () => {
   const stmts = classifySql("DELETE FROM t");
   const [comJinja] = findAntipatterns(stmts[0], 1, { hadJinja: true });
-  assert.equal(comJinja.confidence, "média");
+  assert.equal(comJinja.confidence, "média"); // código INTERNO (lógica) — permanece pt-BR estável
+});
+
+// REFACTOR pré-i18n: o display da confiança passa por confidenceLabel(); o enum é código estável. Isto
+// garante que a i18n futura troque o LABEL sem tocar a lógica (degrade/comparações).
+test("confidenceLabel: mapeia o código para display; renderFindings usa o label, não o enum cru", () => {
+  assert.equal(confidenceLabel("alta"), "alta");
+  assert.equal(confidenceLabel("baixa"), "baixa");
+  const stmts = classifySql("DELETE FROM t");
+  const findings = findAntipatterns(stmts[0], 1, {});
+  const card = renderFindings(findings);
+  assert.match(card, /confiança alta/); // DELETE sem WHERE = confiança alta, exibida via confidenceLabel
 });
 
 test("linhas dos achados apontam para a linha real do conteúdo", () => {
