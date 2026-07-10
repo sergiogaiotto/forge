@@ -76,10 +76,11 @@ export function renderDiagnosticsBundle(records: DiagnosticRecord[], manifest: R
   const count = (t: string) => records.filter((r) => r.type === t).length;
   const errors = records.filter((r) => r.type === "generation.end" && r.error);
   const gateFails = records.filter((r) => r.type === "validation.result" && r.gateOk === false);
-  // Decisões de permissão (trail unificado): escritas APROVADAS e BLOQUEIOS são o que interessa numa
-  // auditoria pós-incidente ("quem aprovou qual escrita?").
+  // Decisões de permissão (trail unificado): escritas EFETIVADAS (aprovadas pelo dev OU automáticas,
+  // ex.: install de pacotes inferidos sem prompt) e BLOQUEIOS são o que interessa numa auditoria
+  // pós-incidente ("qual escrita aconteceu e como foi autorizada?").
   const perms = records.filter((r) => r.type === "permission.decision");
-  const permWritesApproved = perms.filter((r) => r.scope === "write" && r.outcome === "approved");
+  const permWrites = perms.filter((r) => r.scope === "write" && (r.outcome === "approved" || r.outcome === "auto"));
   const permBlocked = perms.filter((r) => r.outcome === "blocked");
   // P3: params da geração mais RECENTE (config efetiva) e agregação dos spans de fase (onde o tempo vai).
   const lastGen = [...records].reverse().find((r) => r.type === "generation.start");
@@ -113,11 +114,13 @@ export function renderDiagnosticsBundle(records: DiagnosticRecord[], manifest: R
   lines.push(`- Erros de geração: ${errors.length}`);
   lines.push(`- Reprovações de gate: ${gateFails.length}`);
   lines.push(`- Propostas criadas: ${count("proposal.created")} · aplicadas: ${count("proposal.applied")} · descartadas: ${count("proposal.discarded")}`);
-  lines.push(`- Decisões de permissão: ${perms.length} (escritas aprovadas: ${permWritesApproved.length} · bloqueios: ${permBlocked.length})`);
-  if (permWritesApproved.length > 0) {
-    // Lista as escritas aprovadas (o evento de auditoria mais sensível) — action + via, sem o conteúdo.
-    for (const r of permWritesApproved.slice(-20)) {
-      lines.push(`  - ⚠ escrita aprovada [${String(r.kind ?? "?")}·${String(r.via ?? "?")}]: ${String(r.action ?? "?")}`);
+  lines.push(`- Decisões de permissão: ${perms.length} (escritas efetivadas: ${permWrites.length} · bloqueios: ${permBlocked.length})`);
+  if (permWrites.length > 0) {
+    // Lista as escritas efetivadas (o evento de auditoria mais sensível) — action + como foi autorizada
+    // (via/outcome), sem o conteúdo. "auto" = aconteceu sem prompt (ex.: install de pacotes inferidos).
+    for (const r of permWrites.slice(-20)) {
+      const how = r.outcome === "auto" ? "automática" : String(r.via ?? "?");
+      lines.push(`  - ⚠ escrita efetivada [${String(r.kind ?? "?")}·${how}]: ${String(r.action ?? "?")}`);
     }
   }
   if (lastGen) {

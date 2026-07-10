@@ -3988,7 +3988,7 @@ export class Controller {
             // inferidos do código — inclusive gerado por LLM; um import errado/typosquat vira instalação).
             // Entra no trail unificado com a lista de pacotes (o dev decidiu conscientemente).
             const addOk = pick === addAndInstall;
-            this.permissions.note({ kind: "env.dependency", action: `Adicionar ao requirements.txt e instalar: ${merged.added.join(", ")}`, subject: "requirements.txt", scope: "write", detail: merged.added.join(", ") }, addOk ? "approved" : "denied", "webview");
+            this.permissions.note({ kind: "env.dependency", action: `Adicionar ao requirements.txt e instalar: ${merged.added.join(", ")}`, subject: "requirements.txt", scope: "write", detail: merged.added.join(", ") }, addOk ? "approved" : "denied", "dialog");
             if (addOk) {
               await fs.writeFile(reqPath, merged.content, "utf8");
               this.post({ type: "notice", level: "info", message: `requirements.txt incrementado: ${merged.added.join(", ")}.` });
@@ -4021,6 +4021,10 @@ export class Controller {
       const detected = await this.detectWorkspacePackages(ws);
       if (detected.length > 0) {
         await fs.writeFile(reqPath, renderRequirements(detected), "utf8");
+        // Escrita AUTOMÁTICA (sem prompt): gera o requirements.txt e instala pacotes inferidos do código
+        // — mesmo risco supply-chain do ramo com confirmação, mas aqui o ambiente "nasce do zero" sem
+        // manifesto prévio. Entra no trail como decisão AUTOMÁTICA (via/outcome "auto") para ser auditável.
+        this.permissions.note({ kind: "env.dependency", action: `requirements.txt gerado e instalado (sem manifesto prévio): ${detected.join(", ")}`, subject: "requirements.txt", scope: "write", detail: detected.join(", ") }, "auto", "auto");
         this.post({
           type: "notice",
           level: "info",

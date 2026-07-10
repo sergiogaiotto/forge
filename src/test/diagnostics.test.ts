@@ -38,8 +38,17 @@ test("renderDiagnosticsBundle: resumo lista escritas de permissão aprovadas e c
     toDiagnosticRecord({ type: "permission.decision", kind: "mcp.tool", action: "MCP srv.query", scope: "read", outcome: "auto", via: "auto" }, TS, "masked"),
   ];
   const md = renderDiagnosticsBundle(recs, {});
-  assert.match(md, /Decisões de permissão: 3 \(escritas aprovadas: 1 · bloqueios: 1\)/);
-  assert.match(md, /⚠ escrita aprovada \[sql\.write·dialog\]: conexão "dw": UPDATE/);
+  assert.match(md, /Decisões de permissão: 3 \(escritas efetivadas: 1 · bloqueios: 1\)/);
+  assert.match(md, /⚠ escrita efetivada \[sql\.write·dialog\]: conexão "dw": UPDATE/);
+});
+
+test("renderDiagnosticsBundle: escrita AUTOMÁTICA (install sem prompt) aparece no resumo como efetivada", () => {
+  const recs = [
+    toDiagnosticRecord({ type: "permission.decision", kind: "env.dependency", action: "requirements.txt gerado e instalado: pandas", scope: "write", outcome: "auto", via: "auto", subject: "requirements.txt" }, TS, "masked"),
+  ];
+  const md = renderDiagnosticsBundle(recs, {});
+  assert.match(md, /escritas efetivadas: 1 · bloqueios: 0/);
+  assert.match(md, /⚠ escrita efetivada \[env\.dependency·automática\]:/);
 });
 
 test("toDiagnosticRecord: generation.end MASCARA segredos no input/output", () => {
