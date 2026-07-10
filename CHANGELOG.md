@@ -3,6 +3,44 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [2.9.0] — 2026-07-09
+
+**Hardening corporativo — gate autossuficiente, permissões unificadas, E2E e integridade do pacote.**
+Continuação da sequência da gap analysis: fechar governança, confiabilidade e distribuição do gerador
+governado. Cada PR com revisão adversarial multi-agente antes do merge (PRs #135–#138), que confirmou
+e corrigiu defeitos reais (4 bypasses da política de gate, trail de auditoria ilegível na config
+default). 834 testes (eram 809 na 2.8.0).
+
+### Added
+- **Gate autossuficiente — `forge.gate.blockUnverifiedContract`** (#135): política do admin (Modo
+  Projeto, Python) que transforma o contrato cross-file **não verificado** (o mypy não rodou — sem
+  toolchain no ambiente) de *confirmação* em **BLOQUEIO sem escape** do Aplicar tudo, do "Forçar
+  bloqueados" **e** do Aplicar por-arquivo. Escopo `machine` (workspace não desliga). Caminho de saída:
+  "Preparar ambiente" + novo **"Re-verificar contrato"** (re-roda o gate sobre as MESMAS propostas, sem
+  regenerar via LLM). Default `false` (confirmação clássica).
+- **Permission model unificado** (#136): as decisões de permissão viviam em superfícies ad-hoc (aprovação
+  MCP, confirmação de escrita SQL **duplicada**, override de gate, contrato). Agora um `PermissionService`
+  central com pipeline único (política › auto-approve só-leitura › perguntar), diálogo nativo e trail de
+  auditoria único — **toda decisão** vira o evento `permission.decision` (Langfuse) **e** entra no log de
+  diagnóstico local sempre-ligado (com resumo no bundle exportável). Escrita aprovada marca `WARNING` no
+  trace; evento de auditoria é isento de amostragem. Cobre 5 superfícies (incl. install de dependências
+  inferidas — risco supply-chain).
+- **Integridade e proveniência do `.vsix`** (#138): o pacote passa a ser distribuído com um manifesto
+  `<file>.integrity.json` — **SHA-256** (integridade, sempre) + **assinatura Ed25519** dos bytes na mesma
+  cadeia de confiança das licenças (proveniência, quando o admin assina). Novos `sign-vsix`/`verify-vsix`
+  no admin-cli (`npm run sign:vsix`/`verify:vsix`); o destinatário confere hash **e** assinatura contra a
+  chave pública do admin antes de instalar.
+
+### Tested
+- **Suíte E2E license↔gateway↔provider** (#137): o primeiro teste que integra os **processos reais** —
+  sobe o gateway (`gateway/server.mjs`) + um upstream fake, gera chaves/licença pelo admin-cli real e
+  dirige activate → proxy (geração) → 401 sem token → **revogação enforçada ao vivo** (403 sem chamar o
+  upstream). Fecha o gap "nada sobe gateway + provider ponta a ponta" na fatia fora do extension-host.
+
+### Fixed
+- **Gateway trata erro de socket** (#137): `server.listen` sem handler de `error` — um `EADDRINUSE` virava
+  exceção não-tratada com stack crua; agora loga estruturado e encerra limpo.
+
 ## [2.8.0] — 2026-07-09
 
 **Hardening corporativo — Fases 1 a 3.** Sequência derivada da gap analysis corporativa: o que decide

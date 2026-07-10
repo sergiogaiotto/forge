@@ -48,7 +48,20 @@ Você vai precisar de:
 ## 2. Instalar a extensão
 
 A extensão é entregue num arquivo chamado **`forge-<versão>.vsix`** (um "pacote" da extensão —
-por exemplo, `forge-2.8.0.vsix`; o número acompanha a versão distribuída).
+por exemplo, `forge-2.9.0.vsix`; o número acompanha a versão distribuída).
+
+### Antes de instalar — confira que o pacote é autêntico (opcional, recomendado)
+Se o admin te entregou também um arquivo `forge-<versão>.vsix.integrity.json` (ao lado do `.vsix`),
+confirme que o pacote é **íntegro** e **veio do admin** antes de instalar:
+```bash
+npm run verify:vsix -- --file forge-<versão>.vsix
+```
+- **✓ íntegro E assinado** — pode instalar com tranquilidade.
+- **✓ íntegro (sem assinatura)** — o arquivo não corrompeu, mas a origem não foi comprovada; confirme
+  com o admin.
+- **✗ FALHOU** — **não instale**: o arquivo foi corrompido ou adulterado no caminho. Peça outra cópia.
+
+(Sem o `.integrity.json`, pule este passo — a verificação é uma camada extra que o admin habilita.)
 
 ### Jeito 1 — pela tela do VSCode (recomendado)
 1. Abra o VSCode.

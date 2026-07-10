@@ -1,0 +1,8 @@
+{
+  "file": "forge-2.9.0.vsix",
+  "version": "2.9.0",
+  "size": 380085,
+  "algorithm": "sha256",
+  "sha256": "50ed0a612d71cecba447c53eeca346c9991b52cee1b9b66dae894fe81b51cf9c",
+  "signatureAlgorithm": "ed25519"
+}

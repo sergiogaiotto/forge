@@ -146,6 +146,22 @@ Compartilhe o arquivo `forge-<versão>.vsix` (rede, repositório de artefatos, e
 *"Install from VSIX..."* (ver Guia do Usuário). Como é uso interno, normalmente **não** se publica
 em lojas públicas.
 
+**Assine o pacote antes de distribuir (integridade + proveniência).** Gere um manifesto ao lado do
+`.vsix` para que o destinatário confirme que o arquivo é **íntegro** (não corrompeu no caminho) e
+**veio de você** (assinado pela sua chave de admin):
+```bash
+npm run sign:vsix -- --file forge-<versão>.vsix
+# → gera forge-<versão>.vsix.integrity.json (SHA-256 + assinatura Ed25519 dos bytes)
+```
+- O **SHA-256** é sempre incluído (integridade). A **assinatura Ed25519** é adicionada quando a chave
+  privada do admin (`admin-cli/keys/private.pem`, a mesma que assina licenças) está presente — é o que
+  prova a **proveniência**. Rode o `sign-vsix` na máquina onde a chave vive.
+- **Publique o `.integrity.json` junto** com o `.vsix`. O destinatário verifica com
+  `npm run verify:vsix -- --file forge-<versão>.vsix` (ou aponta `--pubkey <b64>` quando não tem o
+  `keyinfo.json`). Ver o Guia do Usuário.
+- Distribuição por feed interno (ex.: Open VSX privado / repositório de artefatos com auto-update) é o
+  próximo passo natural — o manifesto assinado é o que dá confiança à cadeia de entrega.
+
 **B) Publicar no Marketplace / Open VSX (opcional)**
 Há automações prontas:
 - **GitHub Actions** (`.github/workflows/release.yml`) — publica ao criar uma tag `v*`.
