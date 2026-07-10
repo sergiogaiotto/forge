@@ -2,6 +2,7 @@ import React, { useEffect, useReducer } from "react";
 import { DevPanel } from "./components/DevPanel";
 import { Onboarding } from "./components/Onboarding";
 import { Icon } from "./icons";
+import { t } from "./i18n";
 import { initialState, reducer } from "./state";
 import { post } from "./vscode";
 import type { ExtToWebview } from "./vscode";
@@ -29,7 +30,7 @@ export function App(): JSX.Element {
       <div className="app">
         <div className="empty">
           <Icon name="flame" size={34} color="#3a3a3a" />
-          <div style={{ marginTop: 12 }}>Carregando FORGE…</div>
+          <div style={{ marginTop: 12 }}>{t("app.loading")}</div>
         </div>
       </div>
     );
@@ -49,11 +50,11 @@ export function App(): JSX.Element {
         <div className="modal-backdrop">
           <div className="modal">
             <div className="card-title">
-              <Icon name="plug" size={15} color="#8aa0b8" /> Aprovar ferramenta MCP
+              <Icon name="plug" size={15} color="#8aa0b8" /> {t("mcp.approve.title")}
             </div>
             <div className="card-sub">
-              O agente quer chamar <b style={{ color: "#cfcfcf" }}>{state.approval.tool}</b> em{" "}
-              <b style={{ color: "#cfcfcf" }}>{state.approval.server}</b> (escopo {state.approval.scope}).
+              {t("mcp.approve.before")} <b style={{ color: "#cfcfcf" }}>{state.approval.tool}</b> {t("mcp.approve.on")}{" "}
+              <b style={{ color: "#cfcfcf" }}>{state.approval.server}</b> {t("mcp.approve.scope", { scope: state.approval.scope })}
             </div>
             <div
               className="field"
@@ -69,7 +70,7 @@ export function App(): JSX.Element {
                   dispatch({ kind: "clearApproval" });
                 }}
               >
-                <Icon name="x" size={13} /> Negar
+                <Icon name="x" size={13} /> {t("common.deny")}
               </button>
               <button
                 className="btn p"
@@ -78,7 +79,7 @@ export function App(): JSX.Element {
                   dispatch({ kind: "clearApproval" });
                 }}
               >
-                <Icon name="check" size={13} /> Permitir
+                <Icon name="check" size={13} /> {t("common.allow")}
               </button>
             </div>
           </div>

@@ -1,0 +1,21 @@
+{
+  "cmd.focus": "Abrir painel",
+  "cmd.openOnRight": "Abrir na direita (barra secundária)",
+  "cmd.newTask": "Nova tarefa",
+  "cmd.activateLicense": "Ativar licença",
+  "cmd.setupProvider": "Configurar provedor",
+  "cmd.reindexSkills": "Reindexar skills",
+  "cmd.reindexCodebase": "Reindexar codebase (RAG)",
+  "cmd.runActiveFile": "Executar arquivo atual",
+  "cmd.reviewChanges": "Revisar alterações (IA in-network)",
+  "cmd.runTests": "Rodar testes (pytest)",
+  "cmd.signOut": "Sair (limpar licença e credenciais)",
+  "cmd.showOutput": "Mostrar logs",
+  "cmd.exportDiagnostics": "Exportar diagnóstico (bundle redigido)",
+  "cmd.setupObservability": "Configurar observabilidade (Langfuse)",
+  "cmd.setMaxOutput": "Definir máximo de tokens de saída",
+  "cmd.prepareEnv": "Preparar ambiente (venv + dependências)",
+  "cmd.pickRole": "Definir papel no projeto",
+  "cmd.inspectIndex": "Inspecionar índice (skills + RAG)",
+  "cmd.openProfile": "Abrir perfil do projeto"
+}

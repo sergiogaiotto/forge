@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as vscode from "vscode";
 import { Controller } from "../core/Controller";
 import { WebviewToExt } from "../shared/protocol";
+import { resolveLocale } from "../shared/locale";
 import { log } from "../util/logger";
 
 // Hospeda a SPA React na view da barra de atividades. Aplica uma CSP estrita e
@@ -47,8 +48,13 @@ export class ForgeViewProvider implements vscode.WebviewViewProvider {
       `script-src 'nonce-${nonce}'`,
     ].join("; ");
 
+    // Propaga o locale do VSCode ao webview (contexto separado, sem a API vscode): via `lang` do <html>
+    // e `data-locale` no #root — disponível no BOOT, antes de qualquer mensagem (a CSP proíbe script
+    // inline sem nonce, então o data-attr é o canal robusto). A camada i18n da webview lê o data-locale.
+    const locale = resolveLocale(vscode.env.language);
+
     return `<!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="${locale}">
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="${csp}" />
@@ -57,7 +63,7 @@ export class ForgeViewProvider implements vscode.WebviewViewProvider {
     <title>FORGE</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root" data-locale="${locale}"></div>
     <script type="module" nonce="${nonce}" src="${jsUri}"></script>
   </body>
 </html>`;
