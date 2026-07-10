@@ -618,12 +618,12 @@ export class Controller {
   async draftCharterSection(section: CharterKey, brief: string, live?: CharterSections): Promise<void> {
     if (!CHARTER_KEYS.includes(section)) return;
     if (!(await this.ensureSession())) {
-      this.post({ type: "charter/error", section, message: "Licença requerida para redigir com o modelo." });
+      this.post({ type: "charter/error", section, message: hostT("charter.err.license") });
       return;
     }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "charter/error", section, message: "Configure um provedor antes de redigir (Configurar provedor)." });
+      this.post({ type: "charter/error", section, message: hostT("charter.err.provider") });
       return;
     }
     // Valida o egress ANTES de abrir o trace (não registra uma geração que nunca sairá para a rede).
@@ -796,7 +796,7 @@ export class Controller {
           type: "charter/drafted",
           section,
           text: partial,
-          warning: `A redação foi interrompida por um erro antes de terminar (${error}) — o final pode estar faltando. Revise antes de salvar (ou redija de novo).`,
+          warning: hostT("charter.warn.error", { error }),
         });
       } else {
         this.post({ type: "charter/error", section, message: error });
@@ -908,7 +908,7 @@ export class Controller {
     };
     try {
       // Tentativa 1: pedido normal.
-      const a1 = await this.streamBlueprintAttempt(sr, system, brief, "Raciocinando sobre a arquitetura…");
+      const a1 = await this.streamBlueprintAttempt(sr, system, brief, hostT("bp.step.reasoning"));
       obsOutput = a1.text || a1.reasoning;
       addUsage(a1.usage);
       if (a1.error) {
@@ -2773,7 +2773,7 @@ export class Controller {
       if (probe.status === "ok") return; // mypy já disponível no venv
       if (this.runService.isBusy()) return; // não atropela uma execução em andamento
       // Best-effort: se a instalação não iniciar/falhar (offline, sem índice pip), o gate fica "parcial".
-      await this.runService.runCommand("gate · mypy (coerência)", buildMypyInstall(venv), this.config.env().timeoutSeconds * 1000);
+      await this.runService.runCommand(hostT("run.label.gateMypy"), buildMypyInstall(venv), this.config.env().timeoutSeconds * 1000);
     } catch (e) {
       log.warn("Gate: não consegui garantir o mypy no venv — seguindo (o gate pode ficar parcial)", e);
     }
@@ -2792,7 +2792,7 @@ export class Controller {
       const probe = await runFileCheck({ id: "probe", label: "bandit", gate: false }, py, ["-m", "bandit", "--version"], { timeoutMs: 15_000 });
       if (probe.status === "ok") return; // bandit já disponível no venv
       if (this.runService.isBusy()) return; // não atropela uma execução em andamento
-      await this.runService.runCommand("gate · bandit (segurança)", buildBanditInstall(venv), this.config.env().timeoutSeconds * 1000);
+      await this.runService.runCommand(hostT("run.label.gateBandit"), buildBanditInstall(venv), this.config.env().timeoutSeconds * 1000);
     } catch (e) {
       log.warn("Gate: não consegui garantir o bandit no venv — seguindo (segurança consultiva)", e);
     }
@@ -3080,7 +3080,7 @@ export class Controller {
           { kind: "sql.write", action: `conexão "${conn.id}" (MCP): ${decision.reason}`, subject: conn.id, scope: "write", detail: sql },
           { confirmLabel: "Executar escrita" }
         );
-        if (!ok) return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+        if (!ok) return { refused: hostT("sql.writeCancelled") };
       }
       const started = Date.now();
       const r = await this.mcp.callTool(conn.mcp.server, conn.mcp.tool, { [conn.mcp.sqlArg]: sql });
@@ -3701,11 +3701,7 @@ export class Controller {
     // registrado (obs proposal.applied {forced} + aviso). Sem force, comportamento idêntico ao anterior.
     const gateBlocked = this.config.gateBlocksApply() && !entry.gateOk;
     if (gateBlocked && !opts?.force) {
-      this.post({
-        type: "notice",
-        level: "error",
-        message: "Quality gate reprovado: corrija os problemas apontados pelos validadores — ou use \"Aplicar assim mesmo, revisei\" para aplicar sob sua responsabilidade.",
-      });
+      this.post({ type: "notice", level: "error", message: hostT("notice.gate.blockedApply") });
       return false;
     }
     const forcedOverride = gateBlocked && opts?.force === true;
@@ -3845,11 +3841,11 @@ export class Controller {
       type: "run/result",
       proposalId,
       filePath: entry.proposal.filePath,
-      label: `célula [${index}]`,
+      label: hostT("run.label.cell", { index }),
       command: `notebook.cell.execute [${index}]`,
       ok: !isError,
       exitCode: isError ? 1 : 0,
-      output: text || "(sem saída capturada — veja a célula no notebook)",
+      output: text || hostT("run.cell.noOutput"),
       durationMs: 0,
     });
     this.obs.record({ type: "run.result", filePath: entry.proposal.filePath, label: `célula [${index}]`, ok: !isError, exitCode: isError ? 1 : 0, durationMs: 0 });
@@ -4002,8 +3998,8 @@ export class Controller {
     this.post({
       type: "run/result",
       filePath: "",
-      label: "testes",
-      isTest: true, // chave ESTÁVEL do card de testes (o label "testes" é só display, será traduzido)
+      label: hostT("run.label.tests"),
+      isTest: true, // chave ESTÁVEL do card de testes (o label é só display, traduzido por locale)
       command: result.command,
       ok: result.ok,
       exitCode: result.exitCode,

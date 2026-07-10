@@ -41,6 +41,8 @@ export type HostMessageKey =
   | "notice.charter.fillReqs"
   | "charter.err.truncated"
   | "charter.err.empty"
+  | "charter.err.license"
+  | "charter.err.provider"
   | "charter.warn.error"
   | "charter.warn.truncatedAfterContinue"
   | "charter.warn.truncated"
@@ -57,6 +59,7 @@ export type HostMessageKey =
   | "bp.err.head"
   | "bp.err.noneGenerated"
   | "bp.step.analyze"
+  | "bp.step.reasoning"
   | "bp.step.order"
   | "bp.step.convert"
   | "bp.step.converting"
@@ -150,6 +153,13 @@ export type HostMessageKey =
   | "notice.env.noDeps"
   | "run.label.env"
   | "run.label.pytestInstall"
+  | "run.label.gateMypy"
+  | "run.label.gateBandit"
+  | "run.label.cell"
+  | "run.label.tests"
+  | "run.cell.noOutput"
+  | "notice.gate.blockedApply"
+  | "sql.writeCancelled"
   // Diagnóstico/revisão
   | "notice.diag.exportFailed"
   | "notice.review.license"
@@ -281,6 +291,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.charter.fillReqs": "Preencha os Requisitos (funcionais/não funcionais) no Charter antes de gerar os testes de aceitação.",
     "charter.err.truncated": "O modelo atingiu o limite de tokens antes de redigir a seção. Tente de novo; se persistir, aumente forge.provider.maxOutput.",
     "charter.err.empty": "O modelo não retornou conteúdo para a seção. Tente de novo (detalhes no painel Output → FORGE).",
+    "charter.err.license": "Licença requerida para redigir com o modelo.",
+    "charter.err.provider": "Configure um provedor antes de redigir (Configurar provedor).",
     "charter.warn.error": "A redação foi interrompida por um erro antes de terminar ({error}) — o final pode estar faltando. Revise antes de salvar (ou redija de novo).",
     "charter.warn.truncatedAfterContinue": "A seção seguiu cortada mesmo após o FORGE continuar a redação automaticamente — o final pode estar faltando. Revise antes de salvar (ou redija de novo).",
     "charter.warn.truncated": "A seção foi truncada no limite de tokens — o final pode estar faltando. Revise antes de salvar (ou redija de novo).",
@@ -296,6 +308,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "bp.err.head": " Início da resposta: \"{head}\"",
     "bp.err.noneGenerated": "Não consegui gerar nenhum arquivo (falha do provedor ou limite de tokens). Ajuste e clique em \"Aprovar e gerar\" para tentar de novo.",
     "bp.step.analyze": "Analisando os requisitos e desenhando a arquitetura…",
+    "bp.step.reasoning": "Raciocinando sobre a arquitetura…",
     "bp.step.order": "Ordenando os arquivos por dependência…",
     "bp.step.convert": "A resposta veio sem o plano completo — pedindo a conversão…",
     "bp.step.converting": "Convertendo o plano…",
@@ -382,6 +395,13 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.env.noDeps": "Nenhuma dependência de terceiros detectada — crio o venv (.venv) e atualizo o pip.",
     "run.label.env": "ambiente",
     "run.label.pytestInstall": "pytest · instalação",
+    "run.label.gateMypy": "gate · mypy (coerência)",
+    "run.label.gateBandit": "gate · bandit (segurança)",
+    "run.label.cell": "célula [{index}]",
+    "run.label.tests": "testes",
+    "run.cell.noOutput": "(sem saída capturada — veja a célula no notebook)",
+    "notice.gate.blockedApply": "Quality gate reprovado: corrija os problemas apontados pelos validadores — ou use \"Aplicar assim mesmo, revisei\" para aplicar sob sua responsabilidade.",
+    "sql.writeCancelled": "Execução cancelada pelo dev (escrita não confirmada).",
     "notice.diag.exportFailed": "Não consegui exportar o diagnóstico (veja Mostrar logs).",
     "notice.review.license": "Licença requerida para revisar.",
     "notice.review.email": "Informe seu e-mail na configuração inicial antes de revisar.",
@@ -506,6 +526,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.charter.fillReqs": "Fill in the Requirements (functional/non-functional) in the Charter before generating the acceptance tests.",
     "charter.err.truncated": "The model hit the token limit before drafting the section. Try again; if it persists, increase forge.provider.maxOutput.",
     "charter.err.empty": "The model returned no content for the section. Try again (details in the Output → FORGE panel).",
+    "charter.err.license": "License required to draft with the model.",
+    "charter.err.provider": "Configure a provider before drafting (Configure provider).",
     "charter.warn.error": "Drafting was interrupted by an error before finishing ({error}) — the ending may be missing. Review before saving (or draft again).",
     "charter.warn.truncatedAfterContinue": "The section remained cut even after FORGE automatically continued the drafting — the ending may be missing. Review before saving (or draft again).",
     "charter.warn.truncated": "The section was truncated at the token limit — the ending may be missing. Review before saving (or draft again).",
@@ -521,6 +543,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "bp.err.head": " Start of the response: \"{head}\"",
     "bp.err.noneGenerated": "I couldn't generate any file (provider failure or token limit). Adjust and click \"Approve and generate\" to try again.",
     "bp.step.analyze": "Analyzing the requirements and designing the architecture…",
+    "bp.step.reasoning": "Reasoning about the architecture…",
     "bp.step.order": "Ordering the files by dependency…",
     "bp.step.convert": "The response came without the complete plan — asking for the conversion…",
     "bp.step.converting": "Converting the plan…",
@@ -607,6 +630,13 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.env.noDeps": "No third-party dependencies detected — I create the venv (.venv) and update pip.",
     "run.label.env": "environment",
     "run.label.pytestInstall": "pytest · install",
+    "run.label.gateMypy": "gate · mypy (coherence)",
+    "run.label.gateBandit": "gate · bandit (security)",
+    "run.label.cell": "cell [{index}]",
+    "run.label.tests": "tests",
+    "run.cell.noOutput": "(no output captured — see the cell in the notebook)",
+    "notice.gate.blockedApply": "Quality gate failed: fix the issues reported by the validators — or use \"Apply anyway, I reviewed\" to apply under your responsibility.",
+    "sql.writeCancelled": "Run cancelled by the dev (write not confirmed).",
     "notice.diag.exportFailed": "I couldn't export the diagnostics (see Show logs).",
     "notice.review.license": "License required to review.",
     "notice.review.email": "Enter your e-mail in the initial setup before reviewing.",
