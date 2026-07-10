@@ -89,3 +89,33 @@ test("sha256 truncado/ausente no manifesto → falha de integridade (não passa 
   const r2 = verifyManifest({ bytes: VSIX, manifest: { size: VSIX.length }, publicKeyB64: undefined });
   assert.equal(r2.ok, false);
 });
+
+test("sha256 com prefixo correto porém truncado NÃO casa (o padEnd não abre bypass por prefixo)", () => {
+  const full = sha256Hex(VSIX);
+  // manifesto com o hash certo mas cortado: comprimento != 64 → falha (nunca 'casa por prefixo')
+  const r = verifyManifest({ bytes: VSIX, manifest: { size: VSIX.length, sha256: full.slice(0, 10) }, publicKeyB64: undefined });
+  assert.equal(r.ok, false);
+  assert.equal(r.integrity, false);
+});
+
+test("MODO ESTRITO: signature-stripping é DETECTADO — manifesto só-hash falha (exit≠0 em CI)", () => {
+  const { publicKeyB64 } = makeKeypair();
+  // o atacante troca o .vsix e apaga a assinatura, recomputando o hash do arquivo novo (sem chave):
+  const malware = Buffer.from("payload malicioso", "utf8");
+  const stripped = buildManifest({ fileName: "f.vsix", bytes: malware }); // só hash, sem signature
+  // permissivo: passaria (só integridade) — é o furo
+  assert.equal(verifyManifest({ bytes: malware, manifest: stripped, publicKeyB64 }).ok, true);
+  // estrito: NÃO passa (proveniência exigida)
+  const strict = verifyManifest({ bytes: malware, manifest: stripped, publicKeyB64, requireSignature: true });
+  assert.equal(strict.ok, false);
+  assert.equal(strict.provenance, "unsigned");
+  assert.match(strict.reason, /estrito|assinad/i);
+});
+
+test("MODO ESTRITO: pacote legitimamente assinado passa (estrito não é rígido demais)", () => {
+  const { publicKeyB64, privateKeyPem } = makeKeypair();
+  const m = buildManifest({ fileName: "f.vsix", bytes: VSIX, signer: { privateKeyPem, keyId: "k" } });
+  const r = verifyManifest({ bytes: VSIX, manifest: m, publicKeyB64, requireSignature: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.provenance, "signed");
+});

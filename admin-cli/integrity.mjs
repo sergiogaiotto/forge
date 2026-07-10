@@ -51,24 +51,34 @@ export function buildManifest({ fileName, version, bytes, signer }) {
 // Verifica um .vsix contra o manifesto publicado + a chave pública do admin.
 //   - tamanho e sha256 SEMPRE conferidos (integridade).
 //   - assinatura conferida quando presente no manifesto E há publicKeyB64 (proveniência).
-// Retorna { ok, integrity, provenance, reason }: `ok` exige integridade E — se houver assinatura —
-// proveniência válida. `provenance` = "signed" | "unsigned" | "invalid".
-export function verifyManifest({ bytes, manifest, publicKeyB64 }) {
+//   - `requireSignature`: modo ESTRITO. Assinatura ausente OU inválida ⇒ ok=false. É o modo para o
+//     usuário final e o gate de CI de release — sem ele, o SHA-256 sozinho não protege contra um
+//     atacante ativo (o .vsix e o manifesto viajam JUNTOS: quem troca o .vsix por malware apaga a
+//     assinatura e recomputa o hash sem precisar de chave). O modo permissivo (default) é só para o
+//     fluxo dev/CI onde o manifesto ainda é hash-only.
+// Retorna { ok, integrity, provenance, reason }. `provenance` = "signed" | "unsigned" | "invalid".
+export function verifyManifest({ bytes, manifest, publicKeyB64, requireSignature = false }) {
   if (!manifest || typeof manifest !== "object") return { ok: false, integrity: false, provenance: "unsigned", reason: "manifesto ausente ou inválido" };
   if (typeof manifest.size === "number" && manifest.size !== bytes.length) {
     return { ok: false, integrity: false, provenance: "unsigned", reason: `tamanho diverge (manifesto ${manifest.size}, arquivo ${bytes.length})` };
   }
   const actual = sha256Hex(bytes);
-  // Comparação em tempo constante do hash (evita canal lateral de timing; ambos hex de 64 chars).
+  // Comparação em tempo constante do hash (evita canal lateral de timing). Exige EXATAMENTE 64 chars
+  // hex E comprimento igual ANTES do timingSafeEqual — um sha256 curto/ausente falha aqui (o padEnd é
+  // só para o timingSafeEqual não lançar por buffers de tamanhos diferentes, nunca para "casar por prefixo").
   const expected = String(manifest.sha256 || "");
   const integrity =
-    expected.length === actual.length &&
-    crypto.timingSafeEqual(Buffer.from(actual, "utf8"), Buffer.from(expected.padEnd(actual.length, "0"), "utf8")) &&
-    expected.length === 64;
+    expected.length === 64 &&
+    actual.length === 64 &&
+    crypto.timingSafeEqual(Buffer.from(actual, "utf8"), Buffer.from(expected, "utf8"));
   if (!integrity) return { ok: false, integrity: false, provenance: "unsigned", reason: "sha256 diverge — arquivo corrompido ou adulterado" };
 
   if (!manifest.signature) {
-    return { ok: true, integrity: true, provenance: "unsigned", reason: "íntegro, mas SEM assinatura (proveniência não verificada)" };
+    // Íntegro, mas sem assinatura: no modo estrito isso é FALHA (downgrade de proveniência — um atacante
+    // que controla o canal apaga a assinatura e recomputa o hash). No permissivo, passa com aviso.
+    return requireSignature
+      ? { ok: false, integrity: true, provenance: "unsigned", reason: "modo estrito: o manifesto NÃO está assinado — proveniência não pode ser provada (possível remoção de assinatura)" }
+      : { ok: true, integrity: true, provenance: "unsigned", reason: "íntegro, mas SEM assinatura (proveniência não verificada)" };
   }
   if (!publicKeyB64) {
     return { ok: false, integrity: true, provenance: "invalid", reason: "manifesto assinado, mas nenhuma chave pública fornecida para verificar" };

@@ -318,7 +318,7 @@ export function signVsix({ args, keysDir, io }) {
  * A pública vem de --pubkey <b64>, senão do keyinfo.json do keysDir. Integridade (hash) sempre;
  * proveniência (assinatura) quando o manifesto está assinado.
  */
-export function verifyVsix({ args, keysDir, io }) {
+export function verifyVsix({ args, keysDir, io, embeddedKeyPath }) {
   const file = args.file && args.file !== "true" ? path.resolve(String(args.file)) : "";
   if (!file) {
     io.err("✗ informe --file <caminho-do-.vsix>");
@@ -340,14 +340,21 @@ export function verifyVsix({ args, keysDir, io }) {
     io.err(`✗ manifesto ilegível: ${e.message}`);
     return 1;
   }
-  // Pública: --pubkey tem prioridade; senão keyinfo.json do keysDir.
+  // Chave pública, em ordem de precedência: --pubkey → keyinfo.json do keys-dir → chave EMBUTIDA no
+  // cliente (src/license/embeddedKey.ts). O fallback embutido é o que permite verificar a proveniência
+  // num checkout do repo SEM --pubkey — é a MESMA chave que o cliente confia para validar licenças.
   let publicKeyB64 = args.pubkey && args.pubkey !== "true" ? String(args.pubkey) : "";
   if (!publicKeyB64) {
     const infoPath = path.join(keysDir, "keyinfo.json");
     if (fs.existsSync(infoPath)) publicKeyB64 = JSON.parse(fs.readFileSync(infoPath, "utf8")).publicKeyB64 || "";
   }
+  if (!publicKeyB64 && embeddedKeyPath && fs.existsSync(embeddedKeyPath)) {
+    const m = /EMBEDDED_PUBLIC_KEY_B64\s*=\s*"([^"]+)"/.exec(fs.readFileSync(embeddedKeyPath, "utf8"));
+    if (m) publicKeyB64 = m[1];
+  }
+  const requireSignature = args.strict === "true" || args["require-signature"] === "true";
   const bytes = fs.readFileSync(file);
-  const r = verifyManifest({ bytes, manifest, publicKeyB64: publicKeyB64 || undefined });
+  const r = verifyManifest({ bytes, manifest, publicKeyB64: publicKeyB64 || undefined, requireSignature });
 
   if (args.json === "true") {
     io.out(JSON.stringify({ ...r, file: path.basename(file), manifest: path.basename(manifestPath) }, null, 2));
@@ -357,7 +364,7 @@ export function verifyVsix({ args, keysDir, io }) {
     io.out(`✓ ${path.basename(file)}: íntegro E assinado pela chave do admin.`);
   } else if (r.ok && r.provenance === "unsigned") {
     io.out(`✓ ${path.basename(file)}: íntegro (hash confere).`);
-    io.err("  ⚠ manifesto SEM assinatura — a proveniência (veio do admin?) não foi verificada.");
+    io.err("  ⚠ manifesto SEM assinatura — a proveniência (veio do admin?) não foi verificada. Use --strict para EXIGIR assinatura.");
   } else {
     io.err(`✗ ${path.basename(file)}: FALHOU — ${r.reason}`);
   }
@@ -404,7 +411,8 @@ export function helpText(bin) {
     "sign-vsix / verify-vsix:",
     "  --file <arq.vsix>      O pacote a assinar/verificar (obrigatório).",
     "  --manifest <arq>       Manifesto a verificar (default: <file>.integrity.json).",
-    "  --pubkey <b64>         Chave pública para verificar (default: keyinfo.json do keys-dir).",
+    "  --pubkey <b64>         Chave pública (default: keyinfo.json do keys-dir; senão a embutida no cliente).",
+    "  --strict               (verify) EXIGE assinatura válida — sem ela, falha (exit≠0). Use em CI/release.",
     "",
     "EXEMPLOS:",
     `  ${bin} keygen --key-id ed25519-2026-01`,
@@ -453,7 +461,7 @@ export function runCli(argv, ctx) {
       case "sign-vsix":
         return signVsix({ args, keysDir, io });
       case "verify-vsix":
-        return verifyVsix({ args, keysDir, io });
+        return verifyVsix({ args, keysDir, io, embeddedKeyPath: ctx.defaultEmbeddedTarget });
       default:
         io.err(`✗ comando desconhecido: ${cmd}\n`);
         io.out(helpText(ctx.bin));

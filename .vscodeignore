@@ -41,3 +41,8 @@ cobrinha.py
 media/gen-icon.mjs
 **/keys/**
 **/*.pem
+
+# Artefatos de distribuição — o pacote e seu manifesto de integridade são SOBRE o .vsix, nunca DENTRO
+# dele. (O vsce já ignora *.vsix por padrão, mas o .integrity.json é um .json comum e entraria.)
+**/*.vsix
+**/*.vsix.integrity.json

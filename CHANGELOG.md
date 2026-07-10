@@ -9,7 +9,7 @@ All notable changes to FORGE are documented here. Format based on
 Continuação da sequência da gap analysis: fechar governança, confiabilidade e distribuição do gerador
 governado. Cada PR com revisão adversarial multi-agente antes do merge (PRs #135–#138), que confirmou
 e corrigiu defeitos reais (4 bypasses da política de gate, trail de auditoria ilegível na config
-default). 834 testes (eram 809 na 2.8.0).
+default, signature-stripping na verificação do pacote). 834 testes (eram 810 na 2.8.0).
 
 ### Added
 - **Gate autossuficiente — `forge.gate.blockUnverifiedContract`** (#135): política do admin (Modo
@@ -28,10 +28,9 @@ default). 834 testes (eram 809 na 2.8.0).
 - **Integridade e proveniência do `.vsix`** (#138): o pacote passa a ser distribuído com um manifesto
   `<file>.integrity.json` — **SHA-256** (integridade, sempre) + **assinatura Ed25519** dos bytes na mesma
   cadeia de confiança das licenças (proveniência, quando o admin assina). Novos `sign-vsix`/`verify-vsix`
-  no admin-cli (`npm run sign:vsix`/`verify:vsix`); o destinatário confere hash **e** assinatura contra a
+  no admin-cli (`npm run sign:vsix`/`verify:vsix`, com `--strict` para EXIGIR assinatura em CI/release e
+  fallback à chave pública embutida no cliente); o destinatário confere hash **e** assinatura contra a
   chave pública do admin antes de instalar.
-
-### Tested
 - **Suíte E2E license↔gateway↔provider** (#137): o primeiro teste que integra os **processos reais** —
   sobe o gateway (`gateway/server.mjs`) + um upstream fake, gera chaves/licença pelo admin-cli real e
   dirige activate → proxy (geração) → 401 sem token → **revogação enforçada ao vivo** (403 sem chamar o
