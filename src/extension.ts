@@ -1,10 +1,15 @@
 import * as vscode from "vscode";
 import { Controller } from "./core/Controller";
 import { ForgeViewProvider } from "./webview/WebviewProvider";
+import { setHostLocale, hostT } from "./i18n";
+import { resolveLocale } from "./shared/locale";
 import { log } from "./util/logger";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   log.init(context);
+  // Fixa o locale do host a partir do idioma do VSCode, ANTES de qualquer string user-facing. Uma camada
+  // própria (não vscode.l10n) porque o produto é pt-BR-first — ver src/i18n/hostMessages.ts.
+  setHostLocale(resolveLocale(vscode.env.language));
   log.info("Ativando FORGE…");
 
   const controller = new Controller(context);
@@ -35,7 +40,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("forge.reindexSkills", async () => {
       await controller.reindexSkills();
       await controller.postState();
-      void vscode.window.showInformationMessage(vscode.l10n.t("FORGE: skills reindexadas."));
+      void vscode.window.showInformationMessage(hostT("dialog.skillsReindexed"));
     }),
     vscode.commands.registerCommand("forge.reindexCodebase", async () => {
       await controller.reindexCodebase();
@@ -53,7 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("forge.signOut", async () => {
       await controller.signOut();
-      void vscode.window.showInformationMessage(vscode.l10n.t("FORGE: licença e credenciais removidas."));
+      void vscode.window.showInformationMessage(hostT("dialog.signedOut"));
     }),
     vscode.commands.registerCommand("forge.showOutput", () => log.show()),
     vscode.commands.registerCommand("forge.exportDiagnostics", async () => {

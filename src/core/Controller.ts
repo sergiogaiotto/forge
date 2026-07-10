@@ -86,6 +86,7 @@ import { WarehouseService } from "../warehouse/WarehouseService";
 import { decideSqlRun } from "../warehouse/governance";
 import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { resolveExecutable } from "../warehouse/exec";
+import { hostT } from "../i18n";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -500,7 +501,7 @@ export class Controller {
   async addProjectRule(rule: string): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "warn", message: vscode.l10n.t("Abra uma pasta no VSCode para salvar regras do projeto.") });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.openFolder.rules") });
       return;
     }
     const abs = path.join(ws, PROFILE_RELPATH);
@@ -512,7 +513,7 @@ export class Controller {
     }
     const updated = appendRule(existing, rule);
     if (updated === existing) {
-      this.post({ type: "notice", level: "info", message: vscode.l10n.t("Essa regra já está no perfil do projeto.") });
+      this.post({ type: "notice", level: "info", message: hostT("notice.rule.exists") });
       return;
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -837,7 +838,7 @@ export class Controller {
     const abs = path.join(ws, PROFILE_RELPATH);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, doc, "utf8");
-    this.post({ type: "notice", level: "info", message: vscode.l10n.t("Charter salvo em .forge/project.md (injetado em todo prompt).") });
+    this.post({ type: "notice", level: "info", message: hostT("notice.charterSaved") });
     this.post({ type: "charter/state", sections: this.charterSectionsFrom(doc) });
     void this.postProfileState(); // as regras podem ter mudado
   }
@@ -1113,7 +1114,7 @@ export class Controller {
   async generateFromBlueprint(): Promise<void> {
     const s = this.projectSession;
     if (!s) {
-      this.post({ type: "notice", level: "warn", message: vscode.l10n.t("Nenhum blueprint aprovado. Planeje o projeto primeiro.") });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.noBlueprint") });
       return;
     }
     this.gateContractUnverified = false; // nova geração: zera o estado; o gate repõe o valor correto ao rodar

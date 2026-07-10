@@ -34,7 +34,6 @@
     "url": "https://git.interno.claro.com.br/data-platform/forge"
   },
   "main": "./dist/extension.js",
-  "l10n": "./l10n",
   "activationEvents": [
     "onStartupFinished"
   ],

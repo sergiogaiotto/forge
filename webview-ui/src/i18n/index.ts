@@ -2,7 +2,7 @@
 // do `data-locale` do #root (injetado pelo host — WebviewProvider.getHtml), pois o idioma do VSCode não
 // muda em runtime. Sem React context/re-render: o valor é lido antes do primeiro render (main.tsx).
 import { DEFAULT_LOCALE, Locale, resolveLocale } from "../../../src/shared/locale";
-import { formatMessage } from "./format";
+import { formatMessage } from "../../../src/shared/format";
 import { MESSAGES, MessageKey } from "./messages";
 
 let activeLocale: Locale = DEFAULT_LOCALE;
