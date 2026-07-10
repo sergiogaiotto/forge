@@ -79,10 +79,14 @@ test("Modo Projeto Python/FastAPI: requirements.txt, entrypoint uvicorn, Pydanti
   assert.match(p, /field_validator|Pydantic v2/); // Fix CR-6: Pydantic v2, não v1
   assert.match(p, /Form\(/); // Fix binding de formulário
   assert.match(p, /__file__/); // caminho de templates robusto ao CWD
+  assert.match(p, /TemplateResponse\(request/); // F-01: assinatura ATUAL do Starlette (request como 1º arg)
+  assert.match(p, /Mapped\[/); // F-06: SQLAlchemy 2.0 tipado (Mapped[...] = mapped_column)
   // o guiado (a partir do blueprint) também carrega framework + UI
   const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "main.py", purpose: "app", deps: [] }], "template-engine", "fastapi");
   assert.match(guided, /uvicorn/);
   assert.match(guided, /Form\(/);
+  assert.match(guided, /TemplateResponse\(request/); // F-01
+  assert.match(guided, /Mapped\[/); // F-06
 });
 
 test("prompts do projeto propagam o framework (e convivem com a camada de UI)", () => {
