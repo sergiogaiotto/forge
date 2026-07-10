@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_LOCALE, resolveLocale, SUPPORTED_LOCALES } from "../shared/locale";
-import { formatMessage } from "../../webview-ui/src/i18n/format";
+import { formatMessage } from "../shared/format";
 import { MESSAGES, MessageKey } from "../../webview-ui/src/i18n/messages";
 import { setLocaleForTest, t } from "../../webview-ui/src/i18n";
 
@@ -70,25 +70,27 @@ test("catálogo: EN cobre TODAS as chaves do pt-BR (nenhum fallback silencioso n
   }
 });
 
-// GUARD DE MANIFESTO (o design pediu como check de CI): todo %chave% do package.json deve existir nos
-// DOIS bundles nls — senão o VSCode renderiza o placeholder cru (%cmd.x%) ao usuário, ou o EN degrada
-// para pt-BR sem aviso.
-test("package.nls: todo %chave% do package.json existe em package.nls.json E package.nls.en.json", () => {
+// GUARD DE MANIFESTO (o design pediu como check de CI). Layout NATIVO do VSCode: a BASE package.nls.json
+// é INGLÊS (o VSCode curto-circuita o idioma-default 'en' e usa a base — um package.nls.en.json seria
+// código morto); package.nls.pt-br.json é o OVERRIDE pt-BR. Todo %chave% do package.json deve existir
+// nos DOIS, senão o VSCode renderiza o placeholder cru (%cmd.x%) ou o pt-BR degrada para inglês.
+test("package.nls: todo %chave% do package.json existe na base (en) E no override pt-br; base é inglês", () => {
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const pkg = fs.readFileSync(path.join(repo, "package.json"), "utf8");
-  const nlsPt = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.json"), "utf8")) as Record<string, string>;
-  const nlsEn = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.en.json"), "utf8")) as Record<string, string>;
-  // Chave nls começa em minúscula (namespace com ou sem ponto: "cmd.focus" ou "signOut"). O anchor [a-z]
-  // exclui env vars em exemplos (%LOCALAPPDATA%, all-caps) que também usam a sintaxe %…% — mas pega
-  // chaves SEM ponto (o guard não pode depender só da convenção cmd.*).
+  const nlsEn = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.json"), "utf8")) as Record<string, string>;
+  const nlsPt = JSON.parse(fs.readFileSync(path.join(repo, "package.nls.pt-br.json"), "utf8")) as Record<string, string>;
+  // package.nls.en.json NÃO deve existir (o VSCode nunca o carregaria para um usuário en — dead code)
+  assert.ok(!fs.existsSync(path.join(repo, "package.nls.en.json")), "package.nls.en.json é código morto (en é a base); remova-o");
+  // Chave nls começa em minúscula (namespace com ou sem ponto). O anchor [a-z] exclui env vars all-caps
+  // em exemplos (%LOCALAPPDATA%) mas pega chaves SEM ponto.
   const used = [...new Set([...pkg.matchAll(/%([a-z][\w.]*)%/g)].map((m) => m[1]))];
   assert.ok(used.length >= 19, `esperado >=19 chaves nls em uso, achei ${used.length}`);
   for (const k of used) {
-    assert.ok(k in nlsPt, `chave %${k}% usada no package.json mas ausente em package.nls.json`);
-    assert.ok(k in nlsEn, `chave %${k}% usada no package.json mas ausente em package.nls.en.json`);
+    assert.ok(k in nlsEn, `chave %${k}% usada no package.json mas ausente na base package.nls.json (en)`);
+    assert.ok(k in nlsPt, `chave %${k}% usada no package.json mas ausente no override package.nls.pt-br.json`);
   }
-  // sem chaves órfãs (definidas mas não usadas) — mantém os bundles enxutos
-  for (const k of Object.keys(nlsPt)) assert.ok(used.includes(k), `chave "${k}" em package.nls.json não é usada no package.json`);
-  // pt-BR e en com o MESMO conjunto de chaves
-  assert.deepEqual(Object.keys(nlsEn).sort(), Object.keys(nlsPt).sort(), "package.nls.json e .en.json devem ter as mesmas chaves");
+  // sem chaves órfãs (definidas mas não usadas)
+  for (const k of Object.keys(nlsEn)) assert.ok(used.includes(k), `chave "${k}" em package.nls.json não é usada no package.json`);
+  // base (en) e override (pt-br) com o MESMO conjunto de chaves
+  assert.deepEqual(Object.keys(nlsPt).sort(), Object.keys(nlsEn).sort(), "package.nls.json (en) e package.nls.pt-br.json devem ter as mesmas chaves");
 });
