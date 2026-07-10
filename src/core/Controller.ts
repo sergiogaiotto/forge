@@ -18,6 +18,7 @@ import { McpManager } from "../mcp/McpManager";
 import { McpRegistry } from "../mcp/McpRegistry";
 import { ToolApprovalGate } from "../mcp/ToolApprovalGate";
 import { PermissionAuditor, PermissionService } from "../security/permissions";
+import { buildGitArgs, commitTargets, GitOp, parseLog, parseStatusPorcelain, renderCommitResult, renderDiffCard, renderGitError, renderLogCard, renderStatusCard, sanitizeCommitMessage } from "../git/gitCommands";
 import { CodebaseIndex } from "../rag/CodebaseIndex";
 import { EgressEnforcer } from "../net/EgressEnforcer";
 import { SecretsStore } from "../secrets/SecretsStore";
@@ -84,6 +85,7 @@ import { renderLineage, selectLineage } from "../sql/lineage";
 import { WarehouseService } from "../warehouse/WarehouseService";
 import { decideSqlRun } from "../warehouse/governance";
 import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
+import { resolveExecutable } from "../warehouse/exec";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -1521,6 +1523,9 @@ export class Controller {
         break;
       case "data/command":
         await this.dispatchDataCommand(msg.cmd, msg.args);
+        break;
+      case "git/command":
+        await this.dispatchGitCommand(msg.op, msg.args);
         break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui, framework: msg.framework });
@@ -3116,6 +3121,101 @@ export class Controller {
 
   private dataCard(markdown: string): void {
     this.post({ type: "data/card", markdown });
+  }
+
+  // Spawn seguro do git no workspace. Camadas de defesa (achados da revisão adversarial):
+  //  - shell:FALSE — a mensagem de commit (input do dev) vai como arg de ARRAY, nunca interpretada pelo
+  //    shell (mesmo racional do warehouse exec).
+  //  - `-c core.fsmonitor=` e `core.quotepath=false` prefixados: fsmonitor é um COMANDO lido do .git/
+  //    config do repo e roda em TODA op de worktree — desligá-lo fecha o RCE por repo hostil na leitura;
+  //    quotepath=false evita o octal-escape de nomes não-ASCII (pt-BR).
+  //  - timeout + killSignal + stdin fechado + GIT_TERMINAL_PROMPT=0: um git que bloqueia (gpg/pinentry,
+  //    prompt de credencial, hook que lê stdin) não pendura o card para sempre (padrão do warehouse).
+  // Retorna { ok, output } capado; nunca lança para cima (fail-open).
+  private runGit(args: string[]): Promise<{ ok: boolean; output: string }> {
+    return new Promise((resolve) => {
+      const ws = this.workspaceRoot();
+      if (!ws) return resolve({ ok: false, output: "Abra uma pasta no VSCode para usar o git." });
+      const bin = resolveExecutable("git") ?? "git";
+      const hardenedArgs = ["-c", "core.fsmonitor=", "-c", "core.quotepath=false", ...args];
+      const child = execFile(
+        bin,
+        hardenedArgs,
+        { cwd: ws, windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 30000, killSignal: "SIGKILL", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+        (err, stdout, stderr) => {
+          const timedOut = !!err && (err as { killed?: boolean }).killed === true;
+          const output = timedOut ? "git excedeu o tempo limite (30s) e foi encerrado." : (stdout || "") + (stderr ? (stdout ? "\n" : "") + stderr : "");
+          resolve({ ok: !err, output });
+        }
+      );
+      child.stdin?.end(); // nunca deixa um git que espera entrada travar até o timeout
+    });
+  }
+
+  // Git GOVERNADO (Fase 4 — capacidade seletiva). status/diff/log são LEITURA (card direto); commit é
+  // ESCRITA e passa pelo PermissionService (confirmação + trail de auditoria unificado), mostrando os
+  // arquivos que serão selados. Não é agente: o dev opera cada comando. Fail-open: erro vira card.
+  async dispatchGitCommand(op: GitOp, args?: string): Promise<void> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) {
+        this.dataCard("### Git\n\nAbra uma pasta no VSCode para usar os comandos de git.");
+        return;
+      }
+      // GATE de Workspace Trust: o git executa código controlado pelo REPOSITÓRIO (fsmonitor, hooks,
+      // filtros) — até um `status` pode disparar um comando do .git/config. Num workspace NÃO confiável,
+      // nenhum comando de git roda (mesma postura do git nativo do VSCode). O `-c core.fsmonitor=` do
+      // runGit é defesa em profundidade; o gate é a defesa primária.
+      if (!vscode.workspace.isTrusted) {
+        this.dataCard("### Git\n\n🔒 Este workspace **não é confiável** — os comandos de git ficam desabilitados (o git pode executar scripts definidos pelo repositório). Confie na pasta (canto inferior esquerdo do VSCode) para habilitar.");
+        return;
+      }
+      if (op === "status") {
+        const r = await this.runGit(buildGitArgs("status"));
+        if (!r.ok) return this.dataCard(renderGitError("status", r.output));
+        this.dataCard(renderStatusCard(parseStatusPorcelain(r.output)));
+        return;
+      }
+      if (op === "diff") {
+        const r = await this.runGit(buildGitArgs("diff"));
+        if (!r.ok) return this.dataCard(renderGitError("diff", r.output));
+        this.dataCard(renderDiffCard(r.output));
+        return;
+      }
+      if (op === "log") {
+        const r = await this.runGit(buildGitArgs("log"));
+        if (!r.ok) return this.dataCard(renderGitError("log", r.output));
+        this.dataCard(renderLogCard(parseLog(r.output)));
+        return;
+      }
+      // commit: valida a mensagem, mostra o que será selado e EXIGE confirmação (permission model).
+      const msg = sanitizeCommitMessage(args);
+      if (!msg.ok) return this.dataCard(`### Git · commit\n\n${msg.error}`);
+      const st = await this.runGit(buildGitArgs("status"));
+      if (!st.ok) return this.dataCard(renderGitError("commit", st.output));
+      const targets = commitTargets(parseStatusPorcelain(st.output));
+      if (targets.length === 0) {
+        this.dataCard("### Git · commit\n\n_Nada a commitar: nenhum arquivo **rastreado** foi modificado. (Arquivos novos exigem `git add` antes — use o painel Git do VSCode.)_");
+        return;
+      }
+      const ok = await this.permissions.confirm(
+        {
+          kind: "git.commit",
+          action: `Commit de ${targets.length} arquivo(s) rastreado(s)`,
+          subject: `${targets.length} arquivo(s)`,
+          scope: "write",
+          // O detail é honesto sobre a lista EXATA (unquoted, com typechange incluído) e avisa que os
+          // hooks do repositório rodam no commit — parte legítima do workflow, mas execução de código.
+          detail: `Mensagem: ${msg.message}\n\nArquivos:\n${targets.slice(0, 40).map((t) => "  " + t).join("\n")}${targets.length > 40 ? `\n  … e mais ${targets.length - 40}` : ""}\n\nOs hooks de git deste repositório (pre-commit, commit-msg) serão executados.`,
+        },
+        { confirmLabel: "Commitar" }
+      );
+      if (!ok) return this.dataCard("### Git · commit\n\n_Commit cancelado._");
+      const r = await this.runGit(buildGitArgs("commit", { message: msg.message }));
+      this.dataCard(renderCommitResult(r.ok, r.output));
+    } catch (e) {
+      this.dataCard(`### Git\n\nFalha ao executar: ${(e as Error).message}`);
+    }
   }
 
   // Despacho dos comandos de dados da paleta (Ondas 3/4). Tudo fail-open: erro vira card explicativo.

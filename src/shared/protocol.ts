@@ -419,6 +419,9 @@ export type WebviewToExt =
   | { type: "impact/request"; target?: string }
   // Comandos de dados (Ondas 3/4) — host executa e responde com data/card.
   | { type: "data/command"; cmd: "conexoes" | "executar-sql" | "schema-db" | "paridade" | "custo" | "auditoria-pii"; args?: string }
+  // Git governado (Fase 4): status/diff/log são leitura; commit é escrita (confirmação + auditoria).
+  // Responde com data/card (reusa o mesmo canal de cartão). args = mensagem no commit.
+  | { type: "git/command"; op: "status" | "diff" | "log" | "commit"; args?: string }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/generate" }
