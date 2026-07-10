@@ -426,6 +426,10 @@ export type WebviewToExt =
   // Git governado (Fase 4): status/diff/log são leitura; commit é escrita (confirmação + auditoria).
   // Responde com data/card (reusa o mesmo canal de cartão). args = mensagem no commit.
   | { type: "git/command"; op: "status" | "diff" | "log" | "commit"; args?: string }
+  // Workspace governado (resto do item 6): navegação/busca SÓ-LEITURA, determinística (sem LLM, sem
+  // rede). files: lista caminhos (args = filtro de pasta); search: regex (args = padrão); todos:
+  // marcadores TODO/FIXME/HACK/XXX. Responde com data/card.
+  | { type: "workspace/command"; cmd: "files" | "search" | "todos"; args?: string }
   | { type: "project/start"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/blueprint"; text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework }
   | { type: "project/generate" }

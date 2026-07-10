@@ -407,7 +407,27 @@ export type HostMessageKey =
   | "pii.cat.sensivel"
   | "pii.cat.geo"
   // Secrets
-  | "secrets.weakKeyring";
+  | "secrets.weakKeyring"
+  // Workspace governado (navegação/busca só-leitura — resto do item 6)
+  | "wsb.openFolder"
+  | "wsb.files.head"
+  | "wsb.files.headFiltered"
+  | "wsb.files.none"
+  | "wsb.files.noneFiltered"
+  | "wsb.files.summary"
+  | "wsb.files.more"
+  | "wsb.files.footer"
+  | "wsb.search.empty"
+  | "wsb.search.tooLong"
+  | "wsb.search.invalid"
+  | "wsb.search.head"
+  | "wsb.search.headPlain"
+  | "wsb.search.none"
+  | "wsb.search.summary"
+  | "wsb.search.truncated"
+  | "wsb.todo.head"
+  | "wsb.todo.none"
+  | "wsb.footer";
 
 export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string>>> = {
   "pt-BR": {
@@ -779,6 +799,25 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "pii.cat.sensivel": "dado sensível (LGPD art. 5º II)",
     "pii.cat.geo": "geolocalização",
     "secrets.weakKeyring": "FORGE: o armazenamento seguro de credenciais não parece disponível neste sistema (keyring ausente). As credenciais podem não estar protegidas. Configure um keyring (ex.: gnome-keyring/libsecret) antes de usar em produção.",
+    "wsb.openFolder": "### Workspace\n\nAbra uma pasta no VSCode para navegar e buscar nos arquivos.",
+    "wsb.files.head": "### Arquivos do workspace",
+    "wsb.files.headFiltered": "### Arquivos do workspace · `{prefix}`",
+    "wsb.files.none": "Nenhum arquivo indexável no workspace.",
+    "wsb.files.noneFiltered": "Nenhum arquivo casa com o filtro `{prefix}`.",
+    "wsb.files.summary": "Mostrando **{shown}** de {total} arquivos:",
+    "wsb.files.more": "_… e mais {n} arquivos — use `/arquivos <pasta>` para filtrar._",
+    "wsb.files.footer": "_Só leitura, local e determinístico. `@` no chat anexa um arquivo ao contexto._",
+    "wsb.search.empty": "Informe o padrão: `/buscar <regex>` — ex.: `/buscar def process_.*\\(`.",
+    "wsb.search.tooLong": "Padrão muito longo (máx. {max} caracteres).",
+    "wsb.search.invalid": "Padrão de busca inválido: {error}",
+    "wsb.search.head": "### Busca · `{pattern}`",
+    "wsb.search.headPlain": "### Busca",
+    "wsb.search.none": "Nenhuma ocorrência de `{pattern}` em {files} arquivos varridos.",
+    "wsb.search.summary": "**{count, plural, one{# ocorrência} other{# ocorrências}}** em {files} arquivo(s) ({scanned} varridos):",
+    "wsb.search.truncated": "_Resultado capado em {max} ocorrências — refine o padrão._",
+    "wsb.todo.head": "### TODOs do workspace",
+    "wsb.todo.none": "Nenhum TODO/FIXME/HACK/XXX encontrado em {files} arquivos varridos. ✨",
+    "wsb.footer": "_Varredura local determinística (sem LLM, sem rede). Linhas exibidas passam pela máscara LGPD._",
   },
   en: {
     "dialog.skillsReindexed": "FORGE: skills reindexed.",
@@ -1149,6 +1188,25 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "pii.cat.sensivel": "sensitive data (LGPD art. 5 II)",
     "pii.cat.geo": "geolocation",
     "secrets.weakKeyring": "FORGE: secure credential storage doesn't seem to be available on this system (keyring missing). Credentials may not be protected. Configure a keyring (e.g., gnome-keyring/libsecret) before using in production.",
+    "wsb.openFolder": "### Workspace\n\nOpen a folder in VS Code to browse and search the files.",
+    "wsb.files.head": "### Workspace files",
+    "wsb.files.headFiltered": "### Workspace files · `{prefix}`",
+    "wsb.files.none": "No indexable files in the workspace.",
+    "wsb.files.noneFiltered": "No file matches the `{prefix}` filter.",
+    "wsb.files.summary": "Showing **{shown}** of {total} files:",
+    "wsb.files.more": "_… and {n} more files — use `/files <folder>` to filter._",
+    "wsb.files.footer": "_Read-only, local and deterministic. `@` in the chat attaches a file to the context._",
+    "wsb.search.empty": "Enter the pattern: `/search <regex>` — e.g. `/search def process_.*\\(`.",
+    "wsb.search.tooLong": "Pattern too long (max. {max} characters).",
+    "wsb.search.invalid": "Invalid search pattern: {error}",
+    "wsb.search.head": "### Search · `{pattern}`",
+    "wsb.search.headPlain": "### Search",
+    "wsb.search.none": "No occurrence of `{pattern}` across {files} scanned files.",
+    "wsb.search.summary": "**{count, plural, one{# occurrence} other{# occurrences}}** in {files} file(s) ({scanned} scanned):",
+    "wsb.search.truncated": "_Result capped at {max} occurrences — refine the pattern._",
+    "wsb.todo.head": "### Workspace TODOs",
+    "wsb.todo.none": "No TODO/FIXME/HACK/XXX found across {files} scanned files. ✨",
+    "wsb.footer": "_Deterministic local scan (no LLM, no network). Displayed lines go through the LGPD mask._",
   },
   es: {
     "dialog.skillsReindexed": "FORGE: skills reindexadas.",
@@ -1519,5 +1577,24 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "pii.cat.sensivel": "dato sensible (LGPD art. 5º II)",
     "pii.cat.geo": "geolocalización",
     "secrets.weakKeyring": "FORGE: el almacenamiento seguro de credenciales no parece disponible en este sistema (keyring ausente). Las credenciales pueden no estar protegidas. Configura un keyring (ej.: gnome-keyring/libsecret) antes de usar en producción.",
+    "wsb.openFolder": "### Workspace\n\nAbre una carpeta en VS Code para navegar y buscar en los archivos.",
+    "wsb.files.head": "### Archivos del workspace",
+    "wsb.files.headFiltered": "### Archivos del workspace · `{prefix}`",
+    "wsb.files.none": "Ningún archivo indexable en el workspace.",
+    "wsb.files.noneFiltered": "Ningún archivo coincide con el filtro `{prefix}`.",
+    "wsb.files.summary": "Mostrando **{shown}** de {total} archivos:",
+    "wsb.files.more": "_… y {n} archivos más — usa `/archivos <carpeta>` para filtrar._",
+    "wsb.files.footer": "_Solo lectura, local y determinístico. `@` en el chat adjunta un archivo al contexto._",
+    "wsb.search.empty": "Indica el patrón: `/buscar <regex>` — ej.: `/buscar def process_.*\\(`.",
+    "wsb.search.tooLong": "Patrón demasiado largo (máx. {max} caracteres).",
+    "wsb.search.invalid": "Patrón de búsqueda inválido: {error}",
+    "wsb.search.head": "### Búsqueda · `{pattern}`",
+    "wsb.search.headPlain": "### Búsqueda",
+    "wsb.search.none": "Ninguna ocurrencia de `{pattern}` en {files} archivos escaneados.",
+    "wsb.search.summary": "**{count, plural, one{# ocurrencia} other{# ocurrencias}}** en {files} archivo(s) ({scanned} escaneados):",
+    "wsb.search.truncated": "_Resultado limitado a {max} ocurrencias — refina el patrón._",
+    "wsb.todo.head": "### TODOs del workspace",
+    "wsb.todo.none": "Ningún TODO/FIXME/HACK/XXX encontrado en {files} archivos escaneados. ✨",
+    "wsb.footer": "_Escaneo local determinístico (sin LLM, sin red). Las líneas exhibidas pasan por la máscara LGPD._",
   },
 };

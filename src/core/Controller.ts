@@ -90,7 +90,8 @@ import { getHostLocale, hostT } from "../i18n";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
-import { renderPiiCard, scanIndexForPii } from "../util/piiScan";
+import { maskDataSample, renderPiiCard, scanIndexForPii } from "../util/piiScan";
+import { compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCard, renderTodoCard, searchInFiles, SEARCH_MAX_FILE_BYTES, SEARCH_MAX_FILES, TODO_PATTERN } from "../workspace/browse";
 import { SqlRunResult, WarehouseConnection } from "../warehouse/types";
 import { evaluateDodGate } from "../util/dodCheck";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
@@ -1517,6 +1518,9 @@ export class Controller {
         break;
       case "git/command":
         await this.dispatchGitCommand(msg.op, msg.args);
+        break;
+      case "workspace/command":
+        await this.dispatchWorkspaceCommand(msg.cmd, msg.args);
         break;
       case "project/start":
         await this.startTask(msg.text, "project", { language: msg.language, architecture: msg.architecture, ui: msg.ui, framework: msg.framework });
@@ -3197,6 +3201,54 @@ export class Controller {
       this.dataCard(renderCommitResult(r.ok, r.output));
     } catch (e) {
       this.dataCard(hostT("card.git.failed", { error: (e as Error).message }));
+    }
+  }
+
+  // Workspace GOVERNADO (resto do item 6): navegação/busca SÓ-LEITURA, determinística — sem LLM, sem
+  // rede, sem execução (ao contrário do git, ler arquivo não roda código do repo: sem gate de trust).
+  // Excludes conservadores (.env NUNCA entra), caps do módulo puro e máscara LGPD nas linhas exibidas.
+  // Fail-open: erro vira card explicativo.
+  async dispatchWorkspaceCommand(cmd: "files" | "search" | "todos", args?: string): Promise<void> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) {
+        this.dataCard(hostT("wsb.openFolder"));
+        return;
+      }
+      const uris = await vscode.workspace.findFiles(
+        "**/*",
+        "{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.venv/**,**/venv/**,**/__pycache__/**,**/.env,**/.env.*}",
+        5000
+      );
+      const paths = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/")).sort();
+      if (cmd === "files") {
+        this.dataCard(renderFilesCard(paths, args));
+        return;
+      }
+      const pattern = cmd === "todos" ? { re: TODO_PATTERN } : compileSearchPattern(args ?? "");
+      if ("error" in pattern) {
+        this.dataCard(`${hostT("wsb.search.headPlain")}\n\n${pattern.error}`);
+        return;
+      }
+      // Lê SÓ o que vale a pena varrer, com teto de arquivos e de tamanho; leitura sequencial com
+      // early-stop dentro do searchInFiles (o cap de ocorrências corta a varredura, não só a exibição).
+      const candidates = paths.filter(isSearchablePath).slice(0, SEARCH_MAX_FILES);
+      const files: { path: string; content: string }[] = [];
+      for (const rel of candidates) {
+        try {
+          const abs = path.join(ws, rel);
+          const st = await fs.stat(abs);
+          if (st.size > SEARCH_MAX_FILE_BYTES) continue;
+          files.push({ path: rel, content: await fs.readFile(abs, "utf8") });
+        } catch {
+          /* ilegível/apagado no meio → pula (fail-open) */
+        }
+      }
+      const result = searchInFiles(files, pattern.re);
+      this.dataCard(cmd === "todos" ? renderTodoCard(result, maskDataSample) : renderSearchCard(args ?? "", result, maskDataSample));
+    } catch (err) {
+      log.warn(`Comando de workspace /${cmd} falhou (fail-open).`, err);
+      this.dataCard(hostT("card.data.failed", { cmd, error: err instanceof Error ? err.message : String(err) }));
     }
   }
 

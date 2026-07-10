@@ -198,6 +198,15 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       case "auditoria-pii":
         runData("auditoria-pii");
         break;
+      case "arquivos":
+        runWorkspace("files");
+        break;
+      case "buscar":
+        runWorkspace("search", ""); // sem padrão → o host responde com o card de uso
+        break;
+      case "todos":
+        runWorkspace("todos");
+        break;
       case "git-status":
         runGit("status");
         break;
@@ -212,6 +221,17 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         dispatch({ kind: "pushLocal", text: t("cmd.gitCommit.prompt") });
         break;
     }
+  };
+
+  // Workspace GOVERNADO (resto do item 6): navegação/busca só-leitura — host executa determinístico
+  // e responde com data/card (nenhum LLM no caminho). O eco usa o id do comando da PALETA (não o cmd
+  // do protocolo) para o label sair no locale ativo.
+  const WS_ECHO_ID: Record<"files" | "search" | "todos", string> = { files: "arquivos", search: "buscar", todos: "todos" };
+  const runWorkspace = (cmd: "files" | "search" | "todos", args?: string) => {
+    dispatch({ kind: "pushUser", text: `[${cmdLabelById(WS_ECHO_ID[cmd])}]${args?.trim() ? " " + args.trim() : ""}` });
+    post({ type: "workspace/command", cmd, args: args?.trim() || undefined });
+    setInput("");
+    if (taRef.current) taRef.current.style.height = "auto";
   };
 
   // Git GOVERNADO (Fase 4): status/diff/log são leitura; commit é escrita (o host pede confirmação via
@@ -332,6 +352,17 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
       }
       if (withArgs.cmd.id === "paridade" && /^[\w.:-]+\s+[\w.:-]+$/.test(withArgs.args.trim())) {
         runData("paridade", withArgs.args.trim());
+        return;
+      }
+      // /arquivos <pasta>: a cauda é o filtro quando é UM token com cara de caminho; frase segue ao
+      // modelo (anti-sequestro). /buscar <regex>: a cauda É o padrão (texto livre — regex tem espaço
+      // e metacaracteres por natureza, como o tema do /diagrama).
+      if (withArgs.cmd.id === "arquivos" && /^[\w./\\-]+$/.test(withArgs.args)) {
+        runWorkspace("files", withArgs.args);
+        return;
+      }
+      if (withArgs.cmd.id === "buscar") {
+        runWorkspace("search", withArgs.args);
         return;
       }
       // /git-commit "mensagem": a cauda É a mensagem (qualquer texto). Aspas opcionais — removidas.
