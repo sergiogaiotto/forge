@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
-import { t, type MessageKey } from "../i18n";
+import { getLocale, t, type MessageKey } from "../i18n";
 import { atMentionToken, filterMentions, replaceMention } from "../mentions";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
@@ -2034,13 +2034,17 @@ function RoleCardView({ card, onDismiss, onOpenSkill }: { card: RoleCard; onDism
 
 // Heurística conservadora: mensagens em tom de diretiva (proibição/preferência) são candidatas a
 // virar regra do projeto. Evita perguntas e tarefas longas; foca em "nunca/sempre/evite/prefira…"
-// (e nos equivalentes en — o usuário en escreve diretivas em inglês). "prefer" exige espaço em seguida:
-// \b é ASCII em regex JS, então "prefer" + "ê" fecharia boundary e "Preferências…" (pt) dispararia
-// o banner por engano (achado da revisão adversarial do PR 7).
+// e nos equivalentes en/es. Lições acumuladas das revisões (PRs 7 e 11):
+// - "prefer"/"prefiere"/"evita" exigem espaço em seguida (\b é ASCII: "prefer"+"ê" fecharia boundary
+//   e "Preferências…" dispararia por engano);
+// - radicais levam \w* ("padroniz|standardiz|estandariz" + \b nunca casavam "padronize/standardize/
+//   estandariza" — o \b exigia não-letra logo após o radical: gatilho morto);
+// - "no use(s)" é diretiva em es mas IDIOM em en ("no use crying over…") — só vale com a UI em es.
 function looksLikeRule(text: string): boolean {
   const s = text.trim();
   if (!s || s.length > 200 || s.includes("?")) return false;
-  return /^(nunca|sempre|jamais|evite|prefira|padroniz|n[ãa]o use|never|always|avoid|prefer(?=\s)|standardiz|do not use|don'?t use)\b/i.test(s);
+  if (/^(nunca|sempre|jamais|evite|prefira|padroniz\w*|n[ãa]o use|never|always|avoid|prefer(?=\s)|standardiz\w*|do not use|don'?t use|siempre|jam[áa]s|prefiera|prefiere(?=\s)|evita(?=\s)|estandariz\w*)\b/i.test(s)) return true;
+  return getLocale() === "es" && /^no uses?\s/i.test(s);
 }
 
 // "Promover correção a regra": quando a última mensagem do usuário soa como diretiva, oferece
@@ -2051,7 +2055,7 @@ function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element
   if (!lastUser || dismissed.has(lastUser.id)) return null;
   // O prefixo de eco "[TDD]/[Projeto · …]" é gerado com o rótulo TRADUZIDO (t("comp.project")) — o
   // strip precisa casar as duas formas (label traduzido não é chave: aqui a comparação lista ambas).
-  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*|Project[^\]]*)\]\s*/, "").trim();
+  const rule = lastUser.text.replace(/^\[(TDD|Projeto[^\]]*|Project[^\]]*|Proyecto[^\]]*)\]\s*/, "").trim();
   if (!looksLikeRule(rule)) return null;
   const close = () => setDismissed((s) => new Set(s).add(lastUser.id));
   return (

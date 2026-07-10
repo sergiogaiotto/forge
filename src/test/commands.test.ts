@@ -19,6 +19,7 @@ import {
   commandHint,
   commandLabel,
   COMMAND_EN,
+  COMMAND_ES,
   matchesFullForm,
   SQL_DIALECTS,
 } from "../../webview-ui/src/commands";
@@ -51,8 +52,8 @@ test("commandLabel/commandHint: pt-BR usa a fonte do array; en usa o override (i
 // vê o comando na paleta mas digitá-lo dá "comando desconhecido". Todo label (pt-BR E en) DEVE ser
 // executável via exactSlashCommand — para os de UMA palavra (os de duas, como "/sumário projeto", casam
 // pela cauda em slashWithArgs, coberto à parte).
-test("guard: todo label (pt-BR e en) de uma palavra é executável (casa id/alias no matching)", () => {
-  for (const loc of ["pt-BR", "en"] as const) {
+test("guard: todo label (pt-BR, en e es) de uma palavra é executável (casa id/alias no matching)", () => {
+  for (const loc of ["pt-BR", "en", "es"] as const) {
     setLocaleForTest(loc);
     for (const c of SLASH_COMMANDS) {
       const label = commandLabel(c);
@@ -68,24 +69,27 @@ test("guard: todo label (pt-BR e en) de uma palavra é executável (casa id/alia
 // GUARD: todo comando DEVE ter tradução en (label+hint) em COMMAND_EN — senão o usuário en vê pt-BR em
 // SILÊNCIO (o fallback ?? cru não é erro de compilação, e o guard de matching não pega, pois o label pt
 // ainda casa o id pt). Este teste é a rede contra "traduzir esqueceu o comando novo".
-test("guard: COMMAND_EN cobre TODOS os comandos (label+hint), sem tradução en faltando", () => {
-  for (const c of SLASH_COMMANDS) {
-    const en = COMMAND_EN[c.id];
-    assert.ok(en, `comando "${c.id}" sem entrada em COMMAND_EN — usuário en veria pt-BR`);
-    assert.ok(en.label && en.label.startsWith("/"), `COMMAND_EN["${c.id}"].label inválido`);
-    assert.ok(en.hint && en.hint.length > 0, `COMMAND_EN["${c.id}"].hint vazio`);
-  }
-  // sem entrada órfã (id em COMMAND_EN que não existe em SLASH_COMMANDS)
+test("guard: COMMAND_EN e COMMAND_ES cobrem TODOS os comandos (label+hint), sem tradução faltando", () => {
   const ids = new Set(SLASH_COMMANDS.map((c) => c.id));
-  for (const id of Object.keys(COMMAND_EN)) assert.ok(ids.has(id), `COMMAND_EN tem "${id}" que não existe em SLASH_COMMANDS`);
+  for (const [name, catalog] of [["COMMAND_EN", COMMAND_EN], ["COMMAND_ES", COMMAND_ES]] as const) {
+    for (const c of SLASH_COMMANDS) {
+      const o = catalog[c.id];
+      assert.ok(o, `comando "${c.id}" sem entrada em ${name} — usuário veria pt-BR`);
+      assert.ok(o.label && o.label.startsWith("/"), `${name}["${c.id}"].label inválido`);
+      assert.ok(o.hint && o.hint.length > 0, `${name}["${c.id}"].hint vazio`);
+    }
+    // sem entrada órfã (id no catálogo que não existe em SLASH_COMMANDS)
+    for (const id of Object.keys(catalog)) assert.ok(ids.has(id), `${name} tem "${id}" que não existe em SLASH_COMMANDS`);
+  }
 });
 
-test("matchesFullForm: a forma de DUAS palavras executa em QUALQUER locale (pt e en, sem depender do ativo)", () => {
+test("matchesFullForm: a forma de DUAS palavras executa em QUALQUER locale (pt, en e es, sem depender do ativo)", () => {
   const sumario = SLASH_COMMANDS.find((c) => c.id === "sumario")!;
-  for (const loc of ["pt-BR", "en"] as const) {
+  for (const loc of ["pt-BR", "en", "es"] as const) {
     setLocaleForTest(loc);
     assert.ok(matchesFullForm(sumario, "projeto"), `[${loc}] "/sumário projeto" deveria casar`);
     assert.ok(matchesFullForm(sumario, "project"), `[${loc}] "/summary project" deveria casar`);
+    assert.ok(matchesFullForm(sumario, "proyecto"), `[${loc}] "/resumen proyecto" deveria casar`);
     assert.ok(!matchesFullForm(sumario, "o que ficou pendente"), `[${loc}] cauda arbitrária NÃO casa (anti-sequestro)`);
   }
   setLocaleForTest("pt-BR");

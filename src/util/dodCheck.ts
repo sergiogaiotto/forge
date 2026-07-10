@@ -72,9 +72,10 @@ function isMarkdownReadme(path: string): boolean {
   return /^readme\.(md|markdown)$/.test(baseOf(path));
 }
 
-// Termos (pt/en) que num heading indicam "como rodar/instalar/usar". Sem `.*` — casamento linear, sem risco
-// de backtracking catastrófico.
-const RUN_KEYWORDS = /como\s+(rodar|executar|usar|começar|iniciar|instalar)|instala|configura|setup|getting\s+started|quick\s?start|usage|running|\brun\b|execu|deploy/i;
+// Termos (pt/en/es) que num heading indicam "como rodar/instalar/usar". Sem `.*` — casamento linear, sem
+// risco de backtracking catastrófico. `c[óo]mo` + `ejecu` cobrem "## Cómo ejecutar" (a doc do
+// package.nls.es o cita — o detector precisa honrar a promessa; achado da revisão do PR 11).
+const RUN_KEYWORDS = /c[óo]mo\s+(rodar|executar|usar|começar|iniciar|instalar|ejecutar|correr|empezar)|instala|configura|setup|getting\s+started|quick\s?start|usage|running|\brun\b|execu|ejecu|deploy/i;
 
 // Seção de execução num README MARKDOWN: um heading (#..######) contendo um termo de execução, OU um bloco
 // de código cercado (```/~~~) — quase sempre o comando de instalação/execução. Processa LINHA A LINHA

@@ -21,14 +21,25 @@ test("hostT: chave inexistente cai na própria chave (buraco visível, nunca vaz
   setHostLocale("pt-BR");
 });
 
-test("catálogo host: EN cobre TODAS as chaves do pt-BR e nenhuma string vazia", () => {
+test("catálogo host: TODO locale cobre TODAS as chaves do pt-BR e nenhuma string vazia", () => {
   const ptKeys = Object.keys(HOST_MESSAGES["pt-BR"]).sort();
-  const enKeys = Object.keys(HOST_MESSAGES.en).sort();
-  assert.deepEqual(enKeys, ptKeys, "pt-BR e en devem ter exatamente as mesmas chaves");
+  for (const loc of SUPPORTED_LOCALES) {
+    if (loc === "pt-BR") continue;
+    assert.deepEqual(Object.keys(HOST_MESSAGES[loc]).sort(), ptKeys, `pt-BR e ${loc} devem ter exatamente as mesmas chaves`);
+  }
   assert.ok(ptKeys.length >= 6, `esperado >=6 chaves no piloto, achei ${ptKeys.length}`);
   for (const loc of SUPPORTED_LOCALES) {
     for (const [k, v] of Object.entries(HOST_MESSAGES[loc])) assert.ok(v && v.length > 0, `${loc}.${k} vazio`);
   }
+});
+
+test("hostT: es traduz (PR 11 — a arquitetura escala adicionando um catálogo)", () => {
+  setHostLocale("es");
+  assert.equal(hostT("notice.license.activated"), "Licencia activada.");
+  assert.equal(hostT("gate.py.ok"), "Gate en verde: el conjunto compila e importa (compileall + mypy sin errores de contrato).");
+  assert.equal(hostT("par.diffs", { count: 1, total: 9 }), "❌ **1 divergencia** en 9 métricas:");
+  assert.match(hostT("card.sql.openFile"), /\/ejecutar-sql/); // texto es cita o LABEL es do comando
+  setHostLocale("pt-BR");
 });
 
 // REGRESSÃO (revisão adversarial do PR6): o Onboarding en exibia pt-BR vindo do HOST cru pelo protocolo
