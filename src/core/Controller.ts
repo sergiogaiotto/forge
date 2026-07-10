@@ -329,9 +329,7 @@ export class Controller {
   async reindexCodebase(): Promise<void> {
     await this.rag.build();
     const s = this.rag.status();
-    void vscode.window.showInformationMessage(
-      `FORGE RAG: ${s.files} arquivos, ${s.chunks} trechos (modo ${s.mode}).`
-    );
+    void vscode.window.showInformationMessage(hostT("dialog.ragReindexed", { files: s.files, chunks: s.chunks, mode: s.mode }));
   }
 
   setPoster(post: (msg: ExtToWebview) => void): void {
@@ -518,7 +516,7 @@ export class Controller {
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, updated, "utf8");
-    this.post({ type: "notice", level: "info", message: `Regra adicionada ao perfil do projeto (${PROFILE_RELPATH}).` });
+    this.post({ type: "notice", level: "info", message: hostT("notice.rule.added", { path: PROFILE_RELPATH }) });
     this.obs.record({ type: "profile.ruleAdded" });
     void this.postProfileState();
   }
@@ -526,7 +524,7 @@ export class Controller {
   async openProjectProfile(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para ter um perfil do projeto." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.openFolder.profile") });
       return;
     }
     const abs = path.join(ws, PROFILE_RELPATH);
@@ -544,18 +542,18 @@ export class Controller {
   async pickProjectRole(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para definir o papel do projeto." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.openFolder.role") });
       return;
     }
     const items: { label: string; role: Role }[] = [
-      { label: "Cientista de dados", role: "cientista-de-dados" },
-      { label: "Engenheiro de dados", role: "engenheiro-de-dados" },
-      { label: "Engenheiro de ML", role: "engenheiro-de-ml" },
-      { label: "Engenheiro de IA", role: "engenheiro-de-ia" },
-      { label: "Engenheiro de software", role: "engenheiro-de-software" },
+      { label: hostT("role.cientista"), role: "cientista-de-dados" },
+      { label: hostT("role.engDados"), role: "engenheiro-de-dados" },
+      { label: hostT("role.engMl"), role: "engenheiro-de-ml" },
+      { label: hostT("role.engIa"), role: "engenheiro-de-ia" },
+      { label: hostT("role.engSoftware"), role: "engenheiro-de-software" },
     ];
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: "Seu papel no projeto — ajusta o estilo e os defaults do FORGE",
+      placeHolder: hostT("dialog.role.placeholder"),
     });
     if (!pick) return;
     const abs = path.join(ws, PROFILE_RELPATH);
@@ -620,12 +618,12 @@ export class Controller {
   async draftCharterSection(section: CharterKey, brief: string, live?: CharterSections): Promise<void> {
     if (!CHARTER_KEYS.includes(section)) return;
     if (!(await this.ensureSession())) {
-      this.post({ type: "charter/error", section, message: "Licença requerida para redigir com o modelo." });
+      this.post({ type: "charter/error", section, message: hostT("charter.err.license") });
       return;
     }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "charter/error", section, message: "Configure um provedor antes de redigir (Configurar provedor)." });
+      this.post({ type: "charter/error", section, message: hostT("charter.err.provider") });
       return;
     }
     // Valida o egress ANTES de abrir o trace (não registra uma geração que nunca sairá para a rede).
@@ -765,11 +763,7 @@ export class Controller {
           this.post({
             type: "charter/error",
             section,
-            message:
-              error ??
-              (truncated
-                ? "O modelo atingiu o limite de tokens antes de redigir a seção. Tente de novo; se persistir, aumente forge.provider.maxOutput."
-                : "O modelo não retornou conteúdo para a seção. Tente de novo (detalhes no painel Output → FORGE)."),
+            message: error ?? (truncated ? hostT("charter.err.truncated") : hostT("charter.err.empty")),
           });
         } else {
           delivered = clean; // o trace obs reflete o que o dev recebeu (inclusive resgatado do raciocínio)
@@ -782,11 +776,11 @@ export class Controller {
             section,
             text: clean,
             warning: error
-              ? `A redação foi interrompida por um erro antes de terminar (${error}) — o final pode estar faltando. Revise antes de salvar (ou redija de novo).`
+              ? hostT("charter.warn.error", { error })
               : truncated
                 ? continuationRounds > 0
-                  ? "A seção seguiu cortada mesmo após o FORGE continuar a redação automaticamente — o final pode estar faltando. Revise antes de salvar (ou redija de novo)."
-                  : "A seção foi truncada no limite de tokens — o final pode estar faltando. Revise antes de salvar (ou redija de novo)."
+                  ? hostT("charter.warn.truncatedAfterContinue")
+                  : hostT("charter.warn.truncated")
                 : undefined,
           });
         }
@@ -802,7 +796,7 @@ export class Controller {
           type: "charter/drafted",
           section,
           text: partial,
-          warning: `A redação foi interrompida por um erro antes de terminar (${error}) — o final pode estar faltando. Revise antes de salvar (ou redija de novo).`,
+          warning: hostT("charter.warn.error", { error }),
         });
       } else {
         this.post({ type: "charter/error", section, message: error });
@@ -830,7 +824,7 @@ export class Controller {
   async saveCharter(sections: CharterSections): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para salvar o charter." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.charter") });
       return;
     }
     let doc = await this.readCharterDoc();
@@ -848,11 +842,7 @@ export class Controller {
   // salvos), evitando divergência com o project.md em disco. Reusa todo o pipeline de geração/proposta.
   async generateAcceptanceTests(fr: string, nfr: string): Promise<void> {
     if (!fr.trim() && !nfr.trim()) {
-      this.post({
-        type: "notice",
-        level: "warn",
-        message: "Preencha os Requisitos (funcionais/não funcionais) no Charter antes de gerar os testes de aceitação.",
-      });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.charter.fillReqs") });
       return;
     }
     await this.startTask(buildAcceptanceTestsRequest(fr, nfr), "tdd");
@@ -871,17 +861,17 @@ export class Controller {
       return;
     }
     if (!(await this.ensureSession())) {
-      this.post({ type: "project/blueprintError", message: "Licença requerida para planejar o projeto." });
+      this.post({ type: "project/blueprintError", message: hostT("bp.err.license") });
       return;
     }
     if (this.resolveIdentity().emailRequired) {
-      this.post({ type: "project/blueprintError", message: "Informe seu e-mail na configuração inicial antes de planejar." });
+      this.post({ type: "project/blueprintError", message: hostT("bp.err.email") });
       await this.postState();
       return;
     }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "project/blueprintError", message: "Configure um provedor antes de planejar." });
+      this.post({ type: "project/blueprintError", message: hostT("bp.err.provider") });
       return;
     }
     try {
@@ -891,7 +881,7 @@ export class Controller {
       return;
     }
     // Narração do planejamento (o modal mostra a etapa atual em vez de um spinner estático).
-    this.post({ type: "project/planStep", label: "Analisando os requisitos e desenhando a arquitetura…" });
+    this.post({ type: "project/planStep", label: hostT("bp.step.analyze") });
     const sr = this.structuredRuntime(runtime); // esforço "low" + temperature 0 (formato estrito)
     // Injeta o charter (propósito) + deps fixadas já no PLANO: o blueprint precisa refletir o domínio
     // real e as libs do workspace, não um exemplo canônico (achado da auditoria: charter ignorado).
@@ -918,7 +908,7 @@ export class Controller {
     };
     try {
       // Tentativa 1: pedido normal.
-      const a1 = await this.streamBlueprintAttempt(sr, system, brief, "Raciocinando sobre a arquitetura…");
+      const a1 = await this.streamBlueprintAttempt(sr, system, brief, hostT("bp.step.reasoning"));
       obsOutput = a1.text || a1.reasoning;
       addUsage(a1.usage);
       if (a1.error) {
@@ -926,7 +916,7 @@ export class Controller {
         this.post({ type: "project/blueprintError", message: a1.error });
         return;
       }
-      this.post({ type: "project/planStep", label: "Ordenando os arquivos por dependência…" });
+      this.post({ type: "project/planStep", label: hostT("bp.step.order") });
       let picked = this.pickBlueprint(a1);
       // Plano PARCIAL reparado (corte sem sinal): NÃO curto-circuita — a conversão recebe o texto
       // original (cap bipartido preserva as pontas) e frequentemente recupera o plano COMPLETO,
@@ -948,13 +938,13 @@ export class Controller {
           contentHead: a1.text.slice(0, 300),
           reasoningHead: a1.reasoning.slice(0, 300),
         });
-        this.post({ type: "project/planStep", label: "A resposta veio sem o plano completo — pedindo a conversão…" });
+        this.post({ type: "project/planStep", label: hostT("bp.step.convert") });
         // A 2ª tentativa AMOSTRA (temperatura default do servidor) em vez de repetir a greedy: com
         // temperature 0 as duas tentativas eram deterministicamente idênticas — se a 1ª degenerou
         // (greedy no gpt-oss pode repetir/derivar), a 2ª degenerava igual, e o "Tentar de novo" também.
         const srRetry: ProviderRuntimeConfig = { ...sr };
         delete srRetry.temperature;
-        const a2 = await this.streamBlueprintAttempt(srRetry, system, buildBlueprintRetryRequest(brief, a1.text || a1.reasoning), "Convertendo o plano…");
+        const a2 = await this.streamBlueprintAttempt(srRetry, system, buildBlueprintRetryRequest(brief, a1.text || a1.reasoning), hostT("bp.step.converting"));
         obsOutput = a2.text || a2.reasoning || obsOutput;
         addUsage(a2.usage);
         if (a2.error) {
@@ -991,10 +981,10 @@ export class Controller {
           head: obsOutput.slice(0, 400),
         });
         const detail = picked.truncated
-          ? "O modelo atingiu o limite de tokens de saída antes de terminar o plano — aumente forge.provider.maxOutput ou reduza o escopo da descrição."
+          ? hostT("bp.err.truncated")
           : obsOutput.trim()
-            ? "O modelo respondeu, mas sem um array JSON de plano válido, mesmo após pedir a conversão."
-            : "O modelo não retornou conteúdo (a resposta veio vazia nas duas tentativas).";
+            ? hostT("bp.err.noArray")
+            : hostT("bp.err.empty");
         obsError = detail;
         // Trecho do que veio DENTRO do modal: diagnóstico instantâneo sem abrir o Output (o log
         // completo continua lá). Whitespace colapsado para caber numa linha do modal.
@@ -1002,7 +992,7 @@ export class Controller {
         const head = flat.slice(0, 140) + (flat.length > 140 ? "…" : ""); // … só quando cortou de fato
         this.post({
           type: "project/blueprintError",
-          message: `${detail} Detalhes técnicos no painel Output → FORGE. Tente de novo — ou ajuste o modelo/esforço no rodapé.${head ? ` Início da resposta: "${head}"` : ""}`,
+          message: hostT("bp.err.detail", { detail, head: head ? hostT("bp.err.head", { head }) : "" }),
         });
         return;
       }
@@ -1021,11 +1011,7 @@ export class Controller {
         blueprint: { language, architecture, brief: text, files: this.projectSession.files },
         // Resposta cortada (com OU sem sinal de truncamento) mas o reparo recuperou os objetos
         // completos: plano PARCIAL utilizável. O aviso vai DENTRO do modal (toast ficaria atrás).
-        warning: picked.truncated
-          ? "A resposta truncou no limite de tokens e recuperei um plano parcial — arquivos do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
-          : picked.salvaged
-            ? "A resposta veio cortada no meio do plano (sem sinal de truncamento) e recuperei os arquivos completos — os do fim podem faltar. Revise a lista antes de aprovar (ou tente de novo)."
-            : undefined,
+        warning: picked.truncated ? hostT("bp.warn.truncated") : picked.salvaged ? hostT("bp.warn.salvaged") : undefined,
       });
     } catch (e) {
       obsError = (e as Error)?.message ?? String(e);
@@ -1075,7 +1061,7 @@ export class Controller {
           if (!gotText) {
             gotText = true;
             clearInterval(beat);
-            this.post({ type: "project/planStep", label: "Recebendo o plano do modelo…" });
+            this.post({ type: "project/planStep", label: hostT("bp.step.receiving") });
           }
           text += chunk.text;
         } else if (chunk.kind === "reasoning") {
@@ -1122,16 +1108,16 @@ export class Controller {
     // Pré-checagens (as mesmas do startTask) ANTES de marcar "gerando" — senão uma falha precoce (licença/
     // e-mail/provedor) deixaria o modal preso em "gerando…" (o project/done só é postado após o run).
     if (!(await this.ensureSession())) {
-      this.post({ type: "project/blueprintError", message: "Licença requerida para gerar o projeto." });
+      this.post({ type: "project/blueprintError", message: hostT("bp.err.genLicense") });
       return;
     }
     if (this.resolveIdentity().emailRequired) {
-      this.post({ type: "project/blueprintError", message: "Informe seu e-mail na configuração inicial antes de gerar." });
+      this.post({ type: "project/blueprintError", message: hostT("bp.err.genEmail") });
       await this.postState();
       return;
     }
     if (!(await this.runtimeProviderConfig())) {
-      this.post({ type: "project/blueprintError", message: "Nenhum provedor configurado." });
+      this.post({ type: "project/blueprintError", message: hostT("notice.provider.none") });
       return;
     }
     for (const f of s.files) if (f.status !== "applied") f.status = "generating";
@@ -1180,7 +1166,7 @@ export class Controller {
     const decision = contractGateDecision(contractUnv, policyOn, !!opts?.forceBlocked);
     if (decision === "block") {
       this.permissions.note({ kind: "contract.unverified", action: "Aplicar tudo com contrato cross-file não verificado", scope: "write" }, "blocked", "policy");
-      this.post({ type: "notice", level: "warn", message: 'Bloqueado por política do admin (forge.gate.blockUnverifiedContract): o contrato cross-file precisa ser VERIFICADO antes de aplicar tudo. Rode "Preparar ambiente" (cria o venv) e depois "Re-verificar contrato" (o gate instala o mypy no venv e verifica as MESMAS propostas, sem regenerar).' });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.contractPolicy.applyAll") });
       log.info("Aplicar tudo bloqueado: contrato cross-file não verificado + política blockUnverifiedContract");
       return;
     }
@@ -1233,7 +1219,7 @@ export class Controller {
     if (this.projectSession?.language === "python" && appliedPaths.length) {
       const n = await this.ensurePythonPackageInits(appliedPaths);
       if (n > 0) {
-        this.post({ type: "notice", level: "info", message: `Estrutura de pacotes: criei ${n} arquivo(s) __init__.py ausente(s) para os imports do projeto resolverem.` });
+        this.post({ type: "notice", level: "info", message: hostT("notice.project.initCreated", { count: n }) });
       }
     }
     if (this.projectSession) {
@@ -1243,10 +1229,10 @@ export class Controller {
         this.post({ type: "project/appliedAll" });
       }
     }
-    const parts = [`${applied} aplicado(s)`];
-    if (blocked) parts.push(`${blocked} bloqueado(s) pelo quality gate${opts?.forceBlocked ? "" : ' — use "Forçar bloqueados" se revisou'}`);
-    if (partial.length) parts.push(`${partial.length} parcial(is) pulado(s) — revise e aplique pelo cartão`);
-    this.post({ type: "notice", level: partial.length || blocked ? "warn" : "info", message: `Aplicar tudo: ${parts.join(" · ")}.` });
+    const parts = [hostT("notice.applyAll.applied", { count: applied })];
+    if (blocked) parts.push(hostT("notice.applyAll.blocked", { count: blocked }) + (opts?.forceBlocked ? "" : hostT("notice.applyAll.blockedHint")));
+    if (partial.length) parts.push(hostT("notice.applyAll.partial", { count: partial.length }));
+    this.post({ type: "notice", level: partial.length || blocked ? "warn" : "info", message: hostT("notice.applyAll", { parts: parts.join(" · ") }) });
   }
 
   // Garante os __init__.py REAIS dos pacotes Python (o gate só semeia sintéticos numa árvore temp).
@@ -1343,19 +1329,14 @@ export class Controller {
   // (nunca em settings, RNF-010). baseUrl/publicKey/enabled ficam em forge.observability.langfuse.*.
   async setupObservability(): Promise<void> {
     const secret = await vscode.window.showInputBox({
-      prompt: "Langfuse secret key (sk-lf-…) — guardada no SecretStorage, nunca em settings",
+      prompt: hostT("dialog.langfuse.prompt"),
       password: true,
       placeHolder: "sk-lf-...",
       ignoreFocusOut: true,
     });
     if (secret === undefined) return;
     await this.secrets.set(SecretsStore.KEY_LANGFUSE_SECRET, secret.trim());
-    this.post({
-      type: "notice",
-      level: "info",
-      message:
-        "Secret do Langfuse salva. Habilite forge.observability.langfuse.enabled, defina baseUrl/publicKey e adicione o host do Langfuse em forge.egress.allowedHosts.",
-    });
+    this.post({ type: "notice", level: "info", message: hostT("notice.langfuseSaved") });
   }
 
   // ---- estado ----------------------------------------------------------------
@@ -1415,11 +1396,11 @@ export class Controller {
   async setEmail(email: string): Promise<void> {
     const value = (email ?? "").trim();
     if (!isEmail(value)) {
-      this.post({ type: "notice", level: "error", message: "E-mail inválido. Informe um e-mail corporativo válido." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.email.invalid") });
       return;
     }
     await this.context.globalState.update(GS_IDENTITY_EMAIL, value);
-    this.post({ type: "notice", level: "info", message: "E-mail registrado para a observabilidade." });
+    this.post({ type: "notice", level: "info", message: hostT("notice.email.saved") });
     await this.postState();
   }
 
@@ -1511,7 +1492,7 @@ export class Controller {
         this.history = [];
         this.pendingAttachments = [];
         this.postAttachments();
-        this.post({ type: "notice", level: "info", message: "Contexto limpo: histórico e anexos zerados." });
+        this.post({ type: "notice", level: "info", message: hostT("notice.context.cleared") });
         break;
       case "chat/summarize":
         await this.summarizeHistory();
@@ -1627,11 +1608,7 @@ export class Controller {
         await this.searchInternal();
         break;
       case "context/webInfo":
-        this.post({
-          type: "notice",
-          level: "info",
-          message: "Por política, o FORGE não navega na internet pública (soberania de dados). O admin pode habilitar uma fonte interna (MCP) em forge.search.server.",
-        });
+        this.post({ type: "notice", level: "info", message: hostT("notice.webBlocked") });
         break;
       case "skill/toggle":
         await this.toggleSkill(msg.name, msg.enabled);
@@ -1697,16 +1674,12 @@ export class Controller {
 
   async activateLicense(key: string): Promise<void> {
     if (!this.verifier.isConfigured()) {
-      this.post({
-        type: "notice",
-        level: "error",
-        message: "Chave pública de licença não embutida. Rode `npm run keygen` (admin) antes de validar licenças.",
-      });
+      this.post({ type: "notice", level: "error", message: hostT("notice.license.noPubkey") });
       return;
     }
     const result = await this.licenseClient.activate(key);
     if ("error" in result) {
-      this.post({ type: "notice", level: "error", message: `Licença recusada: ${result.error.message}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.license.refused", { error: result.error.message }) });
       await this.postState();
       return;
     }
@@ -1724,7 +1697,7 @@ export class Controller {
         scope: local.payload.scope,
       });
     }
-    this.post({ type: "notice", level: "info", message: "Licença ativada." });
+    this.post({ type: "notice", level: "info", message: hostT("notice.license.activated") });
     await this.postState();
   }
 
@@ -1763,7 +1736,7 @@ export class Controller {
       maxOutput: setup.modelId === existing?.modelId ? existing?.maxOutput : undefined,
     };
     await this.context.globalState.update(GS_PROVIDER, persisted);
-    this.post({ type: "notice", level: "info", message: "Provedor configurado." });
+    this.post({ type: "notice", level: "info", message: hostT("notice.provider.configured") });
     await this.postState();
   }
 
@@ -1791,16 +1764,16 @@ export class Controller {
   async pickMaxOutput(): Promise<void> {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
     if (!p) {
-      this.post({ type: "notice", level: "warn", message: "Configure um provedor antes de definir o máximo de tokens de saída." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.provider.beforeMaxOutput") });
       return;
     }
     const current = p.maxOutput ?? 0;
     const items = MAX_OUTPUT_PRESETS.map((v) => ({
-      label: v === 0 ? "auto (catálogo do modelo)" : `${maxOutputLabel(v)} tokens`,
-      description: v === current ? "atual" : v === 0 ? "usa o teto do catálogo / config do admin" : "rebaixado à janela servida se necessário",
+      label: v === 0 ? hostT("dialog.maxOutput.auto") : hostT("dialog.maxOutput.tokens", { label: maxOutputLabel(v) }),
+      description: v === current ? hostT("dialog.maxOutput.current") : v === 0 ? hostT("dialog.maxOutput.autoDesc") : hostT("dialog.maxOutput.loweredDesc"),
       value: v,
     }));
-    const pick = await vscode.window.showQuickPick(items, { title: "Máximo de tokens de saída (por sessão)", placeHolder: "Escolha o teto de saída — valores altos são rebaixados ao que o gateway serve" });
+    const pick = await vscode.window.showQuickPick(items, { title: hostT("dialog.maxOutput.title"), placeHolder: hostT("dialog.maxOutput.placeholder") });
     if (pick) await this.setMaxOutput(pick.value);
   }
 
@@ -1976,18 +1949,18 @@ export class Controller {
     if (!text.trim()) return;
     // RF-010/015: condiciona a inferência a uma sessão válida.
     if (!(await this.ensureSession())) {
-      this.post({ type: "notice", level: "error", message: "Licença requerida. Ative a licença para gerar código." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.license.required") });
       return;
     }
     // RF-063: identidade obrigatória quando não há coleta automática do e-mail.
     if (this.resolveIdentity().emailRequired) {
-      this.post({ type: "notice", level: "error", message: "Informe seu e-mail na configuração inicial antes de gerar código." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.email.required") });
       await this.postState();
       return;
     }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "notice", level: "error", message: "Nenhum provedor configurado." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.provider.none") });
       return;
     }
 
@@ -2142,7 +2115,7 @@ export class Controller {
         // Falha TOTAL da geração (ex.: erro do provedor no meio do stream, que vira stream/error e NÃO
         // gera propostas). Em vez de um project/done silencioso (modal "concluído" sem nada), mantém o
         // modal com o erro + a lista (vermelha) + "Aprovar e gerar" habilitado — o dev vê e regenera.
-        this.post({ type: "project/blueprintError", message: 'Não consegui gerar nenhum arquivo (falha do provedor ou limite de tokens). Ajuste e clique em "Aprovar e gerar" para tentar de novo.' });
+        this.post({ type: "project/blueprintError", message: hostT("bp.err.noneGenerated") });
       } else {
         // P2 (templates/nível 3): materializa o scaffold DETERMINÍSTICO das skills ativadas (os .tmpl
         // declarados no frontmatter) como forge-file — ANTES do gate, para que herdem a checagem, e em
@@ -2162,7 +2135,7 @@ export class Controller {
         // o teto de rodadas. O gate continua BLOQUEANDO o Aplicar se não fechar — nunca entrega em silêncio.
         const MAX_PROJECT_REPAIRS = 2;
         for (let round = 1; gate && gate.fileErrors.length > 0 && round <= MAX_PROJECT_REPAIRS; round++) {
-          this.post({ type: "notice", level: "info", message: `Auto-reparo do projeto: ${gate.fileErrors.length} arquivo(s) com erro de contrato — regenerando (rodada ${round}/${MAX_PROJECT_REPAIRS})…` });
+          this.post({ type: "notice", level: "info", message: hostT("notice.project.autoRepair", { count: gate.fileErrors.length, round, max: MAX_PROJECT_REPAIRS }) });
           const repairStart = Date.now(); // P3: span de cada rodada de auto-reparo (nova chamada ao provedor)
           const n = await this.repairProjectFromGate(gate, project, runtime);
           this.obs.record({ type: "phase.timing", taskId: this.currentTask?.taskId ?? "", phase: "repair", durationMs: Date.now() - repairStart });
@@ -2172,18 +2145,18 @@ export class Controller {
         // Violações de arquitetura NÃO passam pelo auto-reparo (ver runProjectGate): avisa o dev para
         // corrigir a DIREÇÃO do import — os arquivos seguem bloqueados no Aplicar até então.
         if (gate?.architectureErrors?.length) {
-          this.post({ type: "notice", level: "warn", message: `Arquitetura: ${gate.architectureErrors.length} arquivo(s) violam a regra de camadas (a camada interna importa a externa) — corrija a DIREÇÃO do import (inverta a dependência / use uma port). Esses arquivos estão bloqueados no Aplicar.` });
+          this.post({ type: "notice", level: "warn", message: hostT("notice.project.architecture", { count: gate.architectureErrors.length }) });
         }
         // Definição de pronto (P2): requisitos AUSENTES do conjunto (manifesto/teste/README). Como a falta
         // não se atribui a um arquivo, bloqueia o Aplicar de TODOS — o dev gera o que falta e re-roda. Não
         // entra no auto-reparo (é bloco de arquivo NOVO, que o reparo de type-drift descarta): só avisa.
         if (gate?.dodErrors?.length) {
-          this.post({ type: "notice", level: "warn", message: `Definição de pronto: o projeto está incompleto (${gate.dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar. ${gate.dodErrors.join(" ")}` });
+          this.post({ type: "notice", level: "warn", message: hostT("notice.project.dod", { count: gate.dodErrors.length, errors: gate.dodErrors.join(" ") }) });
         }
         // Segurança (P2): achados de ALTO risco do bandit bloqueiam o arquivo. Fora do auto-reparo — o dev
         // corrige a vulnerabilidade (o prompt de reparo de type-drift não sabe endereçar segurança).
         if (gate?.securityErrors?.length) {
-          this.post({ type: "notice", level: "warn", message: `Segurança: ${gate.securityErrors.length} arquivo(s) com achado de ALTO risco do bandit (severidade+confiança altas) — Aplicar bloqueado. Corrija a vulnerabilidade apontada no cartão.` });
+          this.post({ type: "notice", level: "warn", message: hostT("notice.project.security", { count: gate.securityErrors.length }) });
         }
         // Reconciliação de dependências (P4): o DoD garante que o manifesto EXISTE; aqui garantimos que está
         // CORRETO — acrescenta ao requirements.txt gerado os pacotes que o código importa mas não declara.
@@ -2202,7 +2175,7 @@ export class Controller {
         }
         this.post({ type: "project/done" });
         if (done < total) {
-          this.post({ type: "notice", level: "warn", message: `Projeto: ${done}/${total} arquivos gerados. Os que faltaram estão em vermelho — clique em "Aprovar e gerar" de novo para completar.` });
+          this.post({ type: "notice", level: "warn", message: hostT("notice.project.incomplete", { done, total }) });
         }
       }
     }
@@ -2265,7 +2238,7 @@ export class Controller {
         materialized.push(p.dest);
       }
       if (materialized.length > 0) {
-        this.post({ type: "notice", level: "info", message: `Scaffold determinístico: ${materialized.length} arquivo(s) NOVOS materializados de skills ativadas — ${materialized.join(", ")}. Herdaram o gate.` });
+        this.post({ type: "notice", level: "info", message: hostT("notice.project.scaffold", { count: materialized.length, files: materialized.join(", ") }) });
         log.info(`Templates: materializados ${materialized.length} de skills ativadas — ${materialized.join(", ")}`);
       }
     } catch (e) {
@@ -2278,10 +2251,10 @@ export class Controller {
   // sem regenerar o projeto via LLM (que descartaria exatamente o artefato que o dev revisou).
   async reRunProjectGate(): Promise<void> {
     if (!this.currentTask || !this.lastGateRun || this.currentTask.proposals.size === 0) {
-      this.post({ type: "notice", level: "warn", message: "Nada para re-verificar — gere o projeto primeiro." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.regate.nothing") });
       return;
     }
-    this.post({ type: "notice", level: "info", message: "Re-rodando a verificação sobre as propostas existentes…" });
+    this.post({ type: "notice", level: "info", message: hostT("notice.regate.running") });
     const g = this.lastGateRun;
     await this.runProjectGate(g.language, g.architecture, g.complete);
   }
@@ -2435,42 +2408,41 @@ export class Controller {
 
       const totalBlocked = gate.fileErrors.length + architectureErrors.length + securityErrors.length;
       const fileParts: string[] = [];
-      if (gate.fileErrors.length) fileParts.push(`${gate.fileErrors.length} ${language === "go" ? "de sintaxe (gofmt)" : "de compilação/contrato"}`);
-      if (architectureErrors.length) fileParts.push(`${architectureErrors.length} de arquitetura (regra de camadas)`);
-      if (securityErrors.length) fileParts.push(`${securityErrors.length} de segurança (bandit ALTO)`);
+      if (gate.fileErrors.length) fileParts.push(hostT(language === "go" ? "gate.part.syntaxGo" : "gate.part.compile", { count: gate.fileErrors.length }));
+      if (architectureErrors.length) fileParts.push(hostT("gate.part.arch", { count: architectureErrors.length }));
+      if (securityErrors.length) fileParts.push(hostT("gate.part.security", { count: securityErrors.length }));
       // Avisos de TIPO do tsc / do go build (advisory): mostram a CONTAGEM no resumo (o veredito completo exige
       // as deps). Os erros de SINTAXE (TS1xxx / gofmt), esses, entram em gate.fileErrors (bloqueiam) e pintam
       // os cartões. Só um dos sufixos é não-vazio (a linguagem é uma só).
-      const tscSuffix = tscTypeAdvisories.length ? ` · tsc: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory — instale as deps e rode o tsc para o veredito completo)` : "";
-      const goSuffix = goBuildAdvisories.length ? ` · go build: ${goBuildAdvisories.length} aviso(s) (advisory — rode go build ./... com as dependências para o veredito completo)` : "";
+      const tscSuffix = tscTypeAdvisories.length ? hostT("gate.tscSuffix", { count: tscTypeAdvisories.length }) : "";
+      const goSuffix = goBuildAdvisories.length ? hostT("gate.goSuffix", { count: goBuildAdvisories.length }) : "";
       const langSuffix = tscSuffix + goSuffix;
       // O resumo-base do summarizeGate é redigido para o toolchain Python (compileall/mypy). Em Go, reescreve
       // com os nomes das ferramentas certas (gofmt/go build) para os casos SEM bloqueio (advisory/parcial/verde);
       // os casos COM bloqueio já têm texto próprio abaixo.
       const goBaseSummary = gate.advisory
-        ? "Gate consultivo: go/gofmt indisponíveis no ambiente — nada foi bloqueado (o projeto pode não compilar)."
+        ? hostT("gate.go.advisory")
         : gate.fileErrors.length > 0
-          ? `Gate reprovou: ${gate.fileErrors.length} arquivo(s) com erro de sintaxe (gofmt). O "Aplicar" deles está bloqueado até corrigir.`
+          ? hostT("gate.go.failed", { count: gate.fileErrors.length })
           : gate.projectErrors.length > 0
-            ? "Gate rodou mas não consegui localizar a falha por arquivo (veja os detalhes) — nada foi bloqueado."
-            : "Gate Go: sem erro de sintaxe (gofmt); a compilação completa (go build) rodou como advisory — sem as dependências não é veredito.";
+            ? hostT("gate.py.unattributed")
+            : hostT("gate.go.ok");
       // Java roda SÓ a arquitetura (sem toolchain → gate.advisory=true); o resumo honesto diz isso.
-      const javaBaseSummary =
-        "Gate Java: arquitetura (regra de camadas) verificada — a compilação (javac) não roda neste ambiente e fica de fora; nada bloqueado por camadas.";
+      const javaBaseSummary = hostT("gate.java");
       const baseSummary = language === "go" ? goBaseSummary : language === "java" ? javaBaseSummary : gate.summary;
       const summary =
         (dodBlocksAll
-          ? `Definição de pronto: o projeto está incompleto (${dodErrors.length} requisito(s) faltando) — Aplicar bloqueado até fechar.${totalBlocked > 0 ? ` Também ${totalBlocked} arquivo(s) com erro (${fileParts.join(" · ")}).` : ""}`
+          ? hostT("gate.dodIncomplete", { count: dodErrors.length }) + (totalBlocked > 0 ? hostT("gate.alsoBlocked", { count: totalBlocked, parts: fileParts.join(" · ") }) : "")
           : totalBlocked > 0
-            ? `Gate reprovou: ${totalBlocked} arquivo(s) bloqueados${fileParts.length ? ` — ${fileParts.join(" · ")}` : ""}. Corrija antes de aplicar.`
+            ? hostT("gate.blocked", { count: totalBlocked, parts: fileParts.length ? ` — ${fileParts.join(" · ")}` : "" })
             : securityAdvisories.length
-              ? `${baseSummary} · segurança: ${securityAdvisories.length} aviso(s) do bandit (não bloqueiam).`
+              ? baseSummary + hostT("gate.securitySuffix", { count: securityAdvisories.length })
               : baseSummary) + langSuffix;
       if (tscTypeAdvisories.length) log.info(`Gate TS: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory) — ${tscTypeAdvisories.slice(0, 5).join(" | ")}`);
       if (goBuildAdvisories.length) log.info(`Gate Go: ${goBuildAdvisories.length} aviso(s) do go build (advisory) — ${goBuildAdvisories.slice(0, 5).join(" | ")}`);
       // A UI pinta os cartões de compilação/arquitetura/segurança (por-arquivo) e mostra DoD + avisos de
       // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
-      const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), `… e mais ${securityAdvisories.length - 12} aviso(s) — veja o log de diagnóstico.`] : securityAdvisories;
+      const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), hostT("gate.moreSecurity", { count: securityAdvisories.length - 12 })] : securityAdvisories;
       // Contrato cross-file NÃO verificado (Python compilou mas o mypy não rodou): "Aplicar tudo" passa a
       // exigir confirmação. NÃO conta se já há bloqueio duro (o dev corrige/força esse primeiro) — a
       // supressão vale SÓ para a semântica de confirmação; a POLÍTICA usa o flag CRU abaixo (senão
@@ -2491,7 +2463,7 @@ export class Controller {
       this.gateContractUnverified = false; // não trava o Aplicar por CONFIRMAÇÃO (retrocompat)
       this.gateContractUnverifiedHard = contractUnverified(language, false, true);
       const contractBlocked = this.gateContractUnverifiedHard && this.config.blockUnverifiedContract();
-      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, contractBlocked, summary: contractBlocked ? "Não consegui rodar o gate de compilação — e a política do admin exige contrato verificado. Prepare o ambiente e re-verifique." : "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.", files: [], projectErrors: [], dod: [], security: [] });
+      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, contractBlocked, summary: contractBlocked ? hostT("gate.couldntRun.policy") : hostT("gate.couldntRun"), files: [], projectErrors: [], dod: [], security: [] });
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -2536,7 +2508,7 @@ export class Controller {
     const ws = this.workspaceRoot();
     const venvPy = ws ? findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV) : undefined;
     if (!venvPy) {
-      this.post({ type: "stream/notice", taskId, level: "info", message: "Smoke test dos testes gerados pulado: sem venv do workspace. Rode Preparar ambiente para validar que o projeto de fato roda." });
+      this.post({ type: "stream/notice", taskId, level: "info", message: hostT("notice.smoke.noVenv") });
       return;
     }
     let root: string | undefined;
@@ -2600,7 +2572,7 @@ export class Controller {
     // Auto-corrige a proposta NO LUGAR (mesmo id) e re-posta o cartão para refletir o arquivo corrigido.
     manifest.proposal = { ...manifest.proposal, modified: content };
     this.post({ type: "stream/proposalUpdate", proposal: manifest.proposal });
-    this.post({ type: "notice", level: "info", message: `Reconciliação de dependências: adicionei ao ${manifest.proposal.filePath} ${added.length} pacote(s) usado(s) no código mas não declarado(s): ${added.join(", ")}. Revise antes de aplicar.` });
+    this.post({ type: "notice", level: "info", message: hostT("notice.deps.reconciled", { path: manifest.proposal.filePath, count: added.length, packages: added.join(", ") }) });
     log.info(`Reconciliação: +${added.length} em ${manifest.proposal.filePath} (${added.join(", ")})`);
   }
 
@@ -2801,7 +2773,7 @@ export class Controller {
       if (probe.status === "ok") return; // mypy já disponível no venv
       if (this.runService.isBusy()) return; // não atropela uma execução em andamento
       // Best-effort: se a instalação não iniciar/falhar (offline, sem índice pip), o gate fica "parcial".
-      await this.runService.runCommand("gate · mypy (coerência)", buildMypyInstall(venv), this.config.env().timeoutSeconds * 1000);
+      await this.runService.runCommand(hostT("run.label.gateMypy"), buildMypyInstall(venv), this.config.env().timeoutSeconds * 1000);
     } catch (e) {
       log.warn("Gate: não consegui garantir o mypy no venv — seguindo (o gate pode ficar parcial)", e);
     }
@@ -2820,7 +2792,7 @@ export class Controller {
       const probe = await runFileCheck({ id: "probe", label: "bandit", gate: false }, py, ["-m", "bandit", "--version"], { timeoutMs: 15_000 });
       if (probe.status === "ok") return; // bandit já disponível no venv
       if (this.runService.isBusy()) return; // não atropela uma execução em andamento
-      await this.runService.runCommand("gate · bandit (segurança)", buildBanditInstall(venv), this.config.env().timeoutSeconds * 1000);
+      await this.runService.runCommand(hostT("run.label.gateBandit"), buildBanditInstall(venv), this.config.env().timeoutSeconds * 1000);
     } catch (e) {
       log.warn("Gate: não consegui garantir o bandit no venv — seguindo (segurança consultiva)", e);
     }
@@ -2868,16 +2840,16 @@ export class Controller {
   // stripHarmony, resgate do canal de raciocínio) — nunca substitui o histórico por lixo.
   private async summarizeHistory(): Promise<void> {
     if (this.history.length === 0) {
-      this.post({ type: "notice", level: "info", message: "Nada para resumir — o histórico está vazio." });
+      this.post({ type: "notice", level: "info", message: hostT("notice.summarize.empty") });
       return;
     }
     if (!(await this.ensureSession())) {
-      this.post({ type: "notice", level: "error", message: "Licença requerida para resumir." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.summarize.license") });
       return;
     }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "notice", level: "warn", message: "Configure um provedor antes de resumir." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.summarize.provider") });
       return;
     }
     try {
@@ -2920,27 +2892,27 @@ export class Controller {
         }
       }
       if (error) {
-        this.post({ type: "notice", level: "error", message: `Não consegui resumir: ${error}` });
+        this.post({ type: "notice", level: "error", message: hostT("notice.summarize.failed", { error }) });
         return;
       }
       let clean = stripHarmony(text);
       if (!clean.trim() && reasoning.trim()) clean = extractFinalChannel(reasoning) ?? "";
       if (!clean.trim()) {
-        this.post({ type: "notice", level: "error", message: "O modelo não retornou o resumo — o histórico foi mantido intacto. Tente de novo." });
+        this.post({ type: "notice", level: "error", message: hostT("notice.summarize.emptyResult") });
         return;
       }
       // Substitui os turnos pelo resumo SÓ com um resumo válido em mãos E se o histórico não mudou
       // durante o stream (o dev pode ter enviado mensagem, aplicado proposta ou dado /limpar nesse
       // meio-tempo — sobrescrever perderia turnos ou ressuscitaria conversa apagada).
       if (this.history !== snapshot || this.history.length !== turns) {
-        this.post({ type: "notice", level: "warn", message: "O histórico mudou durante o resumo — descartei o resumo para não perder nada. Rode /resumir de novo." });
+        this.post({ type: "notice", level: "warn", message: hostT("notice.summarize.drift") });
         return;
       }
       this.history = [{ role: "user", content: `Contexto (resumo da conversa anterior):\n${clean}` }];
       this.post({ type: "chat/summarized", summary: clean, turns });
     } catch (e) {
       error = (e as Error)?.message ?? String(e);
-      this.post({ type: "notice", level: "error", message: `Não consegui resumir: ${error}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.summarize.failed", { error }) });
     } finally {
       const end: ObsEvent = { type: "generation.end", taskId, durationMs: Date.now() - started, model: sr.modelId, input: convo.slice(0, 2000), output: text, usage, proposals: 0, error };
       this.trackUsage(end);
@@ -2953,7 +2925,7 @@ export class Controller {
   private async reportContext(): Promise<void> {
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "notice", level: "warn", message: "Configure um provedor para ver o orçamento de contexto." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.context.provider") });
       return;
     }
     const [stack, sources] = await Promise.all([this.detectWorkspaceStack(), this.loadProfileSources()]);
@@ -3108,7 +3080,7 @@ export class Controller {
           { kind: "sql.write", action: `conexão "${conn.id}" (MCP): ${decision.reason}`, subject: conn.id, scope: "write", detail: sql },
           { confirmLabel: "Executar escrita" }
         );
-        if (!ok) return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+        if (!ok) return { refused: hostT("sql.writeCancelled") };
       }
       const started = Date.now();
       const r = await this.mcp.callTool(conn.mcp.server, conn.mcp.tool, { [conn.mcp.sqlArg]: sql });
@@ -3160,7 +3132,7 @@ export class Controller {
     try {
       const ws = this.workspaceRoot();
       if (!ws) {
-        this.dataCard("### Git\n\nAbra uma pasta no VSCode para usar os comandos de git.");
+        this.dataCard(hostT("card.git.openFolder"));
         return;
       }
       // GATE de Workspace Trust: o git executa código controlado pelo REPOSITÓRIO (fsmonitor, hooks,
@@ -3168,7 +3140,7 @@ export class Controller {
       // nenhum comando de git roda (mesma postura do git nativo do VSCode). O `-c core.fsmonitor=` do
       // runGit é defesa em profundidade; o gate é a defesa primária.
       if (!vscode.workspace.isTrusted) {
-        this.dataCard("### Git\n\n🔒 Este workspace **não é confiável** — os comandos de git ficam desabilitados (o git pode executar scripts definidos pelo repositório). Confie na pasta (canto inferior esquerdo do VSCode) para habilitar.");
+        this.dataCard(hostT("card.git.untrusted"));
         return;
       }
       if (op === "status") {
@@ -3196,7 +3168,7 @@ export class Controller {
       if (!st.ok) return this.dataCard(renderGitError("commit", st.output));
       const targets = commitTargets(parseStatusPorcelain(st.output));
       if (targets.length === 0) {
-        this.dataCard("### Git · commit\n\n_Nada a commitar: nenhum arquivo **rastreado** foi modificado. (Arquivos novos exigem `git add` antes — use o painel Git do VSCode.)_");
+        this.dataCard(hostT("card.git.nothingToCommit"));
         return;
       }
       const ok = await this.permissions.confirm(
@@ -3211,11 +3183,11 @@ export class Controller {
         },
         { confirmLabel: "Commitar" }
       );
-      if (!ok) return this.dataCard("### Git · commit\n\n_Commit cancelado._");
+      if (!ok) return this.dataCard(hostT("card.git.cancelled"));
       const r = await this.runGit(buildGitArgs("commit", { message: msg.message }));
       this.dataCard(renderCommitResult(r.ok, r.output));
     } catch (e) {
-      this.dataCard(`### Git\n\nFalha ao executar: ${(e as Error).message}`);
+      this.dataCard(hostT("card.git.failed", { error: (e as Error).message }));
     }
   }
 
@@ -3226,37 +3198,37 @@ export class Controller {
         case "conexoes": {
           const conns = this.warehouse().connections();
           if (conns.length === 0) {
-            this.dataCard("### Conexões\n\nNenhuma conexão configurada. O admin (ou você) declara em `forge.warehouse.connections` — ex.: Oracle 19c/26ai/Exadata/ADW (`kind: oracle`, SQLcl/sqlplus), PostgreSQL (`psql`), BigQuery (`bq`), DuckDB local, S3/OCI Object Storage. Senhas ficam no SecretStorage (pedidas no primeiro uso).");
+            this.dataCard(hostT("card.conn.none"));
             return;
           }
-          const lines: string[] = ["### Conexões", "", "| id | tipo | destino | acesso | teste |", "|---|---|---|---|---|"];
+          const lines: string[] = [hostT("card.conn.header"), "", hostT("card.conn.cols"), "|---|---|---|---|---|"];
           for (const c of conns.slice(0, 8)) {
             const r = await this.warehouse().testConnection(c);
             const status = "refused" in r ? `⚠ ${r.refused.slice(0, 80)}` : r.ok ? "✅ ok" : `❌ ${r.output.slice(0, 60)}`;
-            lines.push(`| \`${c.id}\` | ${c.kind}${c.mcp ? " (mcp)" : ""} | ${(c.connect ?? "-").replace(/:[^@/:]+@/, ":***@")} | ${c.readonly === false ? "leitura+escrita" : "somente leitura"} | ${status} |`);
+            lines.push(`| \`${c.id}\` | ${c.kind}${c.mcp ? " (mcp)" : ""} | ${(c.connect ?? "-").replace(/:[^@/:]+@/, ":***@")} | ${c.readonly === false ? hostT("card.conn.rw") : hostT("card.conn.ro")} | ${status} |`);
           }
-          lines.push("", "_Escrita exige `readonly:false` NA CONEXÃO + confirmação por execução; DROP/TRUNCATE nunca executam._");
+          lines.push("", hostT("card.conn.footer"));
           this.dataCard(lines.join("\n"));
           return;
         }
         case "executar-sql": {
           const editor = vscode.window.activeTextEditor;
           if (!editor || !/\.sql$/i.test(editor.document.fileName)) {
-            this.dataCard("### Executar SQL\n\nAbra um arquivo `.sql` no editor (a seleção, se houver, é o que executa) e rode `/executar-sql [conexão]`.");
+            this.dataCard(hostT("card.sql.openFile"));
             return;
           }
           const sql = editor.selection && !editor.selection.isEmpty ? editor.document.getText(editor.selection) : editor.document.getText();
           const conn = this.warehouse().resolve(args?.trim() || undefined);
           if (!conn) {
-            this.dataCard(`### Executar SQL\n\nConexão ${args?.trim() ? `\`${args.trim()}\` não existe` : "não configurada"} — veja \`/conexoes\`.`);
+            this.dataCard(args?.trim() ? hostT("card.sql.connNotExists", { id: args.trim() }) : hostT("card.sql.connUnconfigured"));
             return;
           }
           const r = await this.runOnConnection(conn, sql);
           if ("refused" in r) {
-            this.dataCard(`### Executar SQL · \`${conn.id}\`\n\n${r.refused}`);
+            this.dataCard(hostT("card.sql.frame", { id: conn.id, message: r.refused }));
             return;
           }
-          this.dataCard(renderResultCard(`Resultado · \`${conn.id}\``, r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: this.config.warehouse().rowCap }));
+          this.dataCard(renderResultCard(hostT("card.sql.resultTitle", { id: conn.id }), r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: this.config.warehouse().rowCap }));
           // auto-cura: erro real do warehouse vira ANEXO — a próxima mensagem do dev já carrega o contexto
           if (!r.ok) this.addAttachment(`erro ${conn.id}`, "search", `Erro ao executar no warehouse ${conn.id}:\n${r.output}`);
           return;
@@ -3265,40 +3237,40 @@ export class Controller {
           const editor = vscode.window.activeTextEditor;
           const conn = this.warehouse().resolve(args?.trim() || undefined);
           if (!conn) {
-            this.dataCard("### Custo\n\nNenhuma conexão configurada — veja `/conexoes`.");
+            this.dataCard(hostT("card.cost.none"));
             return;
           }
           if (editor && /\.sql$/i.test(editor.document.fileName)) {
             // prévia de custo da CONSULTA ativa (dry-run/EXPLAIN) — antes de rodar
             const sql = editor.selection && !editor.selection.isEmpty ? editor.document.getText(editor.selection) : editor.document.getText();
             const r = await this.warehouse().costPreview(conn.id, sql);
-            this.dataCard("refused" in r ? `### Custo (prévia) · \`${conn.id}\`\n\n${r.refused}` : renderResultCard(`Custo da consulta (prévia, sem executar) · \`${conn.id}\``, r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: 500 }));
+            this.dataCard("refused" in r ? hostT("card.cost.previewFrame", { id: conn.id, message: r.refused }) : renderResultCard(hostT("card.cost.previewTitle", { id: conn.id }), r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: 500 }));
             return;
           }
           // sem .sql ativo: relatório FinOps (top consultas por custo, últimos 7 dias)
           const sql = topQueriesSql(conn.kind, conn.schemas?.[0]);
           if (typeof sql !== "string") {
-            this.dataCard(`### Custo · \`${conn.id}\`\n\n${sql.error}`);
+            this.dataCard(hostT("card.cost.frame", { id: conn.id, message: sql.error }));
             return;
           }
           const r = await this.runOnConnection(conn, sql);
-          this.dataCard("refused" in r ? `### Custo · \`${conn.id}\`\n\n${r.refused}` : renderFinopsCard(conn.id, conn.kind, r.output));
+          this.dataCard("refused" in r ? hostT("card.cost.frame", { id: conn.id, message: r.refused }) : renderFinopsCard(conn.id, conn.kind, r.output));
           return;
         }
         case "schema-db": {
           const conn = this.warehouse().resolve(args?.trim() || undefined);
           if (!conn) {
-            this.dataCard("### Schema do warehouse\n\nNenhuma conexão configurada — veja `/conexoes`.");
+            this.dataCard(hostT("card.schema.none"));
             return;
           }
           const inv = columnsInventorySql(conn.kind, conn.schemas ?? []);
           if (typeof inv !== "string") {
-            this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n${inv.error}`);
+            this.dataCard(hostT("card.schema.frame", { id: conn.id, message: inv.error }));
             return;
           }
           const r = await this.runOnConnection(conn, inv, { skipMask: true, rowCapOverride: 50000 });
           if ("refused" in r || !r.ok) {
-            this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n${"refused" in r ? r.refused : "Falha no inventário:\n```\n" + r.output.slice(0, 1200) + "\n```"}`);
+            this.dataCard(hostT("card.schema.frame", { id: conn.id, message: "refused" in r ? r.refused : hostT("card.schema.invFailed", { output: r.output.slice(0, 1200) }) }));
             return;
           }
           const rows = parseInventoryCsv(r.output);
@@ -3311,28 +3283,28 @@ export class Controller {
           } catch (err) {
             log.warn("warehouse: snapshot não persistido (segue em memória).", err);
           }
-          this.dataCard(`### Schema do warehouse · \`${conn.id}\`\n\n✅ **${index.size()} tabelas** indexadas (${rows.length} colunas). O schema real agora entra no prompt e no gate semântico — tabela/coluna fantasma vira achado.\n\n_⚠ O snapshot da amostra foi capado em ${this.config.warehouse().rowCap} linhas? Não — inventário usa o cap de 50k colunas do SQL. Rode de novo após DDLs relevantes._`);
+          this.dataCard(hostT("card.schema.ok", { id: conn.id, tables: index.size(), columns: rows.length, rowCap: this.config.warehouse().rowCap }));
           return;
         }
         case "paridade": {
           const parsed = parseParityArgs(args ?? "");
           if ("error" in parsed) {
-            this.dataCard(`### Paridade de dados\n\n${parsed.error}`);
+            this.dataCard(hostT("card.parity.frame", { message: parsed.error }));
             return;
           }
           const index = await this.getGroundingIndex();
           const side = async (s: { conn?: string; table: string }) => {
             const conn = this.warehouse().resolve(s.conn || undefined);
-            if (!conn) return { error: `Conexão ${s.conn ? `\`${s.conn}\`` : "default"} não existe.` };
+            if (!conn) return { error: hostT("card.parity.connNotExists", { id: s.conn ? `\`${s.conn}\`` : "default" }) };
             const cols = index?.findTable(s.table)?.columns.map((c) => c.name) ?? [];
             const r = await this.runOnConnection(conn, profileSql(conn.kind, s.table, cols), { skipMask: true, rowCapOverride: 5000 });
             if ("refused" in r) return { error: r.refused };
-            if (!r.ok) return { error: `Perfil de \`${s.table}\` falhou:\n\`\`\`\n${r.output.slice(0, 800)}\n\`\`\`` };
+            if (!r.ok) return { error: hostT("card.parity.profileFailed", { table: s.table, output: r.output.slice(0, 800) }) };
             return { profile: parseProfileCsv(r.output) };
           };
           const [l, rgt] = [await side(parsed.left), await side(parsed.right)];
           if ("error" in l || "error" in rgt) {
-            this.dataCard(`### Paridade de dados\n\n${("error" in l ? l.error : "") || ""}${"error" in rgt ? "\n" + rgt.error : ""}`);
+            this.dataCard(hostT("card.parity.frame", { message: `${("error" in l ? l.error : "") || ""}${"error" in rgt ? "\n" + rgt.error : ""}` }));
             return;
           }
           this.dataCard(renderParityCard(parsed.left.table, parsed.right.table, compareProfiles(l.profile, rgt.profile)));
@@ -3345,11 +3317,11 @@ export class Controller {
           return;
         }
         default:
-          this.dataCard(`Comando de dados desconhecido: \`${cmd}\`.`);
+          this.dataCard(hostT("card.data.unknown", { cmd }));
       }
     } catch (err) {
       log.warn(`Comando de dados /${cmd} falhou (fail-open).`, err);
-      this.dataCard(`### /${cmd}\n\nFalhou: ${err instanceof Error ? err.message : String(err)}`);
+      this.dataCard(hostT("card.data.failed", { cmd, error: err instanceof Error ? err.message : String(err) }));
     }
   }
 
@@ -3358,11 +3330,7 @@ export class Controller {
   async reportImpact(target?: string): Promise<void> {
     const index = await this.getDbtIndex();
     if (!index || index.size() === 0) {
-      this.post({
-        type: "impact/report",
-        markdown:
-          "### Raio de explosão\n\nSem grounding dbt: não encontrei `target/manifest.json` no workspace. Rode `dbt parse` (ou `dbt compile`) no projeto dbt e tente de novo — o FORGE lê o lineage real do manifest.",
-      });
+      this.post({ type: "impact/report", markdown: hostT("card.impact.noManifest") });
       return;
     }
     // alvo: argumento explícito > arquivo ativo no editor
@@ -3381,9 +3349,11 @@ export class Controller {
       const alvo = mdSafe(target?.trim() ?? "");
       const sug = alvo ? index.suggestTable(alvo) : undefined;
       const hint = alvo
-        ? `O modelo \`${alvo}\` não existe no manifest do dbt${sug ? ` — você quis dizer \`${mdSafe(sug)}\`?` : "."}`
-        : "Abra o arquivo de um modelo dbt no editor (ou use `/impacto nome_do_modelo`).";
-      this.post({ type: "impact/report", markdown: `### Raio de explosão\n\n${hint}` });
+        ? sug
+          ? hostT("card.impact.notFoundSug", { model: alvo, name: mdSafe(sug) })
+          : hostT("card.impact.notFound", { model: alvo })
+        : hostT("card.impact.openModel");
+      this.post({ type: "impact/report", markdown: hostT("card.impact.frame", { message: hint }) });
       return;
     }
     let card = renderImpactCard(index, node);
@@ -3492,19 +3462,19 @@ export class Controller {
   async pickWorkspaceFile(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "warn", message: "Abra uma pasta no VSCode para anexar arquivos do workspace." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.openFolder.attach") });
       return;
     }
     const uris = await vscode.workspace.findFiles("**/*", "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 3000);
     const items = uris.map((u) => ({ label: path.relative(ws, u.fsPath).split(path.sep).join("/"), uri: u }));
-    const pick = await vscode.window.showQuickPick(items.map((i) => i.label), { placeHolder: "Anexar arquivo do workspace ao contexto" });
+    const pick = await vscode.window.showQuickPick(items.map((i) => i.label), { placeHolder: hostT("dialog.attach.placeholder") });
     if (!pick) return;
     const chosen = items.find((i) => i.label === pick);
     if (!chosen) return;
     try {
       this.addAttachment(pick, "workspace", await fs.readFile(chosen.uri.fsPath, "utf8"));
     } catch {
-      this.post({ type: "notice", level: "error", message: `Não foi possível ler ${pick} (binário?).` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.attach.unreadable", { path: pick }) });
     }
   }
 
@@ -3539,7 +3509,7 @@ export class Controller {
     if (!ws) return;
     const abs = safeWorkspacePath(ws, rel);
     if (!abs) {
-      this.post({ type: "notice", level: "error", message: `Caminho inválido ou fora do workspace: ${rel}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.invalidPath", { path: rel }) });
       return;
     }
     try {
@@ -3554,7 +3524,7 @@ export class Controller {
         this.addAttachment(rel, "workspace", await fs.readFile(abs, "utf8"));
       }
     } catch {
-      this.post({ type: "notice", level: "error", message: `Não foi possível ler ${rel} (binário?).` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.attach.unreadable", { path: rel }) });
     }
   }
 
@@ -3565,14 +3535,14 @@ export class Controller {
     try {
       this.addAttachment(path.basename(uri.fsPath), "upload", await fs.readFile(uri.fsPath, "utf8"));
     } catch {
-      this.post({ type: "notice", level: "error", message: "Não foi possível ler o arquivo (provavelmente binário). Suportado: texto." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.attach.binary") });
     }
   }
 
   async addSelectionAttachment(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.selection.isEmpty) {
-      this.post({ type: "notice", level: "warn", message: "Selecione um trecho no editor para anexar." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.attach.selectEditor") });
       return;
     }
     const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, editor.document.uri.fsPath) : editor.document.fileName;
@@ -3585,7 +3555,7 @@ export class Controller {
   async addTerminalSelectionAttachment(): Promise<void> {
     const terminal = vscode.window.activeTerminal;
     if (!terminal) {
-      this.post({ type: "notice", level: "warn", message: "Nenhum terminal ativo. Abra um terminal e selecione um trecho para anexar." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.attach.noTerminal") });
       return;
     }
     const prev = await vscode.env.clipboard.readText();
@@ -3603,7 +3573,7 @@ export class Controller {
       await vscode.env.clipboard.writeText(prev); // restaura o clipboard do usuário haja o que houver
     }
     if (!sel || sel === prev) {
-      this.post({ type: "notice", level: "warn", message: "Selecione um trecho no terminal para anexar e tente novamente." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.attach.selectTerminal") });
       return;
     }
     this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
@@ -3617,16 +3587,16 @@ export class Controller {
   async addImageOcrAttachment(dataUrl: string): Promise<void> {
     const parsed = parseImageDataUrl(dataUrl);
     if (!parsed) {
-      this.post({ type: "notice", level: "warn", message: "Não reconheci a imagem colada. Cole um print (PNG/JPG) ou o texto do log." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.ocr.badImage") });
       return;
     }
     const buf = Buffer.from(parsed.base64, "base64");
     if (buf.length === 0 || buf.length > Controller.OCR_MAX_BYTES) {
-      this.post({ type: "notice", level: "warn", message: "Imagem inválida ou grande demais para OCR (máx. 8 MB)." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.ocr.tooBig") });
       return;
     }
     if (this.ocrInFlight) {
-      this.post({ type: "notice", level: "info", message: "Já estou extraindo o texto de um print — aguarde terminar." });
+      this.post({ type: "notice", level: "info", message: hostT("notice.ocr.inFlight") });
       return;
     }
     this.ocrInFlight = true;
@@ -3640,30 +3610,25 @@ export class Controller {
     try {
       await fs.writeFile(tmp, buf);
       wrote = true;
-      this.post({ type: "notice", level: "info", message: "Extraindo texto do print (OCR)…" });
+      this.post({ type: "notice", level: "info", message: hostT("notice.ocr.running") });
       const langs = pickOcrLangs(await this.listTesseractLangs(cmd, tdArgs));
       const text = (await this.runTesseract(cmd, tmp, langs, tdArgs)).trim();
       if (!text) {
-        this.post({ type: "notice", level: "warn", message: "Não encontrei texto legível no print. Se for um erro/log, cole o texto direto." });
+        this.post({ type: "notice", level: "warn", message: hostT("notice.ocr.noText") });
         return;
       }
       this.addAttachment("print (OCR)", "upload", text);
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (!wrote) {
-        this.post({ type: "notice", level: "error", message: `Não consegui preparar o print para OCR: ${err.message ?? String(err)}` });
+        this.post({ type: "notice", level: "error", message: hostT("notice.ocr.prepFailed", { error: err.message ?? String(err) }) });
       } else if (err.code === "ENOENT") {
-        this.post({
-          type: "notice",
-          level: "warn",
-          message:
-            "OCR requer o 'tesseract' acessível (no PATH, ou configure o caminho em forge.ocr.tesseractPath — pode ser um tesseract portable, sem admin). Enquanto isso, cole o texto do log direto no chat.",
-        });
+        this.post({ type: "notice", level: "warn", message: hostT("notice.ocr.needTesseract") });
       } else {
         // Se o dev apontou um tessdata próprio, o erro do tesseract costuma ser "data file not found" —
         // aponta a config a revisar em vez de só a mensagem crua.
-        const hint = tdPath ? " Verifique forge.ocr.tessdataPath (a pasta precisa conter os .traineddata dos idiomas)." : "";
-        this.post({ type: "notice", level: "error", message: `Falha no OCR do print: ${err.message ?? String(err)}${hint}` });
+        const hint = tdPath ? hostT("notice.ocr.tessdataHint") : "";
+        this.post({ type: "notice", level: "error", message: hostT("notice.ocr.failed", { error: err.message ?? String(err), hint }) });
       }
     } finally {
       this.ocrInFlight = false;
@@ -3698,18 +3663,18 @@ export class Controller {
   async searchInternal(): Promise<void> {
     const cfg = this.config.search();
     if (!cfg.server) {
-      this.post({ type: "notice", level: "info", message: "Busca interna não configurada (defina forge.search.server)." });
+      this.post({ type: "notice", level: "info", message: hostT("notice.search.unconfigured") });
       return;
     }
     const query = await vscode.window.showInputBox({
-      prompt: `Buscar na fonte interna (${cfg.server})`,
-      placeHolder: "termos da busca…",
+      prompt: hostT("dialog.search.prompt", { server: cfg.server }),
+      placeHolder: hostT("dialog.search.placeholder"),
     });
     if (!query || !query.trim()) return;
-    this.post({ type: "notice", level: "info", message: `Buscando "${query}" em ${cfg.server}…` });
+    this.post({ type: "notice", level: "info", message: hostT("notice.search.running", { query, server: cfg.server }) });
     const res = await this.mcp.callTool(cfg.server, cfg.tool, { [cfg.queryArg]: query.trim() });
     if (!res.ok) {
-      this.post({ type: "notice", level: "error", message: `Busca falhou: ${res.content}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.search.failed", { error: res.content }) });
       return;
     }
     this.addAttachment(`🔍 ${query.trim()}`, "search", `Resultados da busca interna para "${query.trim()}":\n${res.content}`);
@@ -3720,7 +3685,7 @@ export class Controller {
   async applyProposal(proposalId: string, opts?: { force?: boolean }): Promise<boolean> {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry) {
-      this.post({ type: "notice", level: "warn", message: "Proposta não encontrada (expirada)." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.proposal.expired") });
       return false;
     }
     // Política do admin (blockUnverifiedContract): o contrato não verificado bloqueia TAMBÉM o apply
@@ -3729,18 +3694,14 @@ export class Controller {
     // (cartão individual não exige confirmação de contrato).
     if (this.gateContractUnverifiedHard && this.config.blockUnverifiedContract()) {
       this.permissions.note({ kind: "contract.unverified", action: `Aplicar ${entry.proposal.filePath} com contrato não verificado`, subject: entry.proposal.filePath, scope: "write" }, "blocked", "policy");
-      this.post({ type: "notice", level: "warn", message: 'Bloqueado por política do admin (forge.gate.blockUnverifiedContract): o contrato cross-file precisa ser VERIFICADO antes de aplicar arquivos do projeto. Rode "Preparar ambiente" e depois "Re-verificar contrato".' });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.contractPolicy.applyFile") });
       return false;
     }
     // Escape CONSCIENTE do gate: "Aplicar assim mesmo, revisei" (opts.force) pula a recusa, mas o override é
     // registrado (obs proposal.applied {forced} + aviso). Sem force, comportamento idêntico ao anterior.
     const gateBlocked = this.config.gateBlocksApply() && !entry.gateOk;
     if (gateBlocked && !opts?.force) {
-      this.post({
-        type: "notice",
-        level: "error",
-        message: "Quality gate reprovado: corrija os problemas apontados pelos validadores — ou use \"Aplicar assim mesmo, revisei\" para aplicar sob sua responsabilidade.",
-      });
+      this.post({ type: "notice", level: "error", message: hostT("notice.gate.blockedApply") });
       return false;
     }
     const forcedOverride = gateBlocked && opts?.force === true;
@@ -3751,7 +3712,7 @@ export class Controller {
     }
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para aplicar mudanças." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.apply") });
       return false;
     }
 
@@ -3761,7 +3722,7 @@ export class Controller {
       if (ok) {
         this.post({ type: "proposal/applied", proposalId });
         this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath, forced: forcedOverride });
-        if (forcedOverride) this.post({ type: "notice", level: "warn", message: `Aplicado por cima do gate reprovado (sob sua revisão): ${entry.proposal.filePath} — registrado no diagnóstico.` });
+        if (forcedOverride) this.post({ type: "notice", level: "warn", message: hostT("notice.apply.forced", { path: entry.proposal.filePath }) });
       }
       return ok;
     }
@@ -3769,7 +3730,7 @@ export class Controller {
     // Contenção: o filePath vem do modelo — recusa escrever FORA do workspace (`../`, absoluto, outra unidade).
     const abs = safeWorkspacePath(ws, entry.proposal.filePath);
     if (!abs) {
-      this.post({ type: "notice", level: "error", message: `Caminho fora do workspace recusado: ${entry.proposal.filePath}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.apply.outsideWorkspace", { path: entry.proposal.filePath }) });
       return false;
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -3777,7 +3738,7 @@ export class Controller {
     this.history.push({ role: "assistant", content: `Apliquei a alteração em ${entry.proposal.filePath}.` });
     this.post({ type: "proposal/applied", proposalId });
     this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath, forced: forcedOverride });
-    if (forcedOverride) this.post({ type: "notice", level: "warn", message: `Aplicado por cima do gate reprovado (sob sua revisão): ${entry.proposal.filePath} — registrado no diagnóstico.` });
+    if (forcedOverride) this.post({ type: "notice", level: "warn", message: hostT("notice.apply.forced", { path: entry.proposal.filePath }) });
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
     return true;
@@ -3790,21 +3751,21 @@ export class Controller {
   private async saveCodeBlock(filePath: string, content: string): Promise<void> {
     const rel = (filePath ?? "").trim();
     if (!rel) {
-      this.post({ type: "notice", level: "warn", message: "Informe um caminho de arquivo para salvar o trecho." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.codeBlock.needPath") });
       return;
     }
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para salvar um trecho como arquivo." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.codeBlock") });
       return;
     }
     if (!safeWorkspacePath(ws, rel)) {
-      this.post({ type: "notice", level: "error", message: `Caminho inválido ou fora do workspace: ${rel}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.invalidPath", { path: rel }) });
       return;
     }
     const task = this.currentTask;
     if (!task) {
-      this.post({ type: "notice", level: "warn", message: "Gere uma resposta antes de salvar um trecho como arquivo." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.codeBlock.needReply") });
       return;
     }
     const proposal = await task.registerManualProposal(rel, content);
@@ -3824,7 +3785,7 @@ export class Controller {
     const ws = this.workspaceRoot();
     const abs = ws ? safeWorkspacePath(ws, entry.proposal.filePath) : null;
     if (!abs) {
-      this.post({ type: "notice", level: "error", message: `Caminho fora do workspace recusado: ${entry.proposal.filePath}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.apply.outsideWorkspace", { path: entry.proposal.filePath }) });
       return false;
     }
     const uri = vscode.Uri.file(abs);
@@ -3832,7 +3793,7 @@ export class Controller {
     try {
       nb = await vscode.workspace.openNotebookDocument(uri);
     } catch (err) {
-      this.post({ type: "notice", level: "error", message: `Não foi possível abrir o notebook: ${(err as Error).message}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.cell.openFailed", { error: (err as Error).message }) });
       return false;
     }
     await vscode.window.showNotebookDocument(nb, { preview: false });
@@ -3850,7 +3811,7 @@ export class Controller {
     }
     const applied = await vscode.workspace.applyEdit(edit);
     if (!applied) {
-      this.post({ type: "notice", level: "error", message: "Falha ao aplicar a célula no notebook." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.cell.applyFailed") });
       return false;
     }
     entry.cellIndex = targetIndex;
@@ -3862,7 +3823,7 @@ export class Controller {
   async runCell(proposalId: string): Promise<void> {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry || !entry.proposal.cell || entry.cellIndex === undefined) {
-      this.post({ type: "notice", level: "warn", message: "Aplique a célula antes de executá-la." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.cell.applyFirst") });
       return;
     }
     const ws = this.workspaceRoot();
@@ -3871,7 +3832,7 @@ export class Controller {
     try {
       await vscode.commands.executeCommand("notebook.cell.execute", { start: index, end: index + 1 }, uri);
     } catch (err) {
-      this.post({ type: "notice", level: "error", message: `Falha ao executar a célula (kernel disponível?): ${(err as Error).message}` });
+      this.post({ type: "notice", level: "error", message: hostT("notice.cell.runFailed", { error: (err as Error).message }) });
       return;
     }
     const nb = vscode.workspace.notebookDocuments.find((d) => d.uri.fsPath === uri.fsPath);
@@ -3880,11 +3841,11 @@ export class Controller {
       type: "run/result",
       proposalId,
       filePath: entry.proposal.filePath,
-      label: `célula [${index}]`,
+      label: hostT("run.label.cell", { index }),
       command: `notebook.cell.execute [${index}]`,
       ok: !isError,
       exitCode: isError ? 1 : 0,
-      output: text || "(sem saída capturada — veja a célula no notebook)",
+      output: text || hostT("run.cell.noOutput"),
       durationMs: 0,
     });
     this.obs.record({ type: "run.result", filePath: entry.proposal.filePath, label: `célula [${index}]`, ok: !isError, exitCode: isError ? 1 : 0, durationMs: 0 });
@@ -3893,11 +3854,11 @@ export class Controller {
   async copyProposal(proposalId: string): Promise<void> {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry) {
-      this.post({ type: "notice", level: "warn", message: "Proposta não encontrada (expirada)." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.proposal.expired") });
       return;
     }
     await vscode.env.clipboard.writeText(entry.proposal.modified);
-    this.post({ type: "notice", level: "info", message: `Conteúdo de ${entry.proposal.filePath} copiado.` });
+    this.post({ type: "notice", level: "info", message: hostT("notice.proposal.copied", { path: entry.proposal.filePath }) });
   }
 
   async viewDiff(proposalId: string): Promise<void> {
@@ -3923,7 +3884,7 @@ export class Controller {
     const editor = vscode.window.activeTextEditor;
     const ws = this.workspaceRoot();
     if (!editor || editor.document.uri.scheme !== "file" || !ws) {
-      void vscode.window.showWarningMessage("FORGE: abra um arquivo do workspace para executar.");
+      void vscode.window.showWarningMessage(hostT("dialog.run.openFile"));
       return;
     }
     await editor.document.save();
@@ -3957,18 +3918,18 @@ export class Controller {
   async runTests(): Promise<void> {
     const testCfg = this.config.test();
     if (!testCfg.enabled) {
-      this.post({ type: "notice", level: "warn", message: "Testes desabilitados (forge.test.enabled = false)." });
+      this.post({ type: "notice", level: "warn", message: hostT("notice.tests.disabled") });
       return;
     }
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para rodar os testes." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.tests") });
       return;
     }
     // Serializa contra o RunService: rodar pytest enquanto "Preparar ambiente" cria/popula o mesmo venv
     // daria ModuleNotFoundError intermitente (venv parcial). Compartilham o interpretador do .venv.
     if (this.runService.isBusy()) {
-      this.post({ type: "notice", level: "info", message: "Há uma execução em andamento (ex.: preparar ambiente). Aguarde ou cancele." });
+      this.post({ type: "notice", level: "info", message: hostT("notice.run.busy") });
       return;
     }
     const runner = new Runner(ws);
@@ -3986,28 +3947,26 @@ export class Controller {
         // A cura instala coisas via RunService — se a execução está desabilitada por governança,
         // seja honesto de cara em vez de falhar depois com mensagem enganosa.
         if (!this.config.run().enabled) {
-          this.post({ type: "notice", level: "warn", message: "pytest ausente e a execução de comandos está desabilitada (forge.run.enabled) — instale manualmente no venv." });
+          this.post({ type: "notice", level: "warn", message: hostT("notice.tests.runDisabled") });
           return;
         }
         let proceed = testCfg.autoInstall;
         if (!proceed) {
-          const install = "Instalar e rodar";
+          const install = hostT("dialog.pytest.installBtn");
           const pick = await vscode.window.showInformationMessage(
-            venvPython
-              ? "O pytest não está instalado no ambiente (.venv). Instalar agora e rodar os testes?"
-              : "Não há venv neste projeto. Criar o .venv com as dependências do código, instalar o pytest e rodar os testes?",
+            venvPython ? hostT("dialog.pytest.installVenv") : hostT("dialog.pytest.createVenv"),
             install,
-            "Cancelar"
+            hostT("dialog.cancel")
           );
           proceed = pick === install;
         }
         if (!proceed) {
-          this.post({ type: "notice", level: "info", message: "Testes cancelados: pytest ausente no ambiente." });
+          this.post({ type: "notice", level: "info", message: hostT("notice.tests.cancelled") });
           return;
         }
         // O diálogo fica aberto indefinidamente — outra execução pode ter começado nesse meio-tempo.
         if (this.runService.isBusy()) {
-          this.post({ type: "notice", level: "info", message: "Há uma execução em andamento — rode os testes de novo quando ela terminar." });
+          this.post({ type: "notice", level: "info", message: hostT("notice.tests.busyLater") });
           return;
         }
         if (!venvPython) {
@@ -4016,18 +3975,18 @@ export class Controller {
           await this.prepareEnv();
           venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
           if (!venvPython) {
-            this.post({ type: "notice", level: "error", message: "Não consegui criar o venv — veja o cartão 'ambiente'." });
+            this.post({ type: "notice", level: "error", message: hostT("notice.env.venvFailed") });
             return;
           }
         }
-        const installed = await this.runService.runCommand("pytest · instalação", buildPytestInstall(venvPython), this.config.env().timeoutSeconds * 1000);
+        const installed = await this.runService.runCommand(hostT("run.label.pytestInstall"), buildPytestInstall(venvPython), this.config.env().timeoutSeconds * 1000);
         if (!installed.started) {
           // NÃO rodou (guarda do RunService) — mensagem fiel, sem apontar para cartão inexistente.
-          this.post({ type: "notice", level: "info", message: "A instalação do pytest não iniciou (há uma execução em andamento ou a execução está desabilitada). Tente de novo." });
+          this.post({ type: "notice", level: "info", message: hostT("notice.tests.installNotStarted") });
           return;
         }
         if (!installed.ok) {
-          this.post({ type: "notice", level: "error", message: "A instalação do pytest falhou — veja o cartão de execução." });
+          this.post({ type: "notice", level: "error", message: hostT("notice.tests.installFailed") });
           return;
         }
       }
@@ -4039,8 +3998,8 @@ export class Controller {
     this.post({
       type: "run/result",
       filePath: "",
-      label: "testes",
-      isTest: true, // chave ESTÁVEL do card de testes (o label "testes" é só display, será traduzido)
+      label: hostT("run.label.tests"),
+      isTest: true, // chave ESTÁVEL do card de testes (o label é só display, traduzido por locale)
       command: result.command,
       ok: result.ok,
       exitCode: result.exitCode,
@@ -4060,7 +4019,7 @@ export class Controller {
   async prepareEnv(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para preparar o ambiente." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.env") });
       return;
     }
     const reqPath = path.join(ws, "requirements.txt");
@@ -4080,11 +4039,11 @@ export class Controller {
           if (existing.includes("\u0000")) throw new Error("requirements.txt em encoding não-UTF-8");
           const merged = mergeRequirements(existing, detected);
           if (merged.added.length > 0) {
-            const addAndInstall = "Adicionar e instalar";
+            const addAndInstall = hostT("dialog.deps.addBtn");
             const pick = await vscode.window.showInformationMessage(
-              `Detectei no código pacote(s) ausente(s) do requirements.txt: ${merged.added.join(", ")}. Adicionar?`,
+              hostT("dialog.deps.detected", { packages: merged.added.join(", ") }),
               addAndInstall,
-              "Instalar só o que está listado"
+              hostT("dialog.deps.onlyListedBtn")
             );
             // Decisão de permissão de ESCRITA (reescreve o requirements.txt do dev + instala pacotes
             // inferidos do código — inclusive gerado por LLM; um import errado/typosquat vira instalação).
@@ -4093,7 +4052,7 @@ export class Controller {
             this.permissions.note({ kind: "env.dependency", action: `Adicionar ao requirements.txt e instalar: ${merged.added.join(", ")}`, subject: "requirements.txt", scope: "write", detail: merged.added.join(", ") }, addOk ? "approved" : "denied", "dialog");
             if (addOk) {
               await fs.writeFile(reqPath, merged.content, "utf8");
-              this.post({ type: "notice", level: "info", message: `requirements.txt incrementado: ${merged.added.join(", ")}.` });
+              this.post({ type: "notice", level: "info", message: hostT("notice.env.reqIncremented", { packages: merged.added.join(", ") }) });
             }
           }
         } catch {
@@ -4111,11 +4070,7 @@ export class Controller {
       }
       install = /^\s*\[(build-system|project)\]/m.test(pyproject) ? "editable" : "none";
       if (install === "none") {
-        this.post({
-          type: "notice",
-          level: "info",
-          message: "pyproject.toml sem [project]/[build-system]: crio o venv e atualizo o pip (adicione requirements.txt ou torne o pacote instalável para instalar dependências).",
-        });
+        this.post({ type: "notice", level: "info", message: hostT("notice.env.pyprojectNoBuild") });
       }
     } else {
       // SEM manifesto: o ambiente nasce do código. Detecta os imports de terceiros e gera o
@@ -4127,15 +4082,11 @@ export class Controller {
         // — mesmo risco supply-chain do ramo com confirmação, mas aqui o ambiente "nasce do zero" sem
         // manifesto prévio. Entra no trail como decisão AUTOMÁTICA (via/outcome "auto") para ser auditável.
         this.permissions.note({ kind: "env.dependency", action: `requirements.txt gerado e instalado (sem manifesto prévio): ${detected.join(", ")}`, subject: "requirements.txt", scope: "write", detail: detected.join(", ") }, "auto", "auto");
-        this.post({
-          type: "notice",
-          level: "info",
-          message: `requirements.txt gerado com ${detected.length} pacote(s) detectado(s) no código: ${detected.join(", ")}. Revise à vontade.`,
-        });
+        this.post({ type: "notice", level: "info", message: hostT("notice.env.reqGenerated", { count: detected.length, packages: detected.join(", ") }) });
         install = "requirements";
       } else {
         install = "none";
-        this.post({ type: "notice", level: "info", message: "Nenhuma dependência de terceiros detectada — crio o venv (.venv) e atualizo o pip." });
+        this.post({ type: "notice", level: "info", message: hostT("notice.env.noDeps") });
       }
     }
     const isWin = process.platform === "win32";
@@ -4143,7 +4094,7 @@ export class Controller {
     const command = buildVenvSetupCommand({ isWindows: isWin, venvPython, install });
     // Timeout próprio (forge.env.timeoutSeconds, default 900s): pip install pesado em cache frio
     // passa fácil dos 120s do run normal — matar no meio deixa o venv meio-populado.
-    await this.runService.runCommand("ambiente", command, this.config.env().timeoutSeconds * 1000);
+    await this.runService.runCommand(hostT("run.label.env"), command, this.config.env().timeoutSeconds * 1000);
   }
 
   // O package.json da raiz tem um script `test` REAL? (gate do fallback `npm test` — sem o script,
@@ -4200,10 +4151,10 @@ export class Controller {
       const file = path.join(dir, `forge-diagnostico-${stamp}.md`);
       await fs.writeFile(file, text, "utf8");
       await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
-      void vscode.window.showInformationMessage(`FORGE: diagnóstico exportado (${records.length} eventos, redigido). Anexe este arquivo ao relato de bug.`);
+      void vscode.window.showInformationMessage(hostT("dialog.diag.exported", { count: records.length }));
     } catch (e) {
       log.error("Falha ao exportar diagnóstico", e);
-      this.post({ type: "notice", level: "error", message: "Não consegui exportar o diagnóstico (veja Mostrar logs)." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.diag.exportFailed") });
     }
   }
 
@@ -4229,22 +4180,22 @@ export class Controller {
 
   async reviewChanges(): Promise<void> {
     if (!(await this.ensureSession())) {
-      this.post({ type: "notice", level: "error", message: "Licença requerida para revisar." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.review.license") });
       return;
     }
     if (this.resolveIdentity().emailRequired) {
-      this.post({ type: "notice", level: "error", message: "Informe seu e-mail na configuração inicial antes de revisar." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.review.email") });
       return;
     }
     const runtime = await this.runtimeProviderConfig();
     if (!runtime) {
-      this.post({ type: "notice", level: "error", message: "Nenhum provedor configurado." });
+      this.post({ type: "notice", level: "error", message: hostT("notice.provider.none") });
       return;
     }
 
     const diff = await this.gatherDiff();
     if (!diff) {
-      this.post({ type: "notice", level: "info", message: "Nenhuma alteração para revisar." });
+      this.post({ type: "notice", level: "info", message: hostT("notice.review.none") });
       return;
     }
 

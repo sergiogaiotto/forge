@@ -2,6 +2,7 @@
 // SUÍTE GERADA (pytest) contra a árvore materializada, usando o venv do workspace. Este módulo classifica
 // o resultado do pytest numa mensagem advisory — NUNCA bloqueia o Aplicar, só informa. Puro/testável; o
 // I/O (venv, spawn do pytest, materialização) fica no Controller.runProjectSmoke.
+import { hostT } from "../i18n";
 import { ValidatorResult } from "../shared/protocol";
 
 export interface SmokeVerdict {
@@ -23,9 +24,7 @@ export function summarizeSmoke(result: ValidatorResult): SmokeVerdict {
     return {
       ran: false,
       level: "info",
-      message: timedOut
-        ? "Smoke test dos testes gerados: tempo esgotado (inconclusivo — não bloqueia)."
-        : "Smoke test pulado: Python indisponível para rodar a suíte gerada.",
+      message: timedOut ? hostT("smoke.timeout") : hostT("smoke.noPython"),
     };
   }
 
@@ -35,11 +34,12 @@ export function summarizeSmoke(result: ValidatorResult): SmokeVerdict {
   // verde legítimo. Espelha a lição do classificador irmão pytestOutcome (util/testOutcome.ts).
   if (result.status === "ok") {
     const m = out.match(/(\d+)\s+passed/i);
-    const n = m ? m[1] : "os";
     return {
       ran: true,
       level: "info",
-      message: `Smoke test: ${n} teste(s) gerado(s) PASSARAM no venv do workspace — o projeto de fato roda, não só compila.`,
+      // Sem contagem confiável na saída, a variante sem número ("os testes gerados PASSARAM") evita
+      // interpolar um placeholder que não é número — cada locale flexiona a frase inteira.
+      message: m ? hostT("smoke.passed", { count: m[1] }) : hostT("smoke.passedAll"),
     };
   }
 
@@ -50,38 +50,26 @@ export function summarizeSmoke(result: ValidatorResult): SmokeVerdict {
     return {
       ran: true,
       level: "warn",
-      message: `Smoke test: ${fm[1]} teste(s) gerado(s) FALHARAM no venv do workspace — revise antes de aplicar. (Advisory: o gate não bloqueia o Aplicar por isto.)`,
+      message: hostT("smoke.failed", { count: fm[1] }),
     };
   }
 
   if (/no tests ran|collected 0 items/i.test(out)) {
-    return { ran: false, level: "info", message: "Smoke test: nenhum teste foi coletado na suíte gerada." };
+    return { ran: false, level: "info", message: hostT("smoke.none") };
   }
 
   // Sem testes executados e sem falhas contadas ⇒ erro de COLETA. pytest não instalado no venv? Ancora no
   // token `pytest` (um `pytest_asyncio` ausente é uma DEP de plugin, não o pytest) — como em testOutcome.ts.
   if (/no module named ['"]?pytest['"]?(\s|$|['"]|\))/i.test(out)) {
-    return {
-      ran: false,
-      level: "info",
-      message: "Smoke test pulado: pytest não está instalado no venv. Rode Preparar ambiente para validar que os testes gerados passam.",
-    };
+    return { ran: false, level: "info", message: hostT("smoke.noPytest") };
   }
 
   // Falha ao IMPORTAR na coleta: dep de terceiros ausente OU um módulo do PRÓPRIO projeto que não resolve
   // (ex.: layout src/ sem instalação editável). Não instalamos nada (egress) — advisory honesto quanto à
   // ambiguidade, sem cravar a causa errada.
   if (/modulenotfounderror|no module named|cannot import name|importerror/i.test(out)) {
-    return {
-      ran: false,
-      level: "info",
-      message: "Smoke test pulado: não consegui importar todos os módulos (dependências de terceiros ausentes, ou o projeto precisa de instalação editável). Rode Preparar ambiente — os testes gerados ainda não foram executados.",
-    };
+    return { ran: false, level: "info", message: hostT("smoke.importFailed") };
   }
 
-  return {
-    ran: true,
-    level: "warn",
-    message: "Smoke test: a suíte gerada não passou (veja os logs do FORGE em Mostrar logs). Revise antes de aplicar. (Advisory: não bloqueia o Aplicar.)",
-  };
+  return { ran: true, level: "warn", message: hostT("smoke.notPassed") };
 }
