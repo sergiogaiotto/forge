@@ -284,7 +284,7 @@ export function uiLayerInstruction(language: ProjectLanguage, ui: ProjectUI | un
         "código que os renderiza, e resolva o diretório de templates por caminho ABSOLUTO derivado do arquivo " +
         "(em Python: `Path(__file__).resolve().parent / \"templates\"`), nunca relativo ao CWD." +
         (language === "python"
-          ? " Em FastAPI, os campos de um formulário HTML (POST) são lidos com `Form(...)` (requer python-multipart), NÃO como parâmetros de query — declará-los como `str`/`int` puros faz o corpo do formulário ser ignorado."
+          ? " Em FastAPI, os campos de um formulário HTML (POST) são lidos com `Form(...)` (requer python-multipart), NÃO como parâmetros de query — declará-los como `str`/`int` puros faz o corpo do formulário ser ignorado. Ao renderizar com `Jinja2Templates`, use a assinatura ATUAL do Starlette com o `request` como PRIMEIRO argumento posicional: `templates.TemplateResponse(request, \"pagina.html\", {\"chave\": valor})`. A forma antiga `TemplateResponse(\"pagina.html\", {\"request\": request, ...})` QUEBRA em runtime nas versões atuais (`TypeError: unhashable type: 'dict'`) — a home nem renderiza."
           : "")
       );
     case "spa-react":
@@ -311,7 +311,11 @@ export function frameworkInstruction(language: ProjectLanguage, framework: Proje
         "composition_root.py) e inclua nele um bloco `if __name__ == \"__main__\": import uvicorn; " +
         "uvicorn.run(app, host=\"127.0.0.1\", port=8000)` para o app subir com `python <modulo>.py`. " +
         "Documente no README o comando exato `uvicorn <caminho.pontilhado.do.modulo>:app --reload`. " +
-        "Não registre a MESMA rota (método + caminho) em dois lugares — evite routers duplicados."
+        "Não registre a MESMA rota (método + caminho) em dois lugares — evite routers duplicados. " +
+        "Se usar SQLAlchemy 2.x na persistência, use o estilo tipado: `class Base(DeclarativeBase): pass` e " +
+        "colunas com `Mapped[...]` OBRIGATÓRIO — ex.: `isbn: Mapped[str] = mapped_column(String, primary_key=True)`. " +
+        "A forma sem `Mapped` (`isbn: str = mapped_column(...)`) levanta `MappedAnnotationError` no import; NÃO " +
+        "use a API 1.x (`declarative_base()`, `Column` como valor de atributo anotado)."
       );
     case "flask":
       return "FRAMEWORK WEB: use Flask (app factory + blueprints) como adapter de entrada HTTP.";
