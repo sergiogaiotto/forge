@@ -20,7 +20,7 @@ import {
 import type { BlueprintFileView, ProjectFileStatus, RagChunkView, RoleCard, SkillInspectView } from "../../../src/shared/protocol";
 import { pytestOutcome, TestOutcome, testOutcomeLabel } from "../../../src/util/testOutcome";
 import { classifyProjectIntent } from "../../../src/util/projectIntent";
-import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashFullFormTail, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
+import { buildDbtTestsRequest, buildDiagramRequest, buildProjectSummaryRequest, buildSqlTranslateRequest, commandHint, commandLabel, exactSlashCommand, matchSlashCommands, normalizeSlash, renderHelp, renderTokensReport, slashFullFormTail, slashWithArgs, SQL_DIALECTS, type SlashCommand } from "../commands";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, MAX_OUTPUT_PRESETS, maxOutputLabel, REASONING_EFFORTS, type ReasoningEffort } from "../../../src/shared/protocol";
@@ -286,8 +286,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         runDiagram(withArgs.args); // a cauda É o argumento (tema)
         return;
       }
-      if (withArgs.cmd.id === "sumario" && normalizeSlash(withArgs.args) === slashFullFormTail(withArgs.cmd)) {
-        runSummary(); // só a forma completa do label ("/sumário projeto") executa — tail derivado do label
+      if (withArgs.cmd.id === "sumario" && normalizeSlash(withArgs.args) === slashFullFormTail(commandLabel(withArgs.cmd))) {
+        runSummary(); // só a forma completa do label ("/sumário projeto") executa — tail derivado do label do locale ativo
         return;
       }
       // /impacto e /testes-dbt: a cauda só é argumento quando é UM token (nome de modelo válido);
@@ -654,8 +654,8 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
                   }}
                 >
                   <Icon name={c.icon} size={13} />
-                  <span className="slash-label">{c.label}</span>
-                  <span className="slash-hint">{c.hint}</span>
+                  <span className="slash-label">{commandLabel(c)}</span>
+                  <span className="slash-hint">{commandHint(c)}</span>
                 </div>
               ))}
             </div>

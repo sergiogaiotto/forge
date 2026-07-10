@@ -10,7 +10,11 @@ export type MessageKey =
   | "mcp.approve.on"
   | "mcp.approve.scope"
   | "common.deny"
-  | "common.allow";
+  | "common.allow"
+  | "help.title"
+  | "help.colCommand"
+  | "help.colWhat"
+  | "help.footer";
 
 export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
   "pt-BR": {
@@ -21,6 +25,10 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "mcp.approve.scope": "(escopo {scope}).",
     "common.deny": "Negar",
     "common.allow": "Permitir",
+    "help.title": "Paleta de comandos",
+    "help.colCommand": "comando",
+    "help.colWhat": "o que faz",
+    "help.footer": "Digite `/` no chat para autocompletar.",
   },
   en: {
     "app.loading": "Loading FORGE…",
@@ -30,5 +38,9 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "mcp.approve.scope": "(scope {scope}).",
     "common.deny": "Deny",
     "common.allow": "Allow",
+    "help.title": "Command palette",
+    "help.colCommand": "command",
+    "help.colWhat": "what it does",
+    "help.footer": "Type `/` in the chat to autocomplete.",
   },
 };
