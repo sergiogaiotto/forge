@@ -91,7 +91,7 @@ import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, se
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
 import { maskDataSample, renderPiiCard, scanIndexForPii } from "../util/piiScan";
-import { compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCard, renderTodoCard, searchInFiles, SEARCH_MAX_FILE_BYTES, SEARCH_MAX_FILES, TODO_PATTERN } from "../workspace/browse";
+import { compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCard, renderTodoCard, searchInFiles, SearchMatch, SEARCH_MAX_FILE_BYTES, SEARCH_MAX_FILES, SEARCH_MAX_MATCHES, SEARCH_TIME_BUDGET_MS, TODO_PATTERN } from "../workspace/browse";
 import { SqlRunResult, WarehouseConnection } from "../warehouse/types";
 import { evaluateDodGate } from "../util/dodCheck";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
@@ -3230,25 +3230,54 @@ export class Controller {
         this.dataCard(`${hostT("wsb.search.headPlain")}\n\n${pattern.error}`);
         return;
       }
-      // Lê SÓ o que vale a pena varrer, com teto de arquivos e de tamanho; leitura sequencial com
-      // early-stop dentro do searchInFiles (o cap de ocorrências corta a varredura, não só a exibição).
+      // Leitura INCREMENTAL com early-stop DUPLO: lê um arquivo, varre, acumula — e para de LER assim
+      // que o teto de ocorrências ou o orçamento de wall-clock estoura (não materializa os 2000 antes
+      // de varrer o primeiro; achado da revisão). searchInFiles roda por arquivo com o cap restante.
       const candidates = paths.filter(isSearchablePath).slice(0, SEARCH_MAX_FILES);
-      const files: { path: string; content: string }[] = [];
+      const deadline = Date.now() + SEARCH_TIME_BUDGET_MS;
+      const matches: SearchMatch[] = [];
+      const withMatches = new Set<string>();
+      let scanned = 0;
+      let truncated = false;
+      let timedOut = false;
       for (const rel of candidates) {
+        if (matches.length >= SEARCH_MAX_MATCHES) {
+          truncated = true;
+          break;
+        }
+        if (Date.now() > deadline) {
+          timedOut = true;
+          break;
+        }
+        let content: string;
         try {
           const abs = path.join(ws, rel);
           const st = await fs.stat(abs);
           if (st.size > SEARCH_MAX_FILE_BYTES) continue;
-          files.push({ path: rel, content: await fs.readFile(abs, "utf8") });
+          content = await fs.readFile(abs, "utf8");
         } catch {
-          /* ilegível/apagado no meio → pula (fail-open) */
+          continue; // ilegível/apagado no meio → pula (fail-open)
+        }
+        scanned++;
+        const r = searchInFiles([{ path: rel, content }], pattern.re, { maxMatches: SEARCH_MAX_MATCHES - matches.length, budgetMs: deadline - Date.now() });
+        for (const m of r.matches) {
+          matches.push(m);
+          withMatches.add(m.path);
+        }
+        if (r.truncated) truncated = true;
+        if (r.timedOut) {
+          timedOut = true;
+          break;
         }
       }
-      const result = searchInFiles(files, pattern.re);
+      const result = { matches, filesWithMatches: withMatches.size, scanned, truncated, timedOut };
       this.dataCard(cmd === "todos" ? renderTodoCard(result, maskDataSample) : renderSearchCard(args ?? "", result, maskDataSample));
     } catch (err) {
       log.warn(`Comando de workspace /${cmd} falhou (fail-open).`, err);
-      this.dataCard(hostT("card.data.failed", { cmd, error: err instanceof Error ? err.message : String(err) }));
+      // O card de erro cita o comando pt (arquivos/buscar/todos), não o cmd do protocolo (files/search)
+      // — como os data commands, cujo cmd do protocolo já coincide com o id pt.
+      const echo = ({ files: "arquivos", search: "buscar", todos: "todos" } as const)[cmd];
+      this.dataCard(hostT("card.data.failed", { cmd: echo, error: err instanceof Error ? err.message : String(err) }));
     }
   }
 

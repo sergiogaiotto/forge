@@ -4,6 +4,7 @@ import { setHostLocale } from "../i18n";
 import {
   BROWSE_MAX_ENTRIES,
   compileSearchPattern,
+  hasNestedQuantifier,
   isSearchablePath,
   renderFilesCard,
   renderSearchCard,
@@ -28,6 +29,29 @@ test("compileSearchPattern: vazio orienta, longo recusa, inválido explica, vál
   assert.ok((ok as { re: RegExp }).re.test("DEF  Process")); // /i
 });
 
+// BLOCKER da revisão adversarial: o cap de linha NÃO barra backtracking EXPONENCIAL. O detector de
+// quantificador aninhado (star-height ≥ 2) é a defesa primária — recusa antes de compilar/rodar.
+test("hasNestedQuantifier: pega a assinatura catastrófica; libera padrões legítimos", () => {
+  // catastróficos (recusados)
+  for (const p of ["(a+)+$", "(a*)*", "(a+)*b", "(\\w+\\s?)*", "(-+)+>", "((a+))+", "(ab+)+", "(x+){2,}"]) {
+    assert.ok(hasNestedQuantifier(p), `deveria detectar aninhamento: ${p}`);
+  }
+  // legítimos (liberados)
+  for (const p of ["def\\s+process", "a*b*c*", "(a|b)+", "TODO|FIXME", "\\bclass\\s+\\w+", "foo.*bar", "[a-z]+_id", "(err){1,3}", "a+"]) {
+    assert.ok(!hasNestedQuantifier(p), `NÃO deveria detectar: ${p}`);
+  }
+  // classe de caractere e escape não confundem o detector: `[()+]+` é um quantificador simples sobre a
+  // classe; `\(a+\)+` são parênteses LITERAIS (escapados), sem grupo.
+  assert.ok(!hasNestedQuantifier("[()+]+"));
+  assert.ok(!hasNestedQuantifier("\\(a+\\)+"));
+});
+
+test("compileSearchPattern: recusa quantificador aninhado com mensagem de segurança", () => {
+  const r = compileSearchPattern("(a+)+$");
+  assert.ok("error" in r);
+  assert.match((r as { error: string }).error, /aninhado|catastr/i);
+});
+
 test("searchInFiles: linha 1-based, agrupa por arquivo e para NO teto (truncated, varredura curta)", () => {
   const files = [
     { path: "a.py", content: "x = 1\ndef process(a):\n    return a" },
@@ -38,12 +62,22 @@ test("searchInFiles: linha 1-based, agrupa por arquivo e para NO teto (truncated
   assert.deepEqual(r.matches[0], { path: "a.py", line: 2, text: "def process(a):" });
   assert.equal(r.filesWithMatches, 2);
   assert.equal(r.truncated, false);
+  assert.equal(r.timedOut, false);
   // teto: para cedo (early-stop), marcando truncated
   const many = Array.from({ length: 50 }, (_, i) => ({ path: `f${i}.txt`, content: "hit\nhit\nhit" }));
-  const capped = searchInFiles(many, /hit/, 5);
+  const capped = searchInFiles(many, /hit/, { maxMatches: 5 });
   assert.equal(capped.matches.length, 5);
   assert.equal(capped.truncated, true);
   assert.ok(capped.scanned < 50, "a varredura deve PARAR no teto, não só capar a exibição");
+});
+
+test("searchInFiles: orçamento de wall-clock corta a varredura (defesa anti-ReDoS residual, now injetável)", () => {
+  const files = Array.from({ length: 100 }, (_, i) => ({ path: `f${i}.txt`, content: "nada\nnada" }));
+  let clock = 0;
+  const now = () => (clock += 10); // cada chamada avança 10ms → estoura um budget de 30ms cedo
+  const r = searchInFiles(files, /zzz/, { budgetMs: 30, now });
+  assert.equal(r.timedOut, true);
+  assert.ok(r.scanned < 100, "deve parar assim que o orçamento estoura");
 });
 
 test("searchInFiles: linha gigante é CAPADA antes do teste (anti-ReDoS/anti-inchaço)", () => {
@@ -94,7 +128,7 @@ test("renderFilesCard: filtro por prefixo (caixa/barra normalizadas), cap e mens
 });
 
 test("renderSearchCard/renderTodoCard: vazio orienta; achados agrupados por arquivo com máscara aplicada", () => {
-  const empty = renderSearchCard("foo", { matches: [], filesWithMatches: 0, scanned: 12, truncated: false }, id);
+  const empty = renderSearchCard("foo", { matches: [], filesWithMatches: 0, scanned: 12, truncated: false, timedOut: false }, id);
   assert.match(empty, /Nenhuma ocorrência de `foo` em 12 arquivos/);
   const result = {
     matches: [
@@ -105,6 +139,7 @@ test("renderSearchCard/renderTodoCard: vazio orienta; achados agrupados por arqu
     filesWithMatches: 2,
     scanned: 40,
     truncated: false,
+    timedOut: false,
   };
   const card = renderSearchCard("email", result, (s) => s.replace(/joao@claro\.com\.br/, "▇▇▇"));
   assert.match(card, /\*\*3 ocorrências\*\* em 2 arquivo\(s\) \(40 varridos\)/);
@@ -115,6 +150,22 @@ test("renderSearchCard/renderTodoCard: vazio orienta; achados agrupados por arqu
   const todo = renderTodoCard({ ...result, matches: [{ path: "a.py", line: 1, text: "# TODO: x" }], filesWithMatches: 1 }, id);
   assert.match(todo, /TODOs do workspace/);
   assert.match(todo, /\*\*1 ocorrência\*\*/); // singular do ICU
+  // timedOut → aviso de resultado parcial (defesa anti-ReDoS residual)
+  assert.match(renderSearchCard("x", { ...result, timedOut: true }, id), /interrompida ao passar de 1500ms/);
+});
+
+// Injeção de markdown: backtick é caractere de nome de arquivo LEGAL — um repo hostil manda um path com
+// `` ` `` para quebrar o code span. codeSafe troca ` por ' em TUDO que vem do disco (path, linha, prefixo).
+test("renderFilesCard/renderSearchCard: backtick em path/linha/prefixo é neutralizado (repo hostil)", () => {
+  const evil = "x`](http://evil).md";
+  const files = renderFilesCard([evil], undefined);
+  assert.ok(!files.includes("`x`]"), "o backtick do path NÃO pode fechar o code span");
+  assert.ok(files.includes("x'](http://evil).md"), "backtick vira ' dentro do span");
+  const search = renderSearchCard("p`p", { matches: [{ path: evil, line: 1, text: "a `b` c" }], filesWithMatches: 1, scanned: 1, truncated: false, timedOut: false }, id);
+  assert.ok(!search.includes("`b`"), "o backtick da linha também é neutralizado");
+  assert.ok(search.includes("Busca · `p'p`"), "o backtick do padrão ecoado também");
+  const filtered = renderFilesCard(["a.py"], "p`x");
+  assert.ok(filtered.includes("`p'x`"));
 });
 
 test("cards do workspace em en/es: frame traduzido citando o label do locale (/files, /archivos)", () => {
@@ -127,7 +178,7 @@ test("cards do workspace em en/es: frame traduzido citando o label do locale (/f
     const es = renderFilesCard(Array.from({ length: BROWSE_MAX_ENTRIES + 1 }, (_, i) => `f/${i}.py`), undefined);
     assert.match(es, /Archivos del workspace/);
     assert.match(es, /usa `\/archivos <carpeta>`/);
-    assert.match(renderTodoCard({ matches: [], filesWithMatches: 0, scanned: 3, truncated: false }, id), /Ningún TODO/);
+    assert.match(renderTodoCard({ matches: [], filesWithMatches: 0, scanned: 3, truncated: false, timedOut: false }, id), /Ningún TODO/);
   } finally {
     setHostLocale("pt-BR");
   }

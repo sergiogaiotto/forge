@@ -355,9 +355,11 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         return;
       }
       // /arquivos <pasta>: a cauda é o filtro quando é UM token com cara de caminho; frase segue ao
-      // modelo (anti-sequestro). /buscar <regex>: a cauda É o padrão (texto livre — regex tem espaço
-      // e metacaracteres por natureza, como o tema do /diagrama).
-      if (withArgs.cmd.id === "arquivos" && /^[\w./\\-]+$/.test(withArgs.args)) {
+      // modelo (anti-sequestro). O gate usa \p{L}\p{N} (não \w, que é ASCII e rejeitaria pastas
+      // acentuadas — "relatórios", "configuração" — num produto pt-BR-first; achado da revisão).
+      // /buscar <regex>: a cauda É o padrão (texto livre — regex tem espaço e metacaracteres, como o
+      // tema do /diagrama).
+      if (withArgs.cmd.id === "arquivos" && /^[\p{L}\p{N}._/\\-]+$/u.test(withArgs.args)) {
         runWorkspace("files", withArgs.args);
         return;
       }

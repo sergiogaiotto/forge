@@ -420,6 +420,8 @@ export type HostMessageKey =
   | "wsb.search.empty"
   | "wsb.search.tooLong"
   | "wsb.search.invalid"
+  | "wsb.search.unsafe"
+  | "wsb.search.timedout"
   | "wsb.search.head"
   | "wsb.search.headPlain"
   | "wsb.search.none"
@@ -810,6 +812,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wsb.search.empty": "Informe o padrão: `/buscar <regex>` — ex.: `/buscar def process_.*\\(`.",
     "wsb.search.tooLong": "Padrão muito longo (máx. {max} caracteres).",
     "wsb.search.invalid": "Padrão de busca inválido: {error}",
+    "wsb.search.unsafe": "Padrão recusado: quantificador aninhado (ex.: `(a+)+`) pode travar a busca (backtracking catastrófico). Reescreva sem repetição dentro de repetição.",
+    "wsb.search.timedout": "_Busca interrompida ao passar de {ms}ms — resultado parcial. Refine o padrão ou o escopo._",
     "wsb.search.head": "### Busca · `{pattern}`",
     "wsb.search.headPlain": "### Busca",
     "wsb.search.none": "Nenhuma ocorrência de `{pattern}` em {files} arquivos varridos.",
@@ -1199,6 +1203,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wsb.search.empty": "Enter the pattern: `/search <regex>` — e.g. `/search def process_.*\\(`.",
     "wsb.search.tooLong": "Pattern too long (max. {max} characters).",
     "wsb.search.invalid": "Invalid search pattern: {error}",
+    "wsb.search.unsafe": "Pattern rejected: a nested quantifier (e.g. `(a+)+`) can hang the search (catastrophic backtracking). Rewrite it without repetition inside repetition.",
+    "wsb.search.timedout": "_Search stopped after {ms}ms — partial result. Refine the pattern or the scope._",
     "wsb.search.head": "### Search · `{pattern}`",
     "wsb.search.headPlain": "### Search",
     "wsb.search.none": "No occurrence of `{pattern}` across {files} scanned files.",
@@ -1588,6 +1594,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wsb.search.empty": "Indica el patrón: `/buscar <regex>` — ej.: `/buscar def process_.*\\(`.",
     "wsb.search.tooLong": "Patrón demasiado largo (máx. {max} caracteres).",
     "wsb.search.invalid": "Patrón de búsqueda inválido: {error}",
+    "wsb.search.unsafe": "Patrón rechazado: un cuantificador anidado (ej.: `(a+)+`) puede colgar la búsqueda (backtracking catastrófico). Reescríbelo sin repetición dentro de repetición.",
+    "wsb.search.timedout": "_Búsqueda detenida tras {ms}ms — resultado parcial. Refina el patrón o el alcance._",
     "wsb.search.head": "### Búsqueda · `{pattern}`",
     "wsb.search.headPlain": "### Búsqueda",
     "wsb.search.none": "Ninguna ocurrencia de `{pattern}` en {files} archivos escaneados.",
