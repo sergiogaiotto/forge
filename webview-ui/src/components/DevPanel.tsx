@@ -2113,7 +2113,7 @@ function ProfileSuggestion({ messages }: { messages: MessageVM[] }): JSX.Element
   );
 }
 
-type DodStatus = "ok" | "fail" | "pending";
+type DodStatus = "ok" | "fail" | "partial" | "pending";
 
 function runStatus(r: RunResultData | null): DodStatus {
   if (!r || r.skippedReason) return "pending";
@@ -2132,7 +2132,22 @@ function DodBar({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<
   const appliedList = proposals.filter((p) => p.status === "applied");
   const lastApplied = appliedList[appliedList.length - 1];
   const applied: DodStatus = appliedList.length ? "ok" : "pending";
-  const gate: DodStatus = lastApplied ? (lastApplied.validation ? (lastApplied.validation.gateOk ? "ok" : "fail") : "ok") : "pending";
+  // O passo "Gate": pending até aplicar; "fail" se a validação por-arquivo do último aplicado reprovou;
+  // "partial" (âmbar, NÃO verde) se o contrato cross-file do PROJETO não foi verificado (mypy não rodou) —
+  // sinalizado por `contractUnverified`, que o gate carimba NA proposta (project/gate). O flag vive na
+  // proposta (state.messages), não em state.project — que some ao fechar o modal do projeto, JUSTO quando
+  // esta barra fica visível (o modal a cobre enquanto aberto). Sem isto, o "Gate ✓" verde reaparecia pós-
+  // fechamento mesmo com o contrato não verificado. Edições de chat (sem carimbo) mantêm a lógica por-arquivo.
+  let gate: DodStatus;
+  if (!lastApplied) {
+    gate = "pending";
+  } else if (!!lastApplied.validation && !lastApplied.validation.gateOk) {
+    gate = "fail";
+  } else if (lastApplied.contractUnverified) {
+    gate = "partial";
+  } else {
+    gate = "ok";
+  }
   const run = runStatus(state.lastFileRun);
   const tests = runStatus(state.lastTestRun);
   const review: DodStatus = state.reviewed ? "ok" : "pending";
@@ -2149,7 +2164,7 @@ function DodBar({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<
 
   const items: { key: string; label: string; status: DodStatus; onClick?: () => void; title: string }[] = [
     { key: "aplicado", label: t("dod.applied"), status: applied, title: t("dod.appliedTitle") },
-    { key: "gate", label: t("dod.gate"), status: gate, title: t("dod.gateTitle") },
+    { key: "gate", label: t("dod.gate"), status: gate, title: gate === "partial" ? t("dod.gatePartialTitle") : t("dod.gateTitle") },
     { key: "executa", label: t("dod.run"), status: run, onClick: runLastApplied, title: t("dod.runTitle") },
     { key: "testes", label: t("dod.tests"), status: tests, onClick: () => post({ type: "tests/run" }), title: t("dod.testsTitle") },
     { key: "revisao", label: t("dod.review"), status: review, onClick: doReview, title: t("dod.reviewTitle") },
@@ -2168,7 +2183,7 @@ function DodBar({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<
           title={it.title}
           onClick={it.onClick && it.status !== "ok" ? it.onClick : undefined}
         >
-          <Icon name={it.status === "ok" ? "check" : it.status === "fail" ? "x" : "circle"} size={11} />
+          <Icon name={it.status === "ok" ? "check" : it.status === "fail" ? "x" : it.status === "partial" ? "alert-triangle" : "circle"} size={11} />
           {it.label}
         </span>
       ))}

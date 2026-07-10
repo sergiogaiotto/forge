@@ -727,6 +727,10 @@ h6.md-h {
   color: #d98989;
   border-color: #522f2f;
 }
+.dod-chip.partial {
+  color: #d1a13a;
+  border-color: #5a4820;
+}
 .dod-chip.clickable {
   cursor: pointer;
 }

@@ -54,6 +54,11 @@ export interface ProposalVM {
   validation?: { running: boolean; results: ValidatorResult[]; gateOk: boolean };
   status: "pending" | "applied" | "discarded";
   run?: RunResultData;
+  // Marcado quando o gate do PROJETO fechou SEM verificar o contrato cross-file (mypy não rodou →
+  // partial/advisory). Persiste NA proposta (que vive em state.messages e sobrevive ao fechar o modal do
+  // projeto), então o passo "Gate" da Definição de Pronto mostra "não verificado" em vez de verde otimista
+  // mesmo depois que state.project vira null — que é justamente quando esse passo fica visível.
+  contractUnverified?: boolean;
 }
 
 export interface MessageVM {
@@ -358,9 +363,28 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "project/planStep":
       // Narração do planejamento (só relevante enquanto o blueprint não chegou).
       return state.project ? { ...state, project: { ...state.project, planStep: msg.label } } : state;
-    case "project/gate":
+    case "project/gate": {
       // Gate workspace-wide: guarda o veredito para pintar os cartões reprovados e o resumo no modal.
-      return state.project ? { ...state, project: { ...state.project, gate: { advisory: msg.advisory, partial: msg.partial, requiresContractConfirm: msg.requiresContractConfirm, contractBlocked: msg.contractBlocked, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors, dod: msg.dod, security: msg.security } } } : state;
+      if (!state.project) return state;
+      const gate = { advisory: msg.advisory, partial: msg.partial, requiresContractConfirm: msg.requiresContractConfirm, contractBlocked: msg.contractBlocked, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors, dod: msg.dod, security: msg.security };
+      // Carimba `contractUnverified` (mypy não rodou → partial/advisory) SÓ nas propostas DESTE projeto,
+      // casadas pelo path do blueprint — para o passo "Gate" da DoD não mostrar verde otimista depois que o
+      // modal fechar (state.project → null). Escopar ao projeto evita que uma edição de CHAT anterior (já
+      // verificada por-arquivo) herde o "não verificado" do projeto. Reflete o veredito ATUAL (re-run
+      // sobrescreve). Fallback (blueprint vazio, anômalo no gate): carimba tudo para não perder o sinal.
+      const contractUnverified = gate.partial || gate.advisory;
+      const norm = (p: string) => p.replace(/^[./\\]+/, "").replace(/\\/g, "/");
+      const projectPaths = new Set((state.project.blueprint?.files ?? []).map((f) => norm(f.path)));
+      const inProject = (fp: string) => projectPaths.size === 0 || projectPaths.has(norm(fp));
+      return {
+        ...state,
+        project: { ...state.project, gate },
+        messages: state.messages.map((m) => ({
+          ...m,
+          proposals: m.proposals.map((p) => (inProject(p.proposal.filePath) ? { ...p, contractUnverified } : p)),
+        })),
+      };
+    }
     case "project/done":
       return state.project ? { ...state, project: { ...state.project, busy: false, done: true } } : state;
     case "project/appliedAll":
