@@ -339,6 +339,7 @@ export type MessageKey =
   | "dod.appliedTitle"
   | "dod.gate"
   | "dod.gateTitle"
+  | "dod.gatePartialTitle"
   | "dod.run"
   | "dod.runTitle"
   | "dod.tests"
@@ -659,6 +660,7 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "dod.appliedTitle": "Há alteração aplicada ao arquivo",
     "dod.gate": "Gate",
     "dod.gateTitle": "Validação local (lint/tipos) da última alteração aplicada",
+    "dod.gatePartialTitle": "Contrato cross-file NÃO verificado (o mypy não rodou). Não é verde: rode \"Preparar ambiente\" e depois \"Re-verificar contrato\".",
     "dod.run": "Executa",
     "dod.runTitle": "Executar o último arquivo aplicado",
     "dod.tests": "Testes",
@@ -978,6 +980,7 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "dod.appliedTitle": "A change has been applied to the file",
     "dod.gate": "Gate",
     "dod.gateTitle": "Local validation (lint/types) of the last applied change",
+    "dod.gatePartialTitle": "Cross-file contract NOT verified (mypy did not run). Not green: run \"Prepare environment\" then \"Re-verify contract\".",
     "dod.run": "Runs",
     "dod.runTitle": "Run the last applied file",
     "dod.tests": "Tests",
@@ -1297,6 +1300,7 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "dod.appliedTitle": "Hay un cambio aplicado al archivo",
     "dod.gate": "Gate",
     "dod.gateTitle": "Validación local (lint/tipos) del último cambio aplicado",
+    "dod.gatePartialTitle": "Contrato cross-file NO verificado (mypy no se ejecutó). No es verde: ejecute \"Preparar entorno\" y luego \"Reverificar contrato\".",
     "dod.run": "Ejecuta",
     "dod.runTitle": "Ejecutar el último archivo aplicado",
     "dod.tests": "Pruebas",
