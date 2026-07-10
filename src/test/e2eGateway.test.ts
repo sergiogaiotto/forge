@@ -34,15 +34,26 @@ function freePort(): Promise<number> {
   });
 }
 
-// Upstream FAKE: responde /chat/completions com um SSE mínimo (conteúdo + usage + [DONE]), como o vLLM.
-function startFakeUpstream(): Promise<{ url: string; close: () => Promise<void>; hits: () => number }> {
+// Upstream FAKE: responde /chat/completions com um SSE mínimo (conteúdo + usage + [DONE]), como o vLLM,
+// e CAPTURA o corpo recebido para o teste asseverar que o payload do cliente atravessou o gateway.
+interface FakeUpstream {
+  url: string;
+  close: () => Promise<void>;
+  hits: () => number;
+  lastBody: () => string;
+}
+function startFakeUpstream(): Promise<FakeUpstream> {
   let hits = 0;
+  let lastBody = "";
   const server = http.createServer((req, res) => {
     if (req.method === "POST" && req.url && req.url.endsWith("/chat/completions")) {
       hits++;
-      // drena o corpo (o gateway repassa o payload do cliente) e responde streaming
-      req.resume();
+      // acumula o corpo (o gateway repassa o payload do cliente) e responde streaming
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (c) => (body += c));
       req.on("end", () => {
+        lastBody = body;
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write('data: {"choices":[{"delta":{"content":"print(\\"forge e2e\\")"}}]}\n\n');
         res.write('data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":7,"completion_tokens":4}}\n\n');
@@ -60,15 +71,26 @@ function startFakeUpstream(): Promise<{ url: string; close: () => Promise<void>;
       resolve({
         url: `http://127.0.0.1:${port}`,
         hits: () => hits,
-        close: () => new Promise<void>((r) => server.close(() => r())),
+        lastBody: () => lastBody,
+        // closeAllConnections() derruba sockets keep-alive residuais — sem isto, um socket sobrevivente
+        // (undici↔fake) faria server.close() aguardar para sempre no teardown (sem --test-timeout).
+        close: () =>
+          new Promise<void>((r) => {
+            (server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
+            server.close(() => r());
+          }),
       });
     });
   });
 }
 
-async function waitForHealth(base: string, timeoutMs = 8000): Promise<void> {
+// Espera o /health responder, mas ABORTA cedo se o processo do gateway morrer no boot (chave ausente,
+// porta em uso) — senão seriam 8s de timeout escondendo a causa real, que fica no stderr capturado.
+async function waitForHealth(base: string, gwExit: () => number | null, timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const code = gwExit();
+    if (code !== null) throw new Error(`gateway morreu no boot (exit ${code}) — veja o log do gateway acima`);
     try {
       const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(500) });
       if (r.ok) return;
@@ -87,6 +109,8 @@ test("E2E license↔gateway↔provider: activate → proxy (geração) → 401 s
   const fake = await startFakeUpstream();
   let gw: ChildProcess | undefined;
   let gwLog = "";
+  let gwExitCode: number | null = null;
+  let failed = false;
   try {
     // 1) Par de chaves de TESTE (admin-cli real, keys-dir isolado — não toca o embeddedKey do cliente).
     const kg = spawnSync(node, [ADMIN_CLI, "keygen", "--keys-dir", keysDir, "--json"], { encoding: "utf8" });
@@ -115,7 +139,8 @@ test("E2E license↔gateway↔provider: activate → proxy (geração) → 401 s
     });
     gw.stdout?.on("data", (d) => (gwLog += d.toString()));
     gw.stderr?.on("data", (d) => (gwLog += d.toString()));
-    await waitForHealth(base);
+    gw.once("exit", (code) => (gwExitCode = code ?? 0));
+    await waitForHealth(base, () => gwExitCode);
 
     // 4) ATIVA a licença → token de sessão.
     const act = await fetch(`${base}/license/activate`, {
@@ -138,6 +163,9 @@ test("E2E license↔gateway↔provider: activate → proxy (geração) → 401 s
     const body = await gen.text();
     assert.match(body, /forge e2e/, "o corpo do provider fake deveria chegar ao cliente pelo gateway");
     assert.equal(fake.hits(), 1, "o gateway deveria ter chamado o upstream exatamente uma vez");
+    // metade cliente→upstream: o payload do cliente (model + mensagem) atravessou o gateway sem corromper
+    assert.match(fake.lastBody(), /escreva um hello/, "o payload do cliente deveria chegar ao upstream pelo gateway");
+    assert.match(fake.lastBody(), /gpt-oss-120b/, "o model do cliente deveria chegar ao upstream");
 
     // 6) NEGAÇÃO: proxy sem token → 401 (recusa autoritativa do gateway).
     const noTok = await fetch(`${base}/v1/chat/completions`, {
@@ -158,13 +186,20 @@ test("E2E license↔gateway↔provider: activate → proxy (geração) → 401 s
     });
     assert.equal(afterRevoke.status, 403, "após revogar o subject, o proxy deveria negar com 403");
     assert.equal(fake.hits(), 1, "o upstream NÃO deveria ser chamado para um subject revogado");
+  } catch (e) {
+    failed = true;
+    throw e;
   } finally {
-    if (gw && gw.exitCode === null) {
+    // Encerra o gateway e ESPERA o exit real (não um sleep-palpite): sem isto, sockets residuais
+    // travariam o fake.close() do teardown.
+    if (gw && gwExitCode === null) {
+      const exited = new Promise<void>((r) => gw!.once("exit", () => r()));
       gw.kill();
-      await new Promise((r) => setTimeout(r, 150));
+      await Promise.race([exited, new Promise<void>((r) => setTimeout(r, 3000))]);
     }
     await fake.close();
     fs.rmSync(tmp, { recursive: true, force: true });
-    if (process.env.FORGE_E2E_DEBUG) process.stderr.write(gwLog);
+    // Em falha (ou sob FORGE_E2E_DEBUG), despeja o log do gateway — a causa costuma estar no stderr dele.
+    if (failed || process.env.FORGE_E2E_DEBUG) process.stderr.write(gwLog);
   }
 });
