@@ -30,6 +30,17 @@ test("REGRESSÃO resolveObsMode: legado enabled=true sem mode explícito ⇒ dir
   assert.equal(resolveObsMode("banana", true), "off");
 });
 
+test("permission.decision: aprovação de ESCRITA vira WARNING no trace (salta aos olhos); leitura/auto vira DEFAULT", () => {
+  const opts = { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked" as const, environment: "test" };
+  const [ev] = buildIngestion({ type: "permission.decision", kind: "sql.write", action: "escrita confirmada", scope: "write", outcome: "approved", via: "dialog", subject: "dw" }, opts);
+  assert.equal(ev.type, "event-create");
+  assert.equal((ev.body as any).level, "WARNING");
+  assert.equal((ev.body as any).metadata.kind, "sql.write");
+  assert.equal((ev.body as any).metadata.outcome, "approved");
+  const [ev2] = buildIngestion({ type: "permission.decision", kind: "mcp.tool", action: "srv.tool", scope: "read", outcome: "auto", via: "auto" }, opts);
+  assert.equal((ev2.body as any).level, "DEFAULT");
+});
+
 test("mask: full passa cru, masked redige PII/segredos, metadata-only some", () => {
   assert.equal(mask("contato a@b.com", "full"), "contato a@b.com");
   const m = mask("email a@b.com chave sk-abcdefghijklmnopqr", "masked")!;
@@ -214,4 +225,16 @@ test("Observability respeita enabled=false e amostragem", () => {
   sampledOut.obs.record({ type: "generation.start", taskId: "t", mode: "normal", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u" });
   sampledOut.obs.record({ type: "proposal.applied", filePath: "a.py" });
   assert.equal(sampledOut.captured.length, 0);
+});
+
+test("Observability: permission.decision é ISENTO de amostragem (auditoria não some no sampleRate)", () => {
+  // geração fora da amostra (0.99 > 0.5) — proposal.applied some, mas a decisão de permissão NÃO
+  const h = harness(cfg({ sampleRate: 0.5 }), 0.99);
+  h.obs.record({ type: "generation.start", taskId: "t", mode: "project", model: "m", provider: "p", skills: [], sessionId: "s", userId: "u" });
+  h.obs.record({ type: "proposal.applied", filePath: "a.py" });
+  assert.equal(h.captured.length, 0); // confirma que o trace não foi amostrado
+  h.obs.record({ type: "permission.decision", kind: "sql.write", action: "escrita", scope: "write", outcome: "approved", via: "dialog" });
+  // a decisão aterrissa num trace PRÓPRIO (orphan trace + event-create) apesar do trace da geração ter sido descartado
+  assert.ok(h.captured.length >= 1, "permission.decision deveria aterrissar mesmo fora da amostra");
+  assert.ok(h.captured.some((ev) => (ev.body as any)?.name === "permission.decision"));
 });

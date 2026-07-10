@@ -17,6 +17,7 @@ import { McpAuditor } from "../mcp/McpAuditor";
 import { McpManager } from "../mcp/McpManager";
 import { McpRegistry } from "../mcp/McpRegistry";
 import { ToolApprovalGate } from "../mcp/ToolApprovalGate";
+import { PermissionAuditor, PermissionService } from "../security/permissions";
 import { CodebaseIndex } from "../rag/CodebaseIndex";
 import { EgressEnforcer } from "../net/EgressEnforcer";
 import { SecretsStore } from "../secrets/SecretsStore";
@@ -140,6 +141,10 @@ export class Controller {
   private readonly registry: McpRegistry;
   private readonly auditor = new McpAuditor();
   private readonly approvalGate: ToolApprovalGate;
+  // Permission model UNIFICADO (Fase 4): decisões de permissão de TODAS as superfícies (MCP, escrita
+  // SQL, override de gate, contrato) passam por um trail único + evento obs `permission.decision`.
+  private readonly permissionAuditor = new PermissionAuditor();
+  private readonly permissions: PermissionService;
   private readonly mcp: McpManager;
   private readonly rag: CodebaseIndex;
   private readonly obs: Observability;
@@ -205,11 +210,21 @@ export class Controller {
       gatewayUrl: this.config.gatewayUrl(),
     }));
     this.registry = new McpRegistry(this.egress);
-    this.approvalGate = new ToolApprovalGate((req) =>
-      new Promise<boolean>((resolve) => {
-        this.pendingApprovals.set(req.requestId, resolve);
-        this.post({ type: "mcp/approvalRequest", ...req });
-      })
+    this.approvalGate = new ToolApprovalGate(
+      (req) =>
+        new Promise<boolean>((resolve) => {
+          this.pendingApprovals.set(req.requestId, resolve);
+          this.post({ type: "mcp/approvalRequest", ...req });
+        }),
+      // Toda decisão do gate MCP (inclusive auto-approve, antes só log) entra no trail unificado. O
+      // closure lê this.permissions em TEMPO DE DECISÃO — a ordem de construção do ctor não importa.
+      (rec) =>
+        this.permissions.note(
+          { kind: "mcp.tool", action: `MCP ${rec.server}.${rec.tool}`, subject: `${rec.server}.${rec.tool}`, scope: rec.scope === "readwrite" ? "write" : "read", detail: rec.argsPreview },
+          rec.outcome,
+          rec.outcome === "auto" ? "auto" : "webview"
+        ),
+      (m) => log.info(m)
     );
     this.mcp = new McpManager(this.registry, this.egress, this.approvalGate, this.auditor, this.secrets);
     this.rag = new CodebaseIndex(
@@ -245,6 +260,14 @@ export class Controller {
       new RoutingObsSink(() => this.config.observability().mode, directSink, relaySink),
       { onError: (m) => log.warn(m) },
       this.diag
+    );
+    // Permission model unificado: trail central + evento obs por decisão + diálogo nativo injetado
+    // (o modal não depende do estado do webview — lição do item 1).
+    this.permissions = new PermissionService(
+      this.permissionAuditor,
+      (rec) => this.obs.record({ type: "permission.decision", kind: rec.kind, action: rec.action, scope: rec.scope, outcome: rec.outcome, via: rec.via, subject: rec.subject }),
+      async (message, detail, confirmLabel) => vscode.window.showWarningMessage(message, { modal: true, detail }, confirmLabel),
+      (m) => log.info(m)
     );
     this.previewService = new PreviewService({
       workspaceRoot: () => this.workspaceRoot(),
@@ -1150,24 +1173,28 @@ export class Controller {
     // `forge.gate.blockUnverifiedContract`, vira BLOQUEIO sem escape: o force NÃO fura — nem pelo
     // "Forçar bloqueados" (a política usa o flag CRU, sem o carve-out por outros bloqueios da confirmação).
     const policyOn = this.config.blockUnverifiedContract();
-    const decision = contractGateDecision(policyOn ? this.gateContractUnverifiedHard : this.gateContractUnverified, policyOn, !!opts?.forceBlocked);
+    const contractUnv = policyOn ? this.gateContractUnverifiedHard : this.gateContractUnverified;
+    const decision = contractGateDecision(contractUnv, policyOn, !!opts?.forceBlocked);
     if (decision === "block") {
+      this.permissions.note({ kind: "contract.unverified", action: "Aplicar tudo com contrato cross-file não verificado", scope: "write" }, "blocked", "policy");
       this.post({ type: "notice", level: "warn", message: 'Bloqueado por política do admin (forge.gate.blockUnverifiedContract): o contrato cross-file precisa ser VERIFICADO antes de aplicar tudo. Rode "Preparar ambiente" (cria o venv) e depois "Re-verificar contrato" (o gate instala o mypy no venv e verifica as MESMAS propostas, sem regenerar).' });
       log.info("Aplicar tudo bloqueado: contrato cross-file não verificado + política blockUnverifiedContract");
       return;
     }
     if (decision === "confirm") {
-      // Diálogo NATIVO (não depende do estado do webview): se a política foi desligada depois do gate
-      // ter postado contractBlocked, o botão de confirmação não está renderizado — o diálogo garante
-      // que o caminho recomendado pelo aviso sempre exista.
-      const confirmLabel = "Aplicar sem verificar contrato";
-      const pick = await vscode.window.showWarningMessage(
-        "O contrato cross-file NÃO foi verificado (o mypy não rodou — sem venv/mypy). Aplicar tudo assim mesmo?",
-        { modal: true, detail: 'Para verificar de fato: "Preparar ambiente" e depois "Re-verificar contrato". Aplicar sem verificação fica registrado no diagnóstico.' },
-        confirmLabel
+      // Diálogo NATIVO via PermissionService (não depende do estado do webview — se a política foi
+      // desligada depois do gate ter postado contractBlocked, o botão não está renderizado; o diálogo
+      // garante o caminho). A decisão entra no trail unificado + Langfuse.
+      const ok = await this.permissions.confirm(
+        { kind: "contract.unverified", action: "O contrato cross-file NÃO foi verificado (o mypy não rodou — sem venv/mypy). Aplicar tudo assim mesmo?", scope: "write", detail: 'Para verificar de fato: "Preparar ambiente" e depois "Re-verificar contrato". Aplicar sem verificação fica registrado no diagnóstico.' },
+        { confirmLabel: "Aplicar sem verificar contrato" }
       );
-      if (pick !== confirmLabel) return;
-      log.info("Aplicar tudo com contrato não verificado — confirmado pelo dev (diálogo nativo)");
+      if (!ok) return;
+    }
+    if (decision === "proceed" && contractUnv && opts?.forceBlocked) {
+      // A confirmação veio do BOTÃO do webview ("Aplicar sem verificar contrato") — registra a decisão
+      // no trail unificado (antes, esse caminho não deixava rastro de permissão).
+      this.permissions.note({ kind: "contract.unverified", action: "Aplicar tudo com contrato cross-file não verificado", scope: "write" }, "approved", "webview");
     }
     this.gateContractUnverified = false; // seguimos para aplicar (verificado, ou confirmado) → limpa o estado
     this.gateContractUnverifiedHard = false;
@@ -3024,7 +3051,13 @@ export class Controller {
 
   private warehouse(): WarehouseService {
     if (!this.warehouseSvc) {
-      this.warehouseSvc = new WarehouseService(this.secrets, () => this.config.warehouse(), () => this.workspaceRoot());
+      this.warehouseSvc = new WarehouseService(
+        this.secrets,
+        () => this.config.warehouse(),
+        () => this.workspaceRoot(),
+        (action, subject, sqlPreview) => this.permissions.confirm({ kind: "sql.write", action, subject, scope: "write", detail: sqlPreview }, { confirmLabel: "Executar escrita" }),
+        (action, subject) => this.permissions.note({ kind: "sql.write", action, subject, scope: "write" }, "blocked", "policy")
+      );
     }
     return this.warehouseSvc;
   }
@@ -3058,10 +3091,18 @@ export class Controller {
   private async runOnConnection(conn: WarehouseConnection, sql: string, internal?: { skipMask?: boolean; rowCapOverride?: number }): Promise<SqlRunResult | { refused: string }> {
     if (conn.mcp) {
       const decision = decideSqlRun(sql, conn);
-      if (decision.verdict === "blocked") return { refused: `⛔ ${decision.reason}` };
+      if (decision.verdict === "blocked") {
+        this.permissions.note({ kind: "sql.write", action: `conexão "${conn.id}" (MCP): ${decision.reason}`, subject: conn.id, scope: "write" }, "blocked", "policy");
+        return { refused: `⛔ ${decision.reason}` };
+      }
       if (decision.verdict === "confirm") {
-        const pick = await vscode.window.showWarningMessage(`FORGE · conexão "${conn.id}" (MCP): ${decision.reason}`, { modal: true, detail: sql.slice(0, 600) }, "Executar escrita");
-        if (pick !== "Executar escrita") return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+        // Permission model unificado: mesma confirmação do caminho CLI (antes era um modal DUPLICADO
+        // aqui) — decisão registrada no trail + Langfuse.
+        const ok = await this.permissions.confirm(
+          { kind: "sql.write", action: `conexão "${conn.id}" (MCP): ${decision.reason}`, subject: conn.id, scope: "write", detail: sql },
+          { confirmLabel: "Executar escrita" }
+        );
+        if (!ok) return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
       }
       const started = Date.now();
       const r = await this.mcp.callTool(conn.mcp.server, conn.mcp.tool, { [conn.mcp.sqlArg]: sql });
@@ -3586,6 +3627,7 @@ export class Controller {
     // selariam exatamente o projeto que o "Aplicar tudo" recusa. Sem política: comportamento antigo
     // (cartão individual não exige confirmação de contrato).
     if (this.gateContractUnverifiedHard && this.config.blockUnverifiedContract()) {
+      this.permissions.note({ kind: "contract.unverified", action: `Aplicar ${entry.proposal.filePath} com contrato não verificado`, subject: entry.proposal.filePath, scope: "write" }, "blocked", "policy");
       this.post({ type: "notice", level: "warn", message: 'Bloqueado por política do admin (forge.gate.blockUnverifiedContract): o contrato cross-file precisa ser VERIFICADO antes de aplicar arquivos do projeto. Rode "Preparar ambiente" e depois "Re-verificar contrato".' });
       return false;
     }
@@ -3601,6 +3643,11 @@ export class Controller {
       return false;
     }
     const forcedOverride = gateBlocked && opts?.force === true;
+    if (forcedOverride) {
+      // Override consciente do gate ("Aplicar assim mesmo, revisei" / "Forçar bloqueados") — a decisão
+      // do dev (tomada no botão do webview) entra no trail unificado, além do proposal.applied {forced}.
+      this.permissions.note({ kind: "proposal.force", action: `Aplicar por cima do gate reprovado: ${entry.proposal.filePath}`, subject: entry.proposal.filePath, scope: "write" }, "approved", "webview");
+    }
     const ws = this.workspaceRoot();
     if (!ws) {
       this.post({ type: "notice", level: "error", message: "Abra uma pasta no VSCode para aplicar mudanças." });
@@ -3937,7 +3984,12 @@ export class Controller {
               addAndInstall,
               "Instalar só o que está listado"
             );
-            if (pick === addAndInstall) {
+            // Decisão de permissão de ESCRITA (reescreve o requirements.txt do dev + instala pacotes
+            // inferidos do código — inclusive gerado por LLM; um import errado/typosquat vira instalação).
+            // Entra no trail unificado com a lista de pacotes (o dev decidiu conscientemente).
+            const addOk = pick === addAndInstall;
+            this.permissions.note({ kind: "env.dependency", action: `Adicionar ao requirements.txt e instalar: ${merged.added.join(", ")}`, subject: "requirements.txt", scope: "write", detail: merged.added.join(", ") }, addOk ? "approved" : "denied", "dialog");
+            if (addOk) {
               await fs.writeFile(reqPath, merged.content, "utf8");
               this.post({ type: "notice", level: "info", message: `requirements.txt incrementado: ${merged.added.join(", ")}.` });
             }
@@ -3969,6 +4021,10 @@ export class Controller {
       const detected = await this.detectWorkspacePackages(ws);
       if (detected.length > 0) {
         await fs.writeFile(reqPath, renderRequirements(detected), "utf8");
+        // Escrita AUTOMÁTICA (sem prompt): gera o requirements.txt e instala pacotes inferidos do código
+        // — mesmo risco supply-chain do ramo com confirmação, mas aqui o ambiente "nasce do zero" sem
+        // manifesto prévio. Entra no trail como decisão AUTOMÁTICA (via/outcome "auto") para ser auditável.
+        this.permissions.note({ kind: "env.dependency", action: `requirements.txt gerado e instalado (sem manifesto prévio): ${detected.join(", ")}`, subject: "requirements.txt", scope: "write", detail: detected.join(", ") }, "auto", "auto");
         this.post({
           type: "notice",
           level: "info",

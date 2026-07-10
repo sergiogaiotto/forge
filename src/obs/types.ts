@@ -47,7 +47,11 @@ export type ObsEvent =
   | { type: "run.result"; filePath: string; label?: string; ok: boolean; exitCode: number | null; durationMs: number }
   | { type: "review.done" }
   | { type: "profile.roleSet"; role: string }
-  | { type: "profile.ruleAdded" };
+  | { type: "profile.ruleAdded" }
+  // Permission model unificado: TODA decisão de permissão (MCP, escrita SQL, override de gate,
+  // contrato não-verificado) vira um evento auditável — o SRE enxerga aprovações/negações/bloqueios
+  // no Langfuse, qualquer que seja a superfície onde aconteceram.
+  | { type: "permission.decision"; kind: string; action: string; scope: "read" | "write"; outcome: string; via: string; subject?: string };
 
 // Evento de ingestão do Langfuse (formato /api/public/ingestion). Mantido genérico de propósito.
 export interface IngestionEvent {
