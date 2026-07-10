@@ -147,6 +147,15 @@ export function exactSlashCommand(input: string, registry: SlashCommand[] = SLAS
   return registry.find((c) => c.id === head || (c.aliases ?? []).some((a) => normalizeSlash(a) === head));
 }
 
+// Cauda da FORMA COMPLETA de um comando: as palavras do label DEPOIS da primeira (ex.: "/sumário
+// projeto" → "projeto"). Deriva a palavra esperada do PRÓPRIO label (fonte única) — assim traduzir o
+// label ("/summary project") atualiza a comparação automaticamente, sem um literal pt-BR hardcoded no
+// controle (que quebraria em silêncio após a tradução). "" se o label tem só uma palavra.
+export function slashFullFormTail(cmd: SlashCommand): string {
+  const words = cmd.label.replace(/^\//, "").trim().split(/\s+/);
+  return words.length > 1 ? normalizeSlash(words.slice(1).join(" ")) : "";
+}
+
 // Comando COM argumentos: o 1º token casa um comando acceptsArgs e a cauda vira o argumento
 // ("/diagrama fluxo de autenticação" → { cmd: diagrama, args: "fluxo de autenticação" }).
 export function slashWithArgs(

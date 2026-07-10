@@ -5,7 +5,7 @@ import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, render
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
-import { maskDataSample, renderPiiCard, scanIndexForPii } from "../util/piiScan";
+import { maskDataSample, piiConfidenceLabel, renderPiiCard, scanIndexForPii } from "../util/piiScan";
 import { parseDbtArtifacts } from "../dbt/artifacts";
 import { WarehouseConnection } from "../warehouse/types";
 
@@ -176,8 +176,13 @@ test("piiScan: dicionário LGPD por nome de coluna + card; máscara de amostras 
   const findings = scanIndexForPii(idx);
   assert.equal(findings.length, 3);
   assert.ok(findings.some((f) => f.category.includes("CPF")));
+  // ordenação: confiança "alta" (código interno estável) vem antes de "média" — a chave de sort NÃO é
+  // afetada por tradução (o display passa por piiConfidenceLabel).
+  assert.equal(findings[0].confidence, "alta");
   const card = renderPiiCard(findings, idx.size());
   assert.ok(card.includes("DBMS_REDACT") && card.includes("policy tags"));
+  assert.match(card, /confiança/); // cabeçalho da coluna
+  assert.ok(card.includes(`| ${piiConfidenceLabel("alta")} |`), "o card exibe a confiança via piiConfidenceLabel, não o enum cru");
   assert.ok(renderPiiCard([], 5).includes("✅"));
   assert.ok(renderPiiCard([], 0).includes("/schema-db"));
 

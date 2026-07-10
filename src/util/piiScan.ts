@@ -4,15 +4,27 @@
 // (CPF/CNPJ, e-mail, telefone, cartão) viram ▇ antes de qualquer exibição/contexto. PURO.
 import { DbtIndex } from "../dbt/artifacts";
 
+// "alta"/"média" são CÓDIGOS INTERNOS ESTÁVEIS — usados como CHAVE de ordenação (=== "alta" em
+// scanIndexForPii). NUNCA traduzir/exibir crus: o texto para o usuário vem de piiConfidenceLabel() (é
+// lá que a i18n futura entra). Traduzir estes valores quebraria a ordenação em silêncio (mesmo padrão
+// do SqlConfidence).
+export type PiiConfidence = "alta" | "média";
+
 export interface PiiFinding {
   table: string;
   column: string;
   category: string;
-  confidence: "alta" | "média";
+  confidence: PiiConfidence;
+}
+
+// Mapa CÓDIGO→TEXTO exibido da confiança PII (identidade por ora; a i18n troca ESTE mapa, não o enum).
+const PII_CONFIDENCE_LABEL: Record<PiiConfidence, string> = { alta: "alta", "média": "média" };
+export function piiConfidenceLabel(c: PiiConfidence): string {
+  return PII_CONFIDENCE_LABEL[c] ?? c;
 }
 
 // Dicionário LGPD por nome de coluna (pt-BR + en comuns em warehouses brasileiros).
-const PII_CATEGORIES: { category: string; re: RegExp; confidence: "alta" | "média" }[] = [
+const PII_CATEGORIES: { category: string; re: RegExp; confidence: PiiConfidence }[] = [
   { category: "documento (CPF/CNPJ/RG)", re: /\b(cpf|cnpj|rg|passaporte|cpf_cnpj|nr_?doc|num_?doc)\b/i, confidence: "alta" },
   { category: "nome de pessoa", re: /\b(nome|nome_?(completo|cliente|mae|pai|social)|first_?name|last_?name|full_?name)\b/i, confidence: "média" },
   { category: "e-mail", re: /\b(email|e_?mail|ds_?email)\b/i, confidence: "alta" },
@@ -45,7 +57,7 @@ export function renderPiiCard(findings: PiiFinding[], tablesScanned: number): st
   if (findings.length === 0) {
     return `${head}\n\n✅ Nenhuma coluna com nome típico de dado pessoal em ${tablesScanned} tabelas. (Heurística por NOME — conteúdo não foi lido.)`;
   }
-  const rows = findings.slice(0, 40).map((f) => `| \`${f.table}\` | \`${f.column}\` | ${f.category} | ${f.confidence} |`);
+  const rows = findings.slice(0, 40).map((f) => `| \`${f.table}\` | \`${f.column}\` | ${f.category} | ${piiConfidenceLabel(f.confidence)} |`);
   return [
     head,
     "",

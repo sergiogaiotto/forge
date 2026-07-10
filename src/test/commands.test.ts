@@ -14,9 +14,22 @@ import {
   renderSummarized,
   renderTokensReport,
   SLASH_COMMANDS,
+  slashFullFormTail,
   slashWithArgs,
   SQL_DIALECTS,
 } from "../../webview-ui/src/commands";
+
+// REFACTOR pré-i18n: a forma completa "/sumário projeto" deriva o tail esperado do PRÓPRIO label, então
+// traduzir o label mantém a comparação em sincronia (nada de literal pt-BR hardcoded no controle).
+test("slashFullFormTail: deriva a cauda do label; traduzir o label move o tail junto (sem literal fixo)", () => {
+  const sumario = SLASH_COMMANDS.find((c) => c.id === "sumario")!;
+  assert.equal(slashFullFormTail(sumario), "projeto"); // "/sumário projeto" → "projeto"
+  // um label de uma palavra → sem cauda
+  assert.equal(slashFullFormTail({ id: "x", label: "/x", hint: "", icon: "" }), "");
+  // se o label fosse traduzido, o tail acompanha (prova a invariância à tradução)
+  assert.equal(slashFullFormTail({ id: "s", label: "/summary project", hint: "", icon: "" }), "project");
+  assert.equal(slashFullFormTail({ id: "s", label: "/Sumário Projeto", hint: "", icon: "" }), "projeto"); // normaliza acento/caixa
+});
 
 test("normalizeSlash: remove acentos e baixa a caixa (/Sumário ≡ /sumario)", () => {
   assert.equal(normalizeSlash("Sumário"), "sumario");
