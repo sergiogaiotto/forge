@@ -392,6 +392,13 @@ const server = CFG.tls.key && CFG.tls.cert
 const sweepTimer = setInterval(() => sweepSessions(false), 60000);
 const flushTimer = setInterval(() => void flushTraces(), CFG.langfuse.flushIntervalMs);
 
+// Falha ao abrir o socket (porta em uso, permissão) é reportada e encerra limpo — sem isto, um
+// EADDRINUSE vira exceção NÃO-tratada com stack trace crua (e o operador não sabe que é a porta).
+server.on("error", (err) => {
+  logLine("error", "falha ao abrir o socket do gateway — encerrando", { port: CFG.port, code: err.code, error: err.message });
+  process.exit(1);
+});
+
 server.listen(CFG.port, () => {
   logLine("info", "gateway no ar", {
     url: `${CFG.tls.key ? "https" : "http"}://localhost:${CFG.port}`,
