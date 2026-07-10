@@ -124,7 +124,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 // chaves de matching — NUNCA mudam); aqui só o TEXTO exibido em inglês. Os labels en batem com o alias
 // en primário quando existe (ex.: "/clear" ≡ alias "clear"), então o matching continua valendo nos dois
 // idiomas. commandLabel/commandHint resolvem pelo locale ativo.
-const COMMAND_EN: Record<string, { label: string; hint: string }> = {
+export const COMMAND_EN: Record<string, { label: string; hint: string }> = {
   ajuda: { label: "/help", hint: "List the palette commands" },
   contexto: { label: "/context", hint: "Context window budget (model, reserves, history, RAG)" },
   tokens: { label: "/tokens", hint: "Session token usage (last generation + cumulative)" },
@@ -197,6 +197,15 @@ export function exactSlashCommand(input: string, registry: SlashCommand[] = SLAS
 export function slashFullFormTail(label: string): string {
   const words = label.replace(/^\//, "").trim().split(/\s+/);
   return words.length > 1 ? normalizeSlash(words.slice(1).join(" ")) : "";
+}
+
+// A cauda digitada casa a FORMA COMPLETA do comando em QUALQUER locale (pt-BR do array OU en do
+// COMMAND_EN)? Independe do locale ativo — um usuário pt que digita "/summary project" e um en que digita
+// "/sumário projeto" ambos executam (a forma de uma palavra já é cross-locale via id/alias no matching).
+export function matchesFullForm(cmd: SlashCommand, args: string): boolean {
+  const norm = normalizeSlash(args.trim());
+  const labels = [cmd.label, COMMAND_EN[cmd.id]?.label].filter((l): l is string => !!l);
+  return labels.some((l) => slashFullFormTail(l) === norm);
 }
 
 // Comando COM argumentos: o 1º token casa um comando acceptsArgs e a cauda vira o argumento

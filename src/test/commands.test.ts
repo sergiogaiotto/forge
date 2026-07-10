@@ -18,6 +18,8 @@ import {
   slashWithArgs,
   commandHint,
   commandLabel,
+  COMMAND_EN,
+  matchesFullForm,
   SQL_DIALECTS,
 } from "../../webview-ui/src/commands";
 import { setLocaleForTest } from "../../webview-ui/src/i18n";
@@ -59,6 +61,32 @@ test("guard: todo label (pt-BR e en) de uma palavra é executável (casa id/alia
       assert.ok(resolved, `[${loc}] label "${label}" (id ${c.id}) não é executável — falta id/alias`);
       assert.equal(resolved!.id, c.id, `[${loc}] label "${label}" casa o comando ERRADO (${resolved!.id} != ${c.id})`);
     }
+  }
+  setLocaleForTest("pt-BR");
+});
+
+// GUARD: todo comando DEVE ter tradução en (label+hint) em COMMAND_EN — senão o usuário en vê pt-BR em
+// SILÊNCIO (o fallback ?? cru não é erro de compilação, e o guard de matching não pega, pois o label pt
+// ainda casa o id pt). Este teste é a rede contra "traduzir esqueceu o comando novo".
+test("guard: COMMAND_EN cobre TODOS os comandos (label+hint), sem tradução en faltando", () => {
+  for (const c of SLASH_COMMANDS) {
+    const en = COMMAND_EN[c.id];
+    assert.ok(en, `comando "${c.id}" sem entrada em COMMAND_EN — usuário en veria pt-BR`);
+    assert.ok(en.label && en.label.startsWith("/"), `COMMAND_EN["${c.id}"].label inválido`);
+    assert.ok(en.hint && en.hint.length > 0, `COMMAND_EN["${c.id}"].hint vazio`);
+  }
+  // sem entrada órfã (id em COMMAND_EN que não existe em SLASH_COMMANDS)
+  const ids = new Set(SLASH_COMMANDS.map((c) => c.id));
+  for (const id of Object.keys(COMMAND_EN)) assert.ok(ids.has(id), `COMMAND_EN tem "${id}" que não existe em SLASH_COMMANDS`);
+});
+
+test("matchesFullForm: a forma de DUAS palavras executa em QUALQUER locale (pt e en, sem depender do ativo)", () => {
+  const sumario = SLASH_COMMANDS.find((c) => c.id === "sumario")!;
+  for (const loc of ["pt-BR", "en"] as const) {
+    setLocaleForTest(loc);
+    assert.ok(matchesFullForm(sumario, "projeto"), `[${loc}] "/sumário projeto" deveria casar`);
+    assert.ok(matchesFullForm(sumario, "project"), `[${loc}] "/summary project" deveria casar`);
+    assert.ok(!matchesFullForm(sumario, "o que ficou pendente"), `[${loc}] cauda arbitrária NÃO casa (anti-sequestro)`);
   }
   setLocaleForTest("pt-BR");
 });
