@@ -166,6 +166,13 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("identity.requireEmail", false);
   }
 
+  // Idioma de SAÍDA da geração (forge.outputLanguage): "auto" segue o locale da UI (resolvido no
+  // Controller); "pt-BR"/"en" fixam. Idioma-da-UI ≠ idioma-da-geração — são eixos independentes.
+  outputLanguage(): "auto" | "pt-BR" | "en" {
+    const v = this.cfg().get<string>("outputLanguage", "auto");
+    return v === "pt-BR" || v === "en" ? v : "auto";
+  }
+
   // Overrides opcionais do provedor. maxOutput: teto de tokens de SAÍDA (0 = catálogo). maxContextWindow:
   // janela REAL servida pelo gateway (--max-model-len); 0 = usa a capacidade do modelo do catálogo. Defina
   // maxContextWindow quando o HubGPU/vLLM servir uma janela menor que a do modelo, para não estourar (400).

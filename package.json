@@ -487,6 +487,21 @@
           "default": false,
           "markdownDescription": "%config.identity.requireEmail.md%"
         },
+        "forge.outputLanguage": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "pt-BR",
+            "en"
+          ],
+          "enumDescriptions": [
+            "%config.outputLanguage.enum.0%",
+            "%config.outputLanguage.enum.1%",
+            "%config.outputLanguage.enum.2%"
+          ],
+          "default": "auto",
+          "markdownDescription": "%config.outputLanguage.md%"
+        },
         "forge.provider.maxOutput": {
           "type": "number",
           "default": 0,

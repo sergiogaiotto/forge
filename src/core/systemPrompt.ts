@@ -57,12 +57,37 @@ function renderProjectContext(ctx?: ProjectPromptContext): string {
   return parts.join("\n\n");
 }
 
-export function buildBasePrompt(workspaceName: string): string {
-  return `IDIOMA (OBRIGATÓRIO): responda SEMPRE em português do Brasil (pt-BR). TODO o texto que você
+// Idioma de SAÍDA da geração (PR 10 do i18n): parametriza SÓ a diretiva de idioma — o CORPUS dos
+// prompts segue pt-BR (meta-linguagem para o modelo, não superfície de UI). Cada diretiva é escrita
+// NO próprio idioma-alvo (adesão máxima do modelo). Injetado pelo Controller (setting
+// forge.outputLanguage, "auto" = locale da UI), espelhando o padrão setHostLocale — módulo puro,
+// default pt-BR (retrocompat de todos os callers e testes).
+// POLÍTICA dos artefatos embutidos: a diretiva governa TODA a saída livre (prosa, títulos, docs
+// geradas — inclusive o "## Como rodar"/README dos prompts de projeto, que o modelo traduz junto);
+// os templates craftados que MANDAM seções pt exatas (ex.: /sumário → docs/SUMARIO_FUNCIONAL.md)
+// permanecem pt-BR por decisão de produto — são artefatos padronizados do repositório.
+export type OutputLanguage = "pt-BR" | "en";
+
+let activeOutputLanguage: OutputLanguage = "pt-BR";
+
+export function setOutputLanguage(lang: OutputLanguage): void {
+  activeOutputLanguage = lang;
+}
+
+const LANGUAGE_DIRECTIVE: Record<OutputLanguage, string> = {
+  "pt-BR": `IDIOMA (OBRIGATÓRIO): responda SEMPRE em português do Brasil (pt-BR). TODO o texto que você
 produzir — o raciocínio/análise, as explicações, títulos, listas e mensagens ao usuário — DEVE estar
 em pt-BR. Nunca escreva em inglês, nem mesmo no seu raciocínio interno. Se for "pensar passo a passo",
 pense em português. (Identificadores de código, nomes de bibliotecas e palavras-chave da linguagem
-permanecem como são.)
+permanecem como são.)`,
+  en: `LANGUAGE (MANDATORY): ALWAYS respond in English. ALL text you produce — reasoning/analysis,
+explanations, titles, lists and messages to the user — MUST be in English, even when these
+instructions are written in Portuguese. If you "think step by step", think in English. (Code
+identifiers, library names and language keywords remain as they are.)`,
+};
+
+export function buildBasePrompt(workspaceName: string): string {
+  return `${LANGUAGE_DIRECTIVE[activeOutputLanguage]}
 
 Você é o FORGE, o assistente de geração de código da Claro para times de dados e IA
 (cientistas de dados, engenheiros de dados e engenheiros de ML). Você opera dentro do VSCode,

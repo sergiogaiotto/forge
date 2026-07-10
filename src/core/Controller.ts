@@ -66,7 +66,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext, setOutputLanguage } from "./systemPrompt";
 import { contractGateDecision, contractUnverified, GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, requiresContractConfirmation, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
@@ -86,7 +86,7 @@ import { WarehouseService } from "../warehouse/WarehouseService";
 import { decideSqlRun } from "../warehouse/governance";
 import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { resolveExecutable } from "../warehouse/exec";
-import { hostT } from "../i18n";
+import { getHostLocale, hostT } from "../i18n";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -295,12 +295,21 @@ export class Controller {
       this.config.onChange(() => {
         this.egress.update(this.config.egressPolicy());
         this.registry.load(this.config.mcpCatalog());
+        this.applyOutputLanguage(); // forge.outputLanguage pode mudar em runtime
         void this.postState();
       })
     );
   }
 
+  // Resolve o idioma de SAÍDA da geração: setting explícita vence; "auto" segue o locale da UI
+  // (idioma-da-UI ≠ idioma-da-geração — um dev pode usar a UI em inglês e gerar em pt-BR).
+  private applyOutputLanguage(): void {
+    const v = this.config.outputLanguage();
+    setOutputLanguage(v === "auto" ? (getHostLocale() === "en" ? "en" : "pt-BR") : v);
+  }
+
   async initialize(): Promise<void> {
+    this.applyOutputLanguage(); // depois do setHostLocale da ativação (o "auto" lê o locale da UI)
     this.registry.load(this.config.mcpCatalog());
     void this.sweepValidatorTemp(); // remove órfãos .forge/val-* de um host morto antes do finally
     void this.diag.prune(7 * 24 * 60 * 60 * 1000); // higiene: descarta logs de diagnóstico com +7 dias
