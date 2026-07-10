@@ -3,6 +3,7 @@
 // "profile" do data-diff clássico). Gera o SQL por dialeto, parseia o CSV e compara host-side —
 // funciona INTRA warehouse (mesma conexão) e ENTRE warehouses (roda um perfil em cada conexão).
 // Colunas vêm do índice de schema quando conhecido (cap 12); sem schema, compara só COUNT(*). PURO.
+import { hostT } from "../i18n";
 import { WarehouseKind } from "./types";
 
 const MAX_PROFILE_COLUMNS = 12;
@@ -54,30 +55,30 @@ export function compareProfiles(a: Profile, b: Profile): { equal: boolean; diffs
   const diffs: ParityDiff[] = [];
   for (const k of keys) {
     const [metric, column] = k.split("·");
-    const left = a.get(k) ?? "(ausente)";
-    const right = b.get(k) ?? "(ausente)";
+    const left = a.get(k) ?? hostT("par.absent");
+    const right = b.get(k) ?? hostT("par.absent");
     if (left !== right) diffs.push({ metric, column, left, right });
   }
   return { equal: diffs.length === 0, diffs, checked: keys.size };
 }
 
 export function renderParityCard(leftLabel: string, rightLabel: string, result: { equal: boolean; diffs: ParityDiff[]; checked: number }): string {
-  const head = `### Paridade de dados · \`${leftLabel}\` × \`${rightLabel}\``;
+  const head = hostT("par.head", { left: leftLabel, right: rightLabel });
   if (result.equal) {
-    return [head, "", `✅ **Paridade OK** — ${result.checked} métricas conferem (count, não-nulos e distintos por coluna).`, "", "_Comparação por AGREGADOS: nenhuma linha saiu dos bancos (compliance-safe)._"].join("\n");
+    return [head, "", hostT("par.ok", { n: result.checked }), "", hostT("par.okFooter")].join("\n");
   }
   const rows = result.diffs.slice(0, 20).map((d) => `| ${d.metric} | \`${d.column}\` | ${d.left} | ${d.right} |`);
   return [
     head,
     "",
-    `❌ **${result.diffs.length} divergência${result.diffs.length === 1 ? "" : "s"}** em ${result.checked} métricas:`,
+    hostT("par.diffs", { count: result.diffs.length, total: result.checked }),
     "",
-    `| métrica | coluna | ${leftLabel} | ${rightLabel} |`,
+    hostT("par.cols", { left: leftLabel, right: rightLabel }),
     "|---|---|---|---|",
     ...rows,
-    result.diffs.length > 20 ? `\n_… +${result.diffs.length - 20} divergências._` : "",
+    result.diffs.length > 20 ? `\n${hostT("par.more", { n: result.diffs.length - 20 })}` : "",
     "",
-    "_Comparação por AGREGADOS: nenhuma linha saiu dos bancos (compliance-safe). Divergência em `count` = volume; em `distintos` = duplicatas/dedup; em `nao_nulos` = perda de dados na carga._",
+    hostT("par.footer"),
   ].join("\n");
 }
 
@@ -85,7 +86,7 @@ export function renderParityCard(leftLabel: string, rightLabel: string, result: 
 // "conexao:tabela" em cada lado para paridade ENTRE warehouses.
 export function parseParityArgs(args: string): { left: { conn?: string; table: string }; right: { conn?: string; table: string } } | { error: string } {
   const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
-  if (parts.length !== 2) return { error: "Uso: `/paridade tabela_a tabela_b` — opcionalmente `conexao:tabela` em cada lado (paridade entre warehouses)." };
+  if (parts.length !== 2) return { error: hostT("par.usage") };
   const parse = (s: string) => {
     const i = s.indexOf(":");
     return i > 0 ? { conn: s.slice(0, i), table: s.slice(i + 1) } : { table: s };

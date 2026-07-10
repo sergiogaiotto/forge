@@ -4,6 +4,7 @@
 // transform "expressao", SELECT * degrada confiança, ambiguidade (coluna sem qualificador com 2+
 // tabelas no FROM) vira origem "?". Não existe lib TS madura para isso — este módulo é a semente do
 // diferencial. PURO/testável.
+import { hostT } from "../i18n";
 import { SqlStatement } from "./classify";
 import { confidenceLabel, SqlConfidence } from "./antipatterns";
 import { depthMap } from "./lex";
@@ -221,19 +222,21 @@ function lineageOfQuery(
   return out;
 }
 
-// Render compacto do lineage para o cartão do /impacto (top N colunas).
+// Render compacto do lineage para o cartão do /impacto (top N colunas). `transform` é CÓDIGO estável
+// ("direta"/"expressao") — o texto exibido resolve por locale aqui, nunca no tipo.
 export function renderLineage(result: LineageResult, cap = 14): string {
   if (result.columns.length === 0) return "";
   const rows = result.columns.slice(0, cap).map((c) => {
     const src = c.sources.length > 0 ? c.sources.join(", ") : "—";
-    return `| \`${c.output}\` | ${c.transform} | ${src} |`;
+    const transform = c.transform === "direta" ? hostT("lin.direct") : hostT("lin.expression");
+    return `| \`${c.output}\` | ${transform} | ${src} |`;
   });
-  const more = result.columns.length > cap ? `\n_… +${result.columns.length - cap} colunas._` : "";
-  const star = result.star ? "\n_⚠ O SELECT final usa `*` — colunas propagadas do upstream não aparecem no mapa._" : "";
+  const more = result.columns.length > cap ? `\n${hostT("lin.more", { n: result.columns.length - cap })}` : "";
+  const star = result.star ? `\n${hostT("lin.star")}` : "";
   return [
-    `**Lineage de coluna** (confiança ${confidenceLabel(result.confidence)}):`,
+    hostT("lin.head", { conf: confidenceLabel(result.confidence) }),
     "",
-    "| saída | transformação | origem |",
+    hostT("lin.cols"),
     "|---|---|---|",
     ...rows,
   ].join("\n") + more + star;

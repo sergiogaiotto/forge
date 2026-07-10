@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { hostT } from "../i18n";
 import { SecretsStore } from "../secrets/SecretsStore";
 import { maskDataSample } from "../util/piiScan";
 import { classifySql } from "../sql/classify";
@@ -64,8 +65,8 @@ export class WarehouseService {
     const existing = await this.secrets.get(secretKeyFor(conn.id));
     if (existing) return existing;
     const typed = await vscode.window.showInputBox({
-      title: `Senha da conexão "${conn.id}" (${conn.kind})`,
-      prompt: "Guardada no SecretStorage do VSCode (keyring do SO) — nunca em settings ou em disco.",
+      title: hostT("wh.pwd.title", { id: conn.id, kind: conn.kind }),
+      prompt: hostT("wh.pwd.prompt"),
       password: true,
       ignoreFocusOut: true,
     });
@@ -78,16 +79,16 @@ export class WarehouseService {
   // workspace malicioso). "" = ok. Aplicado antes de QUALQUER spawn.
   private validateConn(conn: WarehouseConnection): string | null {
     for (const [f, v] of [["connect", conn.connect], ["tool", conn.tool], ["walletDir", conn.walletDir]] as const) {
-      if (unsafeField(v)) return `Conexão "${conn.id}": o campo \`${f}\` contém caracteres não permitidos (metacaractere de shell) — corrija forge.warehouse.connections.`;
+      if (unsafeField(v)) return hostT("wh.err.unsafeField", { id: conn.id, field: f });
     }
-    for (const s of conn.schemas ?? []) if (unsafeField(s)) return `Conexão "${conn.id}": um item de \`schemas\` contém caracteres não permitidos.`;
+    for (const s of conn.schemas ?? []) if (unsafeField(s)) return hostT("wh.err.unsafeSchema", { id: conn.id });
     return null;
   }
 
   // Executa SQL com governança (SELECT auto; escrita confirma; DROP/TRUNCATE/bloco nunca sem readonly:false).
   async runSql(connId: string | undefined, sql: string, opts?: { skipMask?: boolean; rowCapOverride?: number }): Promise<SqlRunResult | { refused: string }> {
     const conn = this.resolve(connId);
-    if (!conn) return { refused: connId ? `Conexão "${connId}" não existe — veja /conexoes.` : "Nenhuma conexão configurada (forge.warehouse.connections)." };
+    if (!conn) return { refused: connId ? hostT("wh.err.connNotExists", { id: connId }) : hostT("wh.err.noneConfigured") };
     const bad = this.validateConn(conn);
     if (bad) return { refused: bad };
 
@@ -98,7 +99,7 @@ export class WarehouseService {
     }
     if (decision.verdict === "confirm") {
       const ok = await this.confirmWrite(`conexão "${conn.id}": ${decision.reason}`, conn.id, sql);
-      if (!ok) return { refused: "Execução cancelada pelo dev (escrita não confirmada)." };
+      if (!ok) return { refused: hostT("sql.writeCancelled") };
     }
     const rowCap = opts?.rowCapOverride ?? this.settings().rowCap;
     const plan = buildRunPlan(conn, sql, { password: await this.passwordFor(conn), rowCap });
@@ -110,12 +111,12 @@ export class WarehouseService {
   // EXPLAIN de Oracle/PG/DuckDB cobre só o 1º statement — os finais EXECUTAVAM de verdade).
   async costPreview(connId: string | undefined, sql: string): Promise<SqlRunResult | { refused: string }> {
     const conn = this.resolve(connId);
-    if (!conn) return { refused: "Nenhuma conexão configurada." };
+    if (!conn) return { refused: hostT("wh.err.noneConfiguredShort") };
     const bad = this.validateConn(conn);
     if (bad) return { refused: bad };
     const decision = decideSqlRun(sql, conn);
     if (decision.verdict !== "auto") {
-      return { refused: `⛔ Prévia de custo é somente leitura — a consulta contém escrita ou statement não confirmado (${decision.reason}). Rode só o SELECT que quer estimar.` };
+      return { refused: hostT("wh.err.costReadonly", { reason: decision.reason }) };
     }
     const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn), statementCount: classifySql(sql).length });
     return this.execute(conn, plan, { rowCap: 500 });
@@ -132,7 +133,7 @@ export class WarehouseService {
     if (isPlanError(plan)) return { refused: plan.error };
     const toolPath = resolveExecutable(plan.tool);
     if (!toolPath) {
-      return { refused: `A ferramenta \`${plan.tool}\` não está no PATH. Instale-a (${installHint(plan.tool)}) — o FORGE usa o CLI que você já usa, sem driver embutido.` };
+      return { refused: hostT("wh.err.toolMissing", { tool: plan.tool, hint: installHint(plan.tool) }) };
     }
     // Wrapper Oracle (contém a senha em claro) e consulta ficam num temp SÓ do serviço, prefixo wh-,
     // com .gitignore. A varredura de órfãos no startup (sweepWarehouseTemp) limpa o que sobrar de crash.
@@ -177,7 +178,7 @@ export class WarehouseService {
           child.stdin?.end();
         } catch (e) {
           // execFile pode LANÇAR síncrono (ex.: EINVAL). Fail-open: nunca escapa de execute().
-          resolve({ code: 1, out: `Falha ao iniciar ${plan.tool}: ${(e as Error).message}` });
+          resolve({ code: 1, out: hostT("wh.err.spawnFailed", { tool: plan.tool, error: (e as Error).message }) });
         }
       });
 
@@ -202,7 +203,7 @@ export class WarehouseService {
 function installHint(tool: string): string {
   switch (tool) {
     case "sql":
-      return "SQLcl — baixe em oracle.com/sqlcl; conecta 19c, 26ai, Exadata e ADW (wallet)";
+      return hostT("wh.hint.sqlcl");
     case "sqlplus":
       return "Oracle Instant Client + SQL*Plus";
     case "psql":
@@ -210,12 +211,12 @@ function installHint(tool: string): string {
     case "bq":
       return "Google Cloud SDK (gcloud) + `gcloud auth login`";
     case "duckdb":
-      return "duckdb.org — binário único";
+      return hostT("wh.hint.duckdb");
     case "aws":
       return "AWS CLI v2 + `aws configure`";
     case "oci":
       return "OCI CLI + `oci setup config`";
     default:
-      return "instale e garanta no PATH";
+      return hostT("wh.hint.default");
   }
 }

@@ -4,6 +4,7 @@
 // CONFIANÇA declarada por achado — heurísticas sobre tokenização, não parser completo: baixa confiança
 // significa "olhe você"; nunca é bloqueio. Achados de SEGURANÇA (DELETE/UPDATE sem WHERE, DROP/TRUNCATE)
 // têm severidade "error" e são os únicos candidatos a gate (modo conservador). PURO/testável.
+import { hostT } from "../i18n";
 import { SqlStatement } from "./classify";
 import { clauseEnd, depthMap, lineOf } from "./lex";
 
@@ -13,10 +14,10 @@ export type SqlSeverity = "info" | "warn" | "error";
 // estes valores quebraria `c === "alta"` e o degrade em silêncio (label-que-é-chave).
 export type SqlConfidence = "alta" | "média" | "baixa";
 
-// Mapa CÓDIGO→TEXTO exibido da confiança (identidade por ora; a i18n troca ESTE mapa, não o enum).
-const CONFIDENCE_LABEL: Record<SqlConfidence, string> = { alta: "alta", "média": "média", baixa: "baixa" };
+// CÓDIGO→TEXTO exibido da confiança, resolvido por locale via hostT (o enum nunca muda — este era o
+// ponto de inserção da i18n declarado desde o PR 3).
 export function confidenceLabel(c: SqlConfidence): string {
-  return CONFIDENCE_LABEL[c] ?? c;
+  return c === "alta" ? hostT("conf.alta") : c === "média" ? hostT("conf.media") : c === "baixa" ? hostT("conf.baixa") : c;
 }
 
 export interface SqlFinding {
@@ -55,19 +56,13 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
 
   // ---- segurança (candidatos a gate) ------------------------------------------------------------
   if (stmt.kind === "delete" && !stmt.hasTopLevelWhere) {
-    add("delete-sem-where", "DELETE sem WHERE apaga a tabela inteira — se é intencional, use TRUNCATE explícito e revise.", "error", "alta", 0);
+    add("delete-sem-where", hostT("ap.deleteSemWhere"), "error", "alta", 0);
   }
   if (stmt.kind === "update" && !stmt.hasTopLevelWhere) {
-    add("update-sem-where", "UPDATE sem WHERE reescreve TODAS as linhas da tabela.", "error", "alta", 0);
+    add("update-sem-where", hostT("ap.updateSemWhere"), "error", "alta", 0);
   }
   if (stmt.destructive) {
-    add(
-      "statement-destrutivo",
-      `${stmt.kind.toUpperCase()} é destrutivo e irreversível — não deveria nascer de código gerado sem revisão explícita.`,
-      "error",
-      "alta",
-      0
-    );
+    add("statement-destrutivo", hostT("ap.destrutivo", { kind: stmt.kind.toUpperCase() }), "error", "alta", 0);
   }
 
   // ---- SELECT * ----------------------------------------------------------------------------------
@@ -76,20 +71,12 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
   while ((m = starRe.exec(s))) {
     const depth = d[m.index];
     if (depth === 0) {
-      add(
-        "select-star",
-        opts.isDbtModel
-          ? "SELECT * no modelo propaga qualquer mudança do upstream (schema drift silencioso) — liste as colunas."
-          : "SELECT * traz colunas desnecessárias (custo e acoplamento) — liste as colunas.",
-        "warn",
-        "média",
-        m.index
-      );
+      add("select-star", opts.isDbtModel ? hostT("ap.selectStarDbt") : hostT("ap.selectStar"), "warn", "média", m.index);
     } else {
       // EXISTS (SELECT * …) é idiomático — não é achado.
       const before = s.slice(Math.max(0, m.index - 32), m.index).toUpperCase();
       if (!/EXISTS\s*\($/.test(before.trimEnd())) {
-        add("select-star-em-subquery", "SELECT * em subquery/CTE arrasta colunas que ninguém pediu — liste as colunas.", "warn", "média", m.index);
+        add("select-star-em-subquery", hostT("ap.selectStarSub"), "warn", "média", m.index);
       }
     }
   }
@@ -116,9 +103,9 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
     }
     if (flatComma) {
       if (stmt.hasTopLevelWhere || depth > 0) {
-        add("join-implicito", "Join implícito (FROM a, b + WHERE) — prefira JOIN … ON explícito: a condição esquecida vira produto cartesiano.", "warn", "média", m.index);
+        add("join-implicito", hostT("ap.joinImplicito"), "warn", "média", m.index);
       } else {
-        add("produto-cartesiano", "FROM com múltiplas tabelas SEM WHERE = produto cartesiano (N×M linhas).", "error", "alta", m.index);
+        add("produto-cartesiano", hostT("ap.produtoCartesiano"), "error", "alta", m.index);
       }
     }
   }
@@ -126,25 +113,19 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
   // ---- CROSS JOIN explícito (às vezes intencional) ------------------------------------------------
   const crossRe = /\bCROSS\s+JOIN\b/gi;
   while ((m = crossRe.exec(s))) {
-    add("cross-join", "CROSS JOIN multiplica linhas (N×M) — confirme que é intencional (ex.: spine de datas).", "info", "média", m.index);
+    add("cross-join", hostT("ap.crossJoin"), "info", "média", m.index);
   }
 
   // ---- NOT IN (SELECT …) — armadilha de NULL -----------------------------------------------------
   const notInRe = /\bNOT\s+IN\s*\(\s*SELECT\b/gi;
   while ((m = notInRe.exec(s))) {
-    add(
-      "not-in-subquery",
-      "NOT IN com subquery: UM NULL no resultado da subquery e a query inteira retorna zero linhas — use NOT EXISTS.",
-      "warn",
-      "alta",
-      m.index
-    );
+    add("not-in-subquery", hostT("ap.notIn"), "warn", "alta", m.index);
   }
 
   // ---- UNION sem ALL ------------------------------------------------------------------------------
   const unionRe = /\bUNION\b(?!\s+ALL\b)/gi;
   while ((m = unionRe.exec(s))) {
-    add("union-sem-all", "UNION (sem ALL) deduplica com sort implícito — se não há duplicatas possíveis, UNION ALL é mais barato.", "warn", "média", m.index);
+    add("union-sem-all", hostT("ap.unionSemAll"), "warn", "média", m.index);
   }
 
   // ---- ORDER BY em subquery (sem LIMIT) ------------------------------------------------------------
@@ -170,14 +151,14 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
     const end = clauseEnd(s, d, m.index + 8, depth);
     const rest = s.slice(m.index, end + 64); // LIMIT/FETCH vem logo depois, no mesmo nível
     if (!/\b(LIMIT|FETCH|TOP)\b/i.test(rest)) {
-      add("order-by-em-subquery", "ORDER BY em subquery sem LIMIT não garante ordem no resultado externo — só custa sort.", "warn", "média", m.index);
+      add("order-by-em-subquery", hostT("ap.orderBySub"), "warn", "média", m.index);
     }
   }
 
   // ---- LIKE '%…' (curinga inicial mata índice/pruning) ---------------------------------------------
   const likeRe = /\b(I?LIKE)\s+'%/gi;
   while ((m = likeRe.exec(stmt.original))) {
-    add("like-curinga-inicial", "LIKE '%…' com curinga inicial impede índice/partition pruning — full scan garantido.", "warn", "alta", m.index);
+    add("like-curinga-inicial", hostT("ap.likeCuringa"), "warn", "alta", m.index);
   }
 
   // ---- IN (lista gigante) ---------------------------------------------------------------------------
@@ -193,7 +174,7 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
       if (/[Ss]/.test(s[i]) && /^SELECT\b/i.test(s.slice(i, i + 7))) hasSelect = true;
     }
     if (!hasSelect && commas >= 50) {
-      add("in-lista-grande", `IN com ~${commas + 1} itens literais — mova para uma tabela temporária/CTE e faça JOIN.`, "warn", "média", m.index);
+      add("in-lista-grande", hostT("ap.inListaGrande", { count: commas + 1 }), "warn", "média", m.index);
     }
   }
 
@@ -208,13 +189,7 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
       /\b(UPPER|LOWER|TRIM|LTRIM|RTRIM|SUBSTR|SUBSTRING|CAST|TO_CHAR|TO_DATE|DATE_TRUNC|DATE|YEAR|MONTH|DAY|CONVERT|NVL|IFNULL|COALESCE)\s*\(\s*(?:'[^']*'\s*,\s*)?[A-Za-z_][\w.$]*\s*(?:,[^()]*|\s+AS\s+\w+)?\)\s*(?:=|!=|<>|>=|<=|>|<|\bIN\b|\bLIKE\b|\bBETWEEN\b)/gi;
     let f: RegExpExecArray | null;
     while ((f = fnRe.exec(span))) {
-      add(
-        "funcao-em-filtro",
-        `${f[1].toUpperCase()}(coluna) no filtro impede índice/pruning (predicado não-sargável) — aplique a função ao LITERAL ou use faixa equivalente.`,
-        "warn",
-        "média",
-        m.index + f.index
-      );
+      add("funcao-em-filtro", hostT("ap.funcaoEmFiltro", { fn: f[1].toUpperCase() }), "warn", "média", m.index + f.index);
     }
   }
 
@@ -247,18 +222,18 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
         break;
       }
     }
-    if (!used) add("cte-nao-usada", `A CTE "${cte}" é definida e nunca referenciada — código morto que ainda pode ser executado por alguns engines.`, "warn", "alta", def.index);
+    if (!used) add("cte-nao-usada", hostT("ap.cteNaoUsada", { cte }), "warn", "alta", def.index);
   }
 
   // ---- janela sem PARTITION BY -------------------------------------------------------------------------
   const overRe = /\bOVER\s*\(\s*(ORDER\b|\))/gi;
   while ((m = overRe.exec(s))) {
-    add("janela-sem-partition", "Window function sem PARTITION BY ordena/processa a tabela INTEIRA numa partição só — confirme a intenção.", "info", "baixa", m.index);
+    add("janela-sem-partition", hostT("ap.janelaSemPartition"), "info", "baixa", m.index);
   }
 
   // ---- INSERT sem lista de colunas ------------------------------------------------------------------------
   if (stmt.kind === "insert" && !/\bINSERT\s+INTO\s+(?:"[^"]+"|[\w$.]+)\s*\(/i.test(s)) {
-    add("insert-sem-colunas", "INSERT sem lista de colunas quebra silenciosamente quando o schema da tabela muda — declare as colunas.", "warn", "média", 0);
+    add("insert-sem-colunas", hostT("ap.insertSemColunas"), "warn", "média", 0);
   }
 
   // ---- LIMIT em modelo dbt ----------------------------------------------------------------------------------
@@ -266,7 +241,7 @@ export function findAntipatterns(stmt: SqlStatement, baseLine: number, opts: Ant
     const limRe = /\bLIMIT\s+\d+/gi;
     while ((m = limRe.exec(s))) {
       if (d[m.index] === 0) {
-        add("limit-em-modelo-dbt", "LIMIT no modelo dbt vai para PRODUÇÃO e trunca o dataset — se era só para desenvolver, remova antes de aplicar.", "warn", "alta", m.index);
+        add("limit-em-modelo-dbt", hostT("ap.limitDbt"), "warn", "alta", m.index);
       }
     }
   }
@@ -278,10 +253,10 @@ function escapeRe(x: string): string {
   return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Formata achados para exibição no cartão do validador (uma linha por achado, pt-BR).
+// Formata achados para exibição no cartão do validador (uma linha por achado, no locale ativo).
 export function renderFindings(findings: SqlFinding[]): string {
   const icon: Record<SqlSeverity, string> = { error: "✖", warn: "⚠", info: "ℹ" };
   return findings
-    .map((f) => `${icon[f.severity]} linha ${f.line} [${f.rule}] (confiança ${confidenceLabel(f.confidence)}): ${f.message}`)
+    .map((f) => hostT("ap.line", { icon: icon[f.severity], line: f.line, rule: f.rule, conf: confidenceLabel(f.confidence), message: f.message }))
     .join("\n");
 }

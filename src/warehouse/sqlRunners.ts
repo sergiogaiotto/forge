@@ -4,6 +4,7 @@
 // object storage. O I/O (temp files, spawn, timeout) fica no WarehouseService; aqui é 100% testável.
 // Segredo NUNCA vai em argv (aparece na lista de processos): Oracle recebe a senha no script-wrapper
 // temporário (apagado no finally), psql via env PGPASSWORD, bq/aws/oci usam a auth do próprio CLI.
+import { hostT } from "../i18n";
 import { maskDataSample } from "../util/piiScan";
 import { WarehouseConnection } from "./types";
 
@@ -51,7 +52,7 @@ export function buildRunPlan(conn: WarehouseConnection, sql: string, opts: { pas
   const connect = (conn.connect ?? "").trim();
   switch (conn.kind) {
     case "oracle": {
-      if (!connect.includes("@")) return { error: `Conexão "${conn.id}": connect deve ser "usuario@alias_tns" ou "usuario@//host:porta/servico".` };
+      if (!connect.includes("@")) return { error: hostT("wh.err.oracleConnect", { id: conn.id }) };
       const tool = conn.tool === "sqlplus" ? "sqlplus" : (conn.tool ?? "sql"); // SQLcl instala como "sql"
       const prelude = tool === "sqlplus" ? SQLPLUS_PRELUDE : ORA_PRELUDE;
       const full = oracleConnectString(connect, opts.password);
@@ -77,7 +78,7 @@ export function buildRunPlan(conn: WarehouseConnection, sql: string, opts: { pas
       };
     }
     case "postgres": {
-      if (!connect) return { error: `Conexão "${conn.id}": connect deve ser a URI/DSN do psql.` };
+      if (!connect) return { error: hostT("wh.err.psqlConnect", { id: conn.id }) };
       return {
         tool: conn.tool ?? "psql",
         args: [connect, "--csv", "-v", "ON_ERROR_STOP=1", "-f", "{{SQL_FILE}}"],
@@ -110,9 +111,9 @@ export function buildRunPlan(conn: WarehouseConnection, sql: string, opts: { pas
       };
     case "s3":
     case "oci-os":
-      return { error: `Conexão "${conn.id}" é de OBJECT STORAGE — não executa SQL. Use /conexoes para listar o conteúdo, ou uma conexão duckdb para consultar arquivos.` };
+      return { error: hostT("wh.err.objectStorage", { id: conn.id }) };
     default:
-      return { error: `Tipo de conexão desconhecido: ${(conn as WarehouseConnection).kind}` };
+      return { error: hostT("wh.err.unknownKind", { kind: (conn as WarehouseConnection).kind }) };
   }
 }
 
@@ -132,20 +133,20 @@ export function buildCostPlan(conn: WarehouseConnection, sql: string, opts: { pa
         display: "bq query --dry_run",
       };
     case "postgres": {
-      if (multi) return { error: "Prévia de custo aceita só UM statement — selecione apenas o SELECT que quer estimar." };
+      if (multi) return { error: hostT("wh.err.costSingle") };
       const plan = buildRunPlan(conn, `EXPLAIN ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 500 });
       return isPlanError(plan) ? plan : { ...plan, display: plan.display.replace("consulta.sql", "explain.sql") };
     }
     case "oracle": {
-      if (multi) return { error: "Prévia de custo aceita só UM statement — selecione apenas o SELECT que quer estimar." };
+      if (multi) return { error: hostT("wh.err.costSingle") };
       const wrapped = `EXPLAIN PLAN FOR\n${sql.replace(/;\s*$/, "")};\nSELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY());`;
       return buildRunPlan(conn, wrapped, { password: opts.password, rowCap: 500 });
     }
     case "duckdb":
-      if (multi) return { error: "Prévia de custo aceita só UM statement." };
+      if (multi) return { error: hostT("wh.err.costSingleShort") };
       return buildRunPlan(conn, `EXPLAIN ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 500 });
     default:
-      return { error: "Prévia de custo não disponível para este tipo de conexão." };
+      return { error: hostT("wh.err.costUnavailable") };
   }
 }
 
@@ -205,13 +206,13 @@ export function renderResultCard(title: string, display: string, output: string,
         `|${lines[0].split(",").map(() => "---").join("|")}|`,
         ...lines.slice(1).map((l) => `| ${l.split(",").join(" | ")} |`),
       ].join("\n")
-    : "```\n" + (output || "(sem saída)") + "\n```";
+    : "```\n" + (output || hostT("wh.result.noOutput")) + "\n```";
   return [
     `### ${title}`,
     "",
     body,
     "",
-    `${opts.ok ? "✅" : "❌"} \`${display}\` · ${(opts.durationMs / 1000).toFixed(1)}s${opts.truncated ? ` · ⚠ amostra capada em ${opts.rowCap} linhas` : ""}`,
-    "_Valores sensíveis são mascarados localmente antes de qualquer exibição (LGPD)._",
+    `${opts.ok ? "✅" : "❌"} \`${display}\` · ${(opts.durationMs / 1000).toFixed(1)}s${opts.truncated ? hostT("wh.result.capped", { n: opts.rowCap }) : ""}`,
+    hostT("wh.result.masked"),
   ].join("\n");
 }

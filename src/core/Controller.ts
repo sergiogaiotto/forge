@@ -74,7 +74,7 @@ import { parseFileBlocks } from "../util/fileBlocks";
 import { buildFewShotTurn } from "../util/fewShot";
 import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
-import { findLayerViolations, LAYER_RULE } from "../util/layerCheck";
+import { findLayerViolations, layerRuleLabel } from "../util/layerCheck";
 import { DbtIndex, mdSafe, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
 import { dbtIndexStale, DbtProjectLocation, findDbtProject, loadDbtIndex, LoadedDbtIndex } from "../dbt/loader";
 import { analyzeSqlProposal, sqlEvidenceForReview } from "../sql/engine";
@@ -2367,7 +2367,7 @@ export class Controller {
       );
       const architectureErrors = violations.map((v) => ({
         path: v.path,
-        errors: [`viola a arquitetura ${architecture}: ${LAYER_RULE[architecture]}. Import(s) proibido(s) da camada externa: ${v.imports.join(", ")}.`],
+        errors: [hostT("gate.archViolation", { arch: architecture, rule: layerRuleLabel(architecture), imports: v.imports.join(", ") })],
       }));
 
       // Definição de PRONTO (DoD, P2): requisitos AUSENTES do CONJUNTO (manifesto de deps / qualquer teste /

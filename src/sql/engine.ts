@@ -7,6 +7,7 @@
 //   sql:schema      — tabelas/colunas vs manifest dbt; sempre advisory na Onda 1 (manifest pode
 //                     estar velho). Skipped com explicação quando é modelo dbt sem manifest.
 // Fail-open TOTAL: qualquer exceção vira "skipped" — o motor nunca derruba uma geração. PURO.
+import { hostT } from "../i18n";
 import { ValidatorResult } from "../shared/protocol";
 import { DbtIndex } from "../dbt/artifacts";
 import { AntipatternOptions, findAntipatterns, renderFindings, SqlFinding } from "./antipatterns";
@@ -48,7 +49,7 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
     if (security.length > 0) {
       results.push({
         id: "sql:seguranca",
-        label: "SQL · segurança",
+        label: hostT("val.label.sqlSecurity"),
         status: "failed",
         gate: ctx.mode === "conservative" && !partialScan,
         output:
@@ -59,7 +60,7 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
     } else if (partialScan) {
       results.push({
         id: "sql:seguranca",
-        label: "SQL · segurança",
+        label: hostT("val.label.sqlSecurity"),
         status: "skipped",
         gate: false,
         output: "",
@@ -68,10 +69,10 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
     }
     results.push(
       style.length > 0
-        ? { id: "sql:antipadroes", label: "SQL · anti-padrões", status: "failed", gate: false, output: renderFindings(style) }
+        ? { id: "sql:antipadroes", label: hostT("val.label.sqlAntipatterns"), status: "failed", gate: false, output: renderFindings(style) }
         : {
             id: "sql:antipadroes",
-            label: "SQL · anti-padrões",
+            label: hostT("val.label.sqlAntipatterns"),
             status: "ok",
             gate: false,
             output: `Sem anti-padrões nos ${stmts.length} statement${stmts.length === 1 ? "" : "s"} analisado${stmts.length === 1 ? "" : "s"}${hadJinja ? " (Jinja achatado — confiança reduzida)" : ""}.`,
@@ -88,10 +89,10 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
       const checked = stmts.reduce((n, s) => n + s.tables.filter((t) => !s.ctes.includes(t) && !/^__\w+__$/.test(t)).length, 0);
       results.push(
         schemaFindings.length > 0
-          ? { id: "sql:schema", label: "SQL · schema (dbt)", status: "failed", gate: false, output: renderFindings(schemaFindings) }
+          ? { id: "sql:schema", label: hostT("val.label.sqlSchema"), status: "failed", gate: false, output: renderFindings(schemaFindings) }
           : {
               id: "sql:schema",
-              label: "SQL · schema (dbt)",
+              label: hostT("val.label.sqlSchema"),
               status: "ok",
               gate: false,
               output:
@@ -103,7 +104,7 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
     } else if (isDbt) {
       results.push({
         id: "sql:schema",
-        label: "SQL · schema (dbt)",
+        label: hostT("val.label.sqlSchema"),
         status: "skipped",
         gate: false,
         output: "",
@@ -115,7 +116,7 @@ export function analyzeSqlProposal(relPath: string, content: string, ctx: SqlAna
     return [
       {
         id: "sql:antipadroes",
-        label: "SQL · anti-padrões",
+        label: hostT("val.label.sqlAntipatterns"),
         status: "skipped",
         gate: false,
         output: "",

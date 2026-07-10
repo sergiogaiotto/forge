@@ -262,7 +262,152 @@ export type HostMessageKey =
   | "card.impact.noManifest"
   | "card.impact.notFound"
   | "card.impact.notFoundSug"
-  | "card.impact.openModel";
+  | "card.impact.openModel"
+  // Git (renderers puros — gitCommands.ts)
+  | "git.msg.required"
+  | "git.msg.tooLong"
+  | "git.st.modified"
+  | "git.st.added"
+  | "git.st.deleted"
+  | "git.st.renamed"
+  | "git.st.copied"
+  | "git.st.conflict"
+  | "git.st.new"
+  | "git.st.untracked"
+  | "git.noBranch"
+  | "git.ahead"
+  | "git.behind"
+  | "git.clean"
+  | "git.cols"
+  | "git.more"
+  | "git.commitHint"
+  | "git.diff.empty"
+  | "git.diff.truncated"
+  | "git.log.empty"
+  | "git.log.cols"
+  | "git.commit.ok"
+  | "git.commit.fail"
+  | "git.unavailable"
+  // Warehouse (sqlRunners + WarehouseService)
+  | "wh.err.oracleConnect"
+  | "wh.err.psqlConnect"
+  | "wh.err.objectStorage"
+  | "wh.err.unknownKind"
+  | "wh.err.costSingle"
+  | "wh.err.costSingleShort"
+  | "wh.err.costUnavailable"
+  | "wh.result.noOutput"
+  | "wh.result.capped"
+  | "wh.result.masked"
+  | "wh.pwd.title"
+  | "wh.pwd.prompt"
+  | "wh.err.unsafeField"
+  | "wh.err.unsafeSchema"
+  | "wh.err.connNotExists"
+  | "wh.err.noneConfigured"
+  | "wh.err.noneConfiguredShort"
+  | "wh.err.costReadonly"
+  | "wh.err.toolMissing"
+  | "wh.err.spawnFailed"
+  | "wh.hint.sqlcl"
+  | "wh.hint.duckdb"
+  | "wh.hint.default"
+  | "wh.err.schemaBigQuery"
+  | "wh.err.schemaUnavailable"
+  | "val.label.sqlSecurity"
+  | "val.label.sqlAntipatterns"
+  | "val.label.sqlSchema"
+  // Paridade
+  | "par.absent"
+  | "par.head"
+  | "par.ok"
+  | "par.okFooter"
+  | "par.diffs"
+  | "par.cols"
+  | "par.more"
+  | "par.footer"
+  | "par.usage"
+  // FinOps
+  | "fin.err.duckdb"
+  | "fin.err.unavailable"
+  | "fin.noData"
+  | "fin.head"
+  | "fin.head7d"
+  | "fin.hint.bq"
+  | "fin.hint.oracle"
+  | "fin.hint.other"
+  | "fin.footer"
+  // Confiança (motor SQL + PII)
+  | "conf.alta"
+  | "conf.media"
+  | "conf.baixa"
+  // Anti-padrões SQL (mensagens dos achados)
+  | "ap.line"
+  | "ap.deleteSemWhere"
+  | "ap.updateSemWhere"
+  | "ap.destrutivo"
+  | "ap.selectStarDbt"
+  | "ap.selectStar"
+  | "ap.selectStarSub"
+  | "ap.joinImplicito"
+  | "ap.produtoCartesiano"
+  | "ap.crossJoin"
+  | "ap.notIn"
+  | "ap.unionSemAll"
+  | "ap.orderBySub"
+  | "ap.likeCuringa"
+  | "ap.inListaGrande"
+  | "ap.funcaoEmFiltro"
+  | "ap.cteNaoUsada"
+  | "ap.janelaSemPartition"
+  | "ap.insertSemColunas"
+  | "ap.limitDbt"
+  // Cartão do /impacto (dbt) + lineage
+  | "dbt.impact.head"
+  | "dbt.impact.local"
+  | "dbt.impact.upstream"
+  | "dbt.impact.downDirect"
+  | "dbt.impact.downTransitive"
+  | "dbt.impact.tests"
+  | "dbt.impact.exposures"
+  | "dbt.impact.upstreamRow"
+  | "dbt.impact.warning"
+  | "dbt.impact.freshness"
+  | "dbt.impact.when"
+  | "lin.head"
+  | "lin.cols"
+  | "lin.more"
+  | "lin.star"
+  | "lin.direct"
+  | "lin.expression"
+  // Arquitetura (regra de camadas)
+  | "arch.rule.hexagonal"
+  | "arch.rule.clean"
+  | "arch.rule.layered"
+  | "arch.rule.mvc"
+  | "gate.archViolation"
+  // Auditoria PII
+  | "pii.head"
+  | "pii.noSchema"
+  | "pii.clean"
+  | "pii.found"
+  | "pii.cols"
+  | "pii.more"
+  | "pii.next"
+  | "pii.footer"
+  | "pii.cat.doc"
+  | "pii.cat.nome"
+  | "pii.cat.email"
+  | "pii.cat.telefone"
+  | "pii.cat.endereco"
+  | "pii.cat.nascimento"
+  | "pii.cat.financeiro"
+  | "pii.cat.cartao"
+  | "pii.cat.credencial"
+  | "pii.cat.sensivel"
+  | "pii.cat.geo"
+  // Secrets
+  | "secrets.weakKeyring";
 
 export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string>>> = {
   "pt-BR": {
@@ -499,6 +644,141 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "card.impact.notFound": "O modelo `{model}` não existe no manifest do dbt.",
     "card.impact.notFoundSug": "O modelo `{model}` não existe no manifest do dbt — você quis dizer `{name}`?",
     "card.impact.openModel": "Abra o arquivo de um modelo dbt no editor (ou use `/impacto nome_do_modelo`).",
+    "git.msg.required": "Informe a mensagem: `/git-commit \"sua mensagem\"`.",
+    "git.msg.tooLong": "Mensagem muito longa (máx. 2000 caracteres).",
+    "git.st.modified": "modificado",
+    "git.st.added": "adicionado",
+    "git.st.deleted": "removido",
+    "git.st.renamed": "renomeado",
+    "git.st.copied": "copiado",
+    "git.st.conflict": "conflito",
+    "git.st.new": "novo",
+    "git.st.untracked": "novo (não rastreado)",
+    "git.noBranch": "(sem branch)",
+    "git.ahead": "**{n}** à frente",
+    "git.behind": "**{n}** atrás",
+    "git.clean": "_Working tree limpo — nada a commitar._",
+    "git.cols": "| arquivo | estado |",
+    "git.more": "| … | e mais {n} |",
+    "git.commitHint": "_{n} arquivo(s) rastreado(s) entrariam num `/git-commit` (novos exigem `git add` antes)._",
+    "git.diff.empty": "### Git · diff\n\n_Sem alterações vs. `HEAD` (working tree limpo)._",
+    "git.diff.truncated": "… (diff truncado)",
+    "git.log.empty": "### Git · log\n\n_Sem commits._",
+    "git.log.cols": "| commit | autor | quando | assunto |",
+    "git.commit.ok": "✅ Commit criado.",
+    "git.commit.fail": "❌ Falhou.",
+    "git.unavailable": "git indisponível ou esta pasta não é um repositório.",
+    "wh.err.oracleConnect": "Conexão \"{id}\": connect deve ser \"usuario@alias_tns\" ou \"usuario@//host:porta/servico\".",
+    "wh.err.psqlConnect": "Conexão \"{id}\": connect deve ser a URI/DSN do psql.",
+    "wh.err.objectStorage": "Conexão \"{id}\" é de OBJECT STORAGE — não executa SQL. Use /conexoes para listar o conteúdo, ou uma conexão duckdb para consultar arquivos.",
+    "wh.err.unknownKind": "Tipo de conexão desconhecido: {kind}",
+    "wh.err.costSingle": "Prévia de custo aceita só UM statement — selecione apenas o SELECT que quer estimar.",
+    "wh.err.costSingleShort": "Prévia de custo aceita só UM statement.",
+    "wh.err.costUnavailable": "Prévia de custo não disponível para este tipo de conexão.",
+    "wh.result.noOutput": "(sem saída)",
+    "wh.result.capped": " · ⚠ amostra capada em {n} linhas",
+    "wh.result.masked": "_Valores sensíveis são mascarados localmente antes de qualquer exibição (LGPD)._",
+    "wh.pwd.title": "Senha da conexão \"{id}\" ({kind})",
+    "wh.pwd.prompt": "Guardada no SecretStorage do VSCode (keyring do SO) — nunca em settings ou em disco.",
+    "wh.err.unsafeField": "Conexão \"{id}\": o campo `{field}` contém caracteres não permitidos (metacaractere de shell) — corrija forge.warehouse.connections.",
+    "wh.err.unsafeSchema": "Conexão \"{id}\": um item de `schemas` contém caracteres não permitidos.",
+    "wh.err.connNotExists": "Conexão \"{id}\" não existe — veja /conexoes.",
+    "wh.err.noneConfigured": "Nenhuma conexão configurada (forge.warehouse.connections).",
+    "wh.err.noneConfiguredShort": "Nenhuma conexão configurada.",
+    "wh.err.costReadonly": "⛔ Prévia de custo é somente leitura — a consulta contém escrita ou statement não confirmado ({reason}). Rode só o SELECT que quer estimar.",
+    "wh.err.toolMissing": "A ferramenta `{tool}` não está no PATH. Instale-a ({hint}) — o FORGE usa o CLI que você já usa, sem driver embutido.",
+    "wh.err.spawnFailed": "Falha ao iniciar {tool}: {error}",
+    "wh.hint.sqlcl": "SQLcl — baixe em oracle.com/sqlcl; conecta 19c, 26ai, Exadata e ADW (wallet)",
+    "wh.hint.duckdb": "duckdb.org — binário único",
+    "wh.hint.default": "instale e garanta no PATH",
+    "wh.err.schemaBigQuery": "BigQuery precisa de `schemas` na conexão (datasets a inventariar) — INFORMATION_SCHEMA é por dataset.",
+    "wh.err.schemaUnavailable": "Snapshot de schema não disponível para este tipo de conexão.",
+    "val.label.sqlSecurity": "SQL · segurança",
+    "val.label.sqlAntipatterns": "SQL · anti-padrões",
+    "val.label.sqlSchema": "SQL · schema (dbt)",
+    "par.absent": "(ausente)",
+    "par.head": "### Paridade de dados · `{left}` × `{right}`",
+    "par.ok": "✅ **Paridade OK** — {n} métricas conferem (count, não-nulos e distintos por coluna).",
+    "par.okFooter": "_Comparação por AGREGADOS: nenhuma linha saiu dos bancos (compliance-safe)._",
+    "par.diffs": "❌ **{count, plural, one{# divergência} other{# divergências}}** em {total} métricas:",
+    "par.cols": "| métrica | coluna | {left} | {right} |",
+    "par.more": "_… +{n} divergências._",
+    "par.footer": "_Comparação por AGREGADOS: nenhuma linha saiu dos bancos (compliance-safe). Divergência em `count` = volume; em `distintos` = duplicatas/dedup; em `nao_nulos` = perda de dados na carga._",
+    "par.usage": "Uso: `/paridade tabela_a tabela_b` — opcionalmente `conexao:tabela` em cada lado (paridade entre warehouses).",
+    "fin.err.duckdb": "DuckDB é local — não há histórico de custo de warehouse para analisar.",
+    "fin.err.unavailable": "Relatório de custo não disponível para este tipo de conexão.",
+    "fin.noData": "Nenhum dado retornado. Causas comuns: falta de privilégio no dicionário (Oracle v$sql), extensão `pg_stat_statements` ausente (Postgres), ou region errada no `schemas` da conexão (BigQuery).",
+    "fin.head": "### Custo · `{id}`",
+    "fin.head7d": "### Custo (últimos 7 dias) · `{id}`",
+    "fin.hint.bq": "1 TB processado ≈ US$ 6,25 (on-demand). Ataque primeiro os maiores `tb_processados`: SELECT * e falta de filtro de partição são as causas nº 1.",
+    "fin.hint.oracle": "Alto `gets_por_exec` = consulta cara por execução (índice/plano); alto `execucoes` × tempo médio = candidato a cache/materialização.",
+    "fin.hint.other": "Alto `tempo_total_s` com muitas `execucoes` = otimize a consulta; poucas execuções muito lentas = revise plano/índices.",
+    "fin.footer": "_Fonte determinística: metadados do próprio warehouse — nenhum dado de negócio saiu do banco._",
+    "conf.alta": "alta",
+    "conf.media": "média",
+    "conf.baixa": "baixa",
+    "ap.line": "{icon} linha {line} [{rule}] (confiança {conf}): {message}",
+    "ap.deleteSemWhere": "DELETE sem WHERE apaga a tabela inteira — se é intencional, use TRUNCATE explícito e revise.",
+    "ap.updateSemWhere": "UPDATE sem WHERE reescreve TODAS as linhas da tabela.",
+    "ap.destrutivo": "{kind} é destrutivo e irreversível — não deveria nascer de código gerado sem revisão explícita.",
+    "ap.selectStarDbt": "SELECT * no modelo propaga qualquer mudança do upstream (schema drift silencioso) — liste as colunas.",
+    "ap.selectStar": "SELECT * traz colunas desnecessárias (custo e acoplamento) — liste as colunas.",
+    "ap.selectStarSub": "SELECT * em subquery/CTE arrasta colunas que ninguém pediu — liste as colunas.",
+    "ap.joinImplicito": "Join implícito (FROM a, b + WHERE) — prefira JOIN … ON explícito: a condição esquecida vira produto cartesiano.",
+    "ap.produtoCartesiano": "FROM com múltiplas tabelas SEM WHERE = produto cartesiano (N×M linhas).",
+    "ap.crossJoin": "CROSS JOIN multiplica linhas (N×M) — confirme que é intencional (ex.: spine de datas).",
+    "ap.notIn": "NOT IN com subquery: UM NULL no resultado da subquery e a query inteira retorna zero linhas — use NOT EXISTS.",
+    "ap.unionSemAll": "UNION (sem ALL) deduplica com sort implícito — se não há duplicatas possíveis, UNION ALL é mais barato.",
+    "ap.orderBySub": "ORDER BY em subquery sem LIMIT não garante ordem no resultado externo — só custa sort.",
+    "ap.likeCuringa": "LIKE '%…' com curinga inicial impede índice/partition pruning — full scan garantido.",
+    "ap.inListaGrande": "IN com ~{count} itens literais — mova para uma tabela temporária/CTE e faça JOIN.",
+    "ap.funcaoEmFiltro": "{fn}(coluna) no filtro impede índice/pruning (predicado não-sargável) — aplique a função ao LITERAL ou use faixa equivalente.",
+    "ap.cteNaoUsada": "A CTE \"{cte}\" é definida e nunca referenciada — código morto que ainda pode ser executado por alguns engines.",
+    "ap.janelaSemPartition": "Window function sem PARTITION BY ordena/processa a tabela INTEIRA numa partição só — confirme a intenção.",
+    "ap.insertSemColunas": "INSERT sem lista de colunas quebra silenciosamente quando o schema da tabela muda — declare as colunas.",
+    "ap.limitDbt": "LIMIT no modelo dbt vai para PRODUÇÃO e trunca o dataset — se era só para desenvolver, remova antes de aplicar.",
+    "dbt.impact.head": "### Raio de explosão · `{name}`",
+    "dbt.impact.local": "Nenhum modelo, teste ou exposure depende de `{name}` — mudança de impacto LOCAL.",
+    "dbt.impact.upstream": "Upstream direto: {list}",
+    "dbt.impact.downDirect": "| Downstream direto | {n} — {list} |",
+    "dbt.impact.downTransitive": "| Downstream transitivo | {count, plural, one{# modelo} other{# modelos}} (profundidade {depth}) |",
+    "dbt.impact.tests": "| Testes impactados | {n} |",
+    "dbt.impact.exposures": "| Exposures | {list} |",
+    "dbt.impact.upstreamRow": "| Upstream direto | {list} |",
+    "dbt.impact.warning": "Mudança em `{name}` pode quebrar {count, plural, one{# consumidor} other{# consumidores}} — revise os downstream diretos antes de aplicar (`dbt build --select {name}+` valida a cadeia).",
+    "dbt.impact.freshness": "_Fonte: target/manifest.json{when} — `dbt parse` ou `dbt compile` atualiza o lineage._",
+    "dbt.impact.when": " (gerado em {ts})",
+    "lin.head": "**Lineage de coluna** (confiança {conf}):",
+    "lin.cols": "| saída | transformação | origem |",
+    "lin.more": "_… +{n} colunas._",
+    "lin.star": "_⚠ O SELECT final usa `*` — colunas propagadas do upstream não aparecem no mapa._",
+    "lin.direct": "direta",
+    "lin.expression": "expressao",
+    "arch.rule.hexagonal": "o domínio não pode importar adapters/infraestrutura — a dependência aponta para DENTRO (os adapters implementam as ports; o domínio não os conhece)",
+    "arch.rule.clean": "as camadas internas (entities/use cases) não conhecem as externas (adapters/frameworks) — a regra da dependência aponta para dentro",
+    "arch.rule.layered": "a camada de modelo/entidade não pode importar service/repository/apresentação (cada camada só chama a de baixo)",
+    "arch.rule.mvc": "o Model não pode importar View nem Controller (Model rico, sem conhecer a apresentação)",
+    "gate.archViolation": "viola a arquitetura {arch}: {rule}. Import(s) proibido(s) da camada externa: {imports}.",
+    "pii.head": "### Auditoria PII / LGPD (por nome de coluna)",
+    "pii.noSchema": "Sem schema para auditar — rode `dbt parse` (projeto dbt) ou `/schema-db` (warehouse) primeiro.",
+    "pii.clean": "✅ Nenhuma coluna com nome típico de dado pessoal em {tables} tabelas. (Heurística por NOME — conteúdo não foi lido.)",
+    "pii.found": "⚠ **{count, plural, one{# coluna} other{# colunas}} candidatas a dado pessoal** em {tables} tabelas (heurística por NOME — o conteúdo não foi lido):",
+    "pii.cols": "| tabela | coluna | categoria | confiança |",
+    "pii.more": "_… +{n} colunas._",
+    "pii.next": "Próximos passos: mascaramento no warehouse (Oracle: `DBMS_REDACT`/Data Redaction; BigQuery: policy tags + column-level access; Postgres: views com máscara + GRANT por coluna) e minimização nos marts (não propague documento/contato para camadas de consumo).",
+    "pii.footer": "_O FORGE já mascara amostras exibidas no chat; a auditoria orienta a proteção NA ORIGEM._",
+    "pii.cat.doc": "documento (CPF/CNPJ/RG)",
+    "pii.cat.nome": "nome de pessoa",
+    "pii.cat.email": "e-mail",
+    "pii.cat.telefone": "telefone",
+    "pii.cat.endereco": "endereço",
+    "pii.cat.nascimento": "nascimento/idade",
+    "pii.cat.financeiro": "financeiro pessoal",
+    "pii.cat.cartao": "cartão de pagamento",
+    "pii.cat.credencial": "credencial",
+    "pii.cat.sensivel": "dado sensível (LGPD art. 5º II)",
+    "pii.cat.geo": "geolocalização",
+    "secrets.weakKeyring": "FORGE: o armazenamento seguro de credenciais não parece disponível neste sistema (keyring ausente). As credenciais podem não estar protegidas. Configure um keyring (ex.: gnome-keyring/libsecret) antes de usar em produção.",
   },
   en: {
     "dialog.skillsReindexed": "FORGE: skills reindexed.",
@@ -734,5 +1014,140 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "card.impact.notFound": "The model `{model}` doesn't exist in the dbt manifest.",
     "card.impact.notFoundSug": "The model `{model}` doesn't exist in the dbt manifest — did you mean `{name}`?",
     "card.impact.openModel": "Open a dbt model file in the editor (or use `/impact model_name`).",
+    "git.msg.required": "Enter the message: `/git-commit \"your message\"`.",
+    "git.msg.tooLong": "Message too long (max. 2000 characters).",
+    "git.st.modified": "modified",
+    "git.st.added": "added",
+    "git.st.deleted": "deleted",
+    "git.st.renamed": "renamed",
+    "git.st.copied": "copied",
+    "git.st.conflict": "conflict",
+    "git.st.new": "new",
+    "git.st.untracked": "new (untracked)",
+    "git.noBranch": "(no branch)",
+    "git.ahead": "**{n}** ahead",
+    "git.behind": "**{n}** behind",
+    "git.clean": "_Working tree clean — nothing to commit._",
+    "git.cols": "| file | state |",
+    "git.more": "| … | and {n} more |",
+    "git.commitHint": "_{n} tracked file(s) would go into a `/git-commit` (new files require `git add` first)._",
+    "git.diff.empty": "### Git · diff\n\n_No changes vs. `HEAD` (working tree clean)._",
+    "git.diff.truncated": "… (diff truncated)",
+    "git.log.empty": "### Git · log\n\n_No commits._",
+    "git.log.cols": "| commit | author | when | subject |",
+    "git.commit.ok": "✅ Commit created.",
+    "git.commit.fail": "❌ Failed.",
+    "git.unavailable": "git unavailable or this folder is not a repository.",
+    "wh.err.oracleConnect": "Connection \"{id}\": connect must be \"user@tns_alias\" or \"user@//host:port/service\".",
+    "wh.err.psqlConnect": "Connection \"{id}\": connect must be the psql URI/DSN.",
+    "wh.err.objectStorage": "Connection \"{id}\" is OBJECT STORAGE — it doesn't run SQL. Use /connections to list the contents, or a duckdb connection to query files.",
+    "wh.err.unknownKind": "Unknown connection type: {kind}",
+    "wh.err.costSingle": "Cost preview accepts only ONE statement — select just the SELECT you want to estimate.",
+    "wh.err.costSingleShort": "Cost preview accepts only ONE statement.",
+    "wh.err.costUnavailable": "Cost preview not available for this connection type.",
+    "wh.result.noOutput": "(no output)",
+    "wh.result.capped": " · ⚠ sample capped at {n} rows",
+    "wh.result.masked": "_Sensitive values are masked locally before any display (LGPD)._",
+    "wh.pwd.title": "Password for connection \"{id}\" ({kind})",
+    "wh.pwd.prompt": "Stored in VS Code's SecretStorage (OS keyring) — never in settings or on disk.",
+    "wh.err.unsafeField": "Connection \"{id}\": the `{field}` field contains disallowed characters (shell metacharacter) — fix forge.warehouse.connections.",
+    "wh.err.unsafeSchema": "Connection \"{id}\": a `schemas` item contains disallowed characters.",
+    "wh.err.connNotExists": "Connection \"{id}\" doesn't exist — see /connections.",
+    "wh.err.noneConfigured": "No connection configured (forge.warehouse.connections).",
+    "wh.err.noneConfiguredShort": "No connection configured.",
+    "wh.err.costReadonly": "⛔ Cost preview is read-only — the query contains a write or an unconfirmed statement ({reason}). Run just the SELECT you want to estimate.",
+    "wh.err.toolMissing": "The `{tool}` tool is not on PATH. Install it ({hint}) — FORGE uses the CLI you already use, no embedded driver.",
+    "wh.err.spawnFailed": "Failed to start {tool}: {error}",
+    "wh.hint.sqlcl": "SQLcl — download at oracle.com/sqlcl; connects 19c, 26ai, Exadata and ADW (wallet)",
+    "wh.hint.duckdb": "duckdb.org — single binary",
+    "wh.hint.default": "install it and ensure it's on PATH",
+    "wh.err.schemaBigQuery": "BigQuery requires `schemas` on the connection (datasets to inventory) — INFORMATION_SCHEMA is per dataset.",
+    "wh.err.schemaUnavailable": "Schema snapshot not available for this connection type.",
+    "val.label.sqlSecurity": "SQL · security",
+    "val.label.sqlAntipatterns": "SQL · anti-patterns",
+    "val.label.sqlSchema": "SQL · schema (dbt)",
+    "par.absent": "(absent)",
+    "par.head": "### Data parity · `{left}` × `{right}`",
+    "par.ok": "✅ **Parity OK** — {n} metrics match (count, non-nulls and distincts per column).",
+    "par.okFooter": "_Comparison by AGGREGATES: no row left the databases (compliance-safe)._",
+    "par.diffs": "❌ **{count, plural, one{# divergence} other{# divergences}}** across {total} metrics:",
+    "par.cols": "| metric | column | {left} | {right} |",
+    "par.more": "_… +{n} divergences._",
+    "par.footer": "_Comparison by AGGREGATES: no row left the databases (compliance-safe). Divergence in `count` = volume; in `distintos` = duplicates/dedup; in `nao_nulos` = data loss in the load._",
+    "par.usage": "Usage: `/parity table_a table_b` — optionally `connection:table` on each side (cross-warehouse parity).",
+    "fin.err.duckdb": "DuckDB is local — there is no warehouse cost history to analyze.",
+    "fin.err.unavailable": "Cost report not available for this connection type.",
+    "fin.noData": "No data returned. Common causes: missing dictionary privilege (Oracle v$sql), `pg_stat_statements` extension absent (Postgres), or wrong region in the connection's `schemas` (BigQuery).",
+    "fin.head": "### Cost · `{id}`",
+    "fin.head7d": "### Cost (last 7 days) · `{id}`",
+    "fin.hint.bq": "1 TB processed ≈ US$ 6.25 (on-demand). Attack the biggest `tb_processados` first: SELECT * and missing partition filters are the top causes.",
+    "fin.hint.oracle": "High `gets_por_exec` = query expensive per run (index/plan); high `execucoes` × average time = candidate for caching/materialization.",
+    "fin.hint.other": "High `tempo_total_s` with many `execucoes` = optimize the query; few very slow runs = review plan/indexes.",
+    "fin.footer": "_Deterministic source: the warehouse's own metadata — no business data left the database._",
+    "conf.alta": "high",
+    "conf.media": "medium",
+    "conf.baixa": "low",
+    "ap.line": "{icon} line {line} [{rule}] (confidence {conf}): {message}",
+    "ap.deleteSemWhere": "DELETE without WHERE wipes the whole table — if intentional, use an explicit TRUNCATE and review.",
+    "ap.updateSemWhere": "UPDATE without WHERE rewrites ALL rows of the table.",
+    "ap.destrutivo": "{kind} is destructive and irreversible — it shouldn't come from generated code without explicit review.",
+    "ap.selectStarDbt": "SELECT * in the model propagates any upstream change (silent schema drift) — list the columns.",
+    "ap.selectStar": "SELECT * brings unnecessary columns (cost and coupling) — list the columns.",
+    "ap.selectStarSub": "SELECT * in a subquery/CTE drags columns nobody asked for — list the columns.",
+    "ap.joinImplicito": "Implicit join (FROM a, b + WHERE) — prefer explicit JOIN … ON: a forgotten condition becomes a cartesian product.",
+    "ap.produtoCartesiano": "FROM with multiple tables and NO WHERE = cartesian product (N×M rows).",
+    "ap.crossJoin": "CROSS JOIN multiplies rows (N×M) — confirm it's intentional (e.g., date spine).",
+    "ap.notIn": "NOT IN with a subquery: ONE NULL in the subquery result and the whole query returns zero rows — use NOT EXISTS.",
+    "ap.unionSemAll": "UNION (without ALL) deduplicates with an implicit sort — if duplicates are impossible, UNION ALL is cheaper.",
+    "ap.orderBySub": "ORDER BY in a subquery without LIMIT doesn't guarantee order in the outer result — it just costs a sort.",
+    "ap.likeCuringa": "LIKE '%…' with a leading wildcard prevents index/partition pruning — guaranteed full scan.",
+    "ap.inListaGrande": "IN with ~{count} literal items — move them to a temp table/CTE and JOIN.",
+    "ap.funcaoEmFiltro": "{fn}(column) in the filter prevents index/pruning (non-sargable predicate) — apply the function to the LITERAL or use an equivalent range.",
+    "ap.cteNaoUsada": "The CTE \"{cte}\" is defined and never referenced — dead code that some engines may still execute.",
+    "ap.janelaSemPartition": "Window function without PARTITION BY sorts/processes the ENTIRE table in a single partition — confirm the intent.",
+    "ap.insertSemColunas": "INSERT without a column list breaks silently when the table schema changes — declare the columns.",
+    "ap.limitDbt": "LIMIT in the dbt model goes to PRODUCTION and truncates the dataset — if it was just for development, remove it before applying.",
+    "dbt.impact.head": "### Blast radius · `{name}`",
+    "dbt.impact.local": "No model, test or exposure depends on `{name}` — a LOCAL-impact change.",
+    "dbt.impact.upstream": "Direct upstream: {list}",
+    "dbt.impact.downDirect": "| Direct downstream | {n} — {list} |",
+    "dbt.impact.downTransitive": "| Transitive downstream | {count, plural, one{# model} other{# models}} (depth {depth}) |",
+    "dbt.impact.tests": "| Impacted tests | {n} |",
+    "dbt.impact.exposures": "| Exposures | {list} |",
+    "dbt.impact.upstreamRow": "| Direct upstream | {list} |",
+    "dbt.impact.warning": "A change in `{name}` can break {count, plural, one{# consumer} other{# consumers}} — review the direct downstream before applying (`dbt build --select {name}+` validates the chain).",
+    "dbt.impact.freshness": "_Source: target/manifest.json{when} — `dbt parse` or `dbt compile` refreshes the lineage._",
+    "dbt.impact.when": " (generated at {ts})",
+    "lin.head": "**Column lineage** (confidence {conf}):",
+    "lin.cols": "| output | transformation | origin |",
+    "lin.more": "_… +{n} columns._",
+    "lin.star": "_⚠ The final SELECT uses `*` — columns propagated from upstream don't appear in the map._",
+    "lin.direct": "direct",
+    "lin.expression": "expression",
+    "arch.rule.hexagonal": "the domain must not import adapters/infrastructure — the dependency points INWARD (adapters implement the ports; the domain doesn't know them)",
+    "arch.rule.clean": "inner layers (entities/use cases) don't know the outer ones (adapters/frameworks) — the dependency rule points inward",
+    "arch.rule.layered": "the model/entity layer must not import service/repository/presentation (each layer only calls the one below)",
+    "arch.rule.mvc": "the Model must not import View or Controller (rich Model, unaware of the presentation)",
+    "gate.archViolation": "violates the {arch} architecture: {rule}. Forbidden import(s) from the outer layer: {imports}.",
+    "pii.head": "### PII / LGPD audit (by column name)",
+    "pii.noSchema": "No schema to audit — run `dbt parse` (dbt project) or `/schema-db` (warehouse) first.",
+    "pii.clean": "✅ No column with a typical personal-data name across {tables} tables. (Heuristic by NAME — content was not read.)",
+    "pii.found": "⚠ **{count, plural, one{# column candidate} other{# column candidates}} for personal data** across {tables} tables (heuristic by NAME — content was not read):",
+    "pii.cols": "| table | column | category | confidence |",
+    "pii.more": "_… +{n} columns._",
+    "pii.next": "Next steps: masking in the warehouse (Oracle: `DBMS_REDACT`/Data Redaction; BigQuery: policy tags + column-level access; Postgres: masked views + per-column GRANT) and minimization in the marts (don't propagate documents/contacts to consumption layers).",
+    "pii.footer": "_FORGE already masks samples shown in the chat; the audit guides protection AT THE SOURCE._",
+    "pii.cat.doc": "document (CPF/CNPJ/RG)",
+    "pii.cat.nome": "person name",
+    "pii.cat.email": "e-mail",
+    "pii.cat.telefone": "phone",
+    "pii.cat.endereco": "address",
+    "pii.cat.nascimento": "birth/age",
+    "pii.cat.financeiro": "personal finance",
+    "pii.cat.cartao": "payment card",
+    "pii.cat.credencial": "credential",
+    "pii.cat.sensivel": "sensitive data (LGPD art. 5 II)",
+    "pii.cat.geo": "geolocation",
+    "secrets.weakKeyring": "FORGE: secure credential storage doesn't seem to be available on this system (keyring missing). Credentials may not be protected. Configure a keyring (e.g., gnome-keyring/libsecret) before using in production.",
   },
 };

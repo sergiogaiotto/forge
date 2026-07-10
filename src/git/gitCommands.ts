@@ -7,6 +7,8 @@
 // reset/checkout/rebase (destrutivos — perda de trabalho sem rede de segurança). Não é um agente: é uma
 // superfície que o dev opera, com a escrita governada pelo mesmo trail de permissões do resto do FORGE.
 
+import { hostT, HostMessageKey } from "../i18n";
+
 export type GitOp = "status" | "diff" | "log" | "commit";
 
 // Separador de campo do log: US (Unit Separator, \x1f). Improvável em nome de autor/assunto — parse
@@ -156,46 +158,57 @@ export interface GitCommitMessage {
 // de array, shell:false), mas rejeita vazia (o git abriria um editor interativo → trava o spawn).
 export function sanitizeCommitMessage(raw: string | undefined): GitCommitMessage {
   const msg = (raw ?? "").trim();
-  if (!msg) return { ok: false, error: 'Informe a mensagem: `/git-commit "sua mensagem"`.' };
-  if (msg.length > 2000) return { ok: false, error: "Mensagem muito longa (máx. 2000 caracteres)." };
+  if (!msg) return { ok: false, error: hostT("git.msg.required") };
+  if (msg.length > 2000) return { ok: false, error: hostT("git.msg.tooLong") };
   return { ok: true, message: msg };
 }
 
-const STATUS_LABEL: Record<string, string> = { M: "modificado", A: "adicionado", D: "removido", R: "renomeado", C: "copiado", U: "conflito", "?": "novo" };
+// Códigos XY do porcelain → CHAVE do catálogo, resolvida por locale no render (mapa de texto em
+// const módulo-nível congelaria pt — módulos avaliam antes do setHostLocale da ativação).
+const STATUS_KEY: Record<string, HostMessageKey> = {
+  M: "git.st.modified",
+  A: "git.st.added",
+  D: "git.st.deleted",
+  R: "git.st.renamed",
+  C: "git.st.copied",
+  U: "git.st.conflict",
+  "?": "git.st.new",
+};
+const statusLabel = (code: string): string => (STATUS_KEY[code] ? hostT(STATUS_KEY[code]) : code);
 
 function fileLabel(e: GitStatusEntry): string {
-  if (e.index === "?" && e.worktree === "?") return "novo (não rastreado)";
-  const staged = e.index !== " " && e.index !== "?" ? `staged: ${STATUS_LABEL[e.index] ?? e.index}` : "";
-  const wt = e.worktree !== " " && e.worktree !== "?" ? `worktree: ${STATUS_LABEL[e.worktree] ?? e.worktree}` : "";
+  if (e.index === "?" && e.worktree === "?") return hostT("git.st.untracked");
+  const staged = e.index !== " " && e.index !== "?" ? `staged: ${statusLabel(e.index)}` : "";
+  const wt = e.worktree !== " " && e.worktree !== "?" ? `worktree: ${statusLabel(e.worktree)}` : "";
   return [staged, wt].filter(Boolean).join(" · ") || "—";
 }
 
 export function renderStatusCard(status: GitStatus): string {
-  const lines: string[] = [`### Git · \`${status.branch || "(sem branch)"}\``];
+  const lines: string[] = [`### Git · \`${status.branch || hostT("git.noBranch")}\``];
   const sync: string[] = [];
   if (status.upstream) sync.push(`↑ upstream \`${status.upstream}\``);
-  if (status.ahead) sync.push(`**${status.ahead}** à frente`);
-  if (status.behind) sync.push(`**${status.behind}** atrás`);
+  if (status.ahead) sync.push(hostT("git.ahead", { n: status.ahead }));
+  if (status.behind) sync.push(hostT("git.behind", { n: status.behind }));
   if (sync.length) lines.push("", sync.join(" · "));
   if (status.entries.length === 0) {
-    lines.push("", "_Working tree limpo — nada a commitar._");
+    lines.push("", hostT("git.clean"));
     return lines.join("\n");
   }
-  lines.push("", "| arquivo | estado |", "|---|---|");
+  lines.push("", hostT("git.cols"), "|---|---|");
   for (const e of status.entries.slice(0, 50)) {
     const shown = e.origPath ? `${e.origPath} → ${e.path}` : e.path;
     lines.push(`| \`${shown}\` | ${fileLabel(e)} |`);
   }
-  if (status.entries.length > 50) lines.push(`| … | e mais ${status.entries.length - 50} |`);
+  if (status.entries.length > 50) lines.push(hostT("git.more", { n: status.entries.length - 50 }));
   const targets = commitTargets(status);
-  lines.push("", `_${targets.length} arquivo(s) rastreado(s) entrariam num \`/git-commit\` (novos exigem \`git add\` antes)._`);
+  lines.push("", hostT("git.commitHint", { n: targets.length }));
   return lines.join("\n");
 }
 
 export function renderDiffCard(diff: string, cap = 24000): string {
   const trimmed = diff.trim();
-  if (!trimmed) return "### Git · diff\n\n_Sem alterações vs. `HEAD` (working tree limpo)._";
-  const body = trimmed.length > cap ? trimmed.slice(0, cap) + "\n… (diff truncado)" : trimmed;
+  if (!trimmed) return hostT("git.diff.empty");
+  const body = trimmed.length > cap ? trimmed.slice(0, cap) + "\n" + hostT("git.diff.truncated") : trimmed;
   return "### Git · diff (vs `HEAD`)\n\n```diff\n" + body + "\n```";
 }
 
@@ -216,8 +229,8 @@ export function parseLog(output: string): GitCommit[] {
   return out;
 }
 export function renderLogCard(commits: GitCommit[]): string {
-  if (commits.length === 0) return "### Git · log\n\n_Sem commits._";
-  const lines = ["### Git · log", "", "| commit | autor | quando | assunto |", "|---|---|---|---|"];
+  if (commits.length === 0) return hostT("git.log.empty");
+  const lines = ["### Git · log", "", hostT("git.log.cols"), "|---|---|---|---|"];
   for (const c of commits) lines.push(`| \`${c.hash}\` | ${c.author} | ${c.when} | ${c.subject.replace(/\|/g, "\\|")} |`);
   return lines.join("\n");
 }
@@ -225,14 +238,14 @@ export function renderLogCard(commits: GitCommit[]): string {
 export function renderCommitResult(ok: boolean, output: string): string {
   const body = output.trim().slice(0, 2000);
   return ok
-    ? "### Git · commit\n\n✅ Commit criado.\n\n```\n" + body + "\n```"
-    : "### Git · commit\n\n❌ Falhou.\n\n```\n" + body + "\n```";
+    ? "### Git · commit\n\n" + hostT("git.commit.ok") + "\n\n```\n" + body + "\n```"
+    : "### Git · commit\n\n" + hostT("git.commit.fail") + "\n\n```\n" + body + "\n```";
 }
 
 // Erro de uma operação de git (leitura ou commit) — o cabeçalho nomeia a operação CERTA (antes os erros
 // de status/diff/log reusavam o card de "commit", que mentia sobre a ação).
 const OP_LABEL: Record<GitOp, string> = { status: "status", diff: "diff", log: "log", commit: "commit" };
 export function renderGitError(op: GitOp, output: string): string {
-  const msg = output.trim().slice(0, 2000) || "git indisponível ou esta pasta não é um repositório.";
+  const msg = output.trim().slice(0, 2000) || hostT("git.unavailable");
   return `### Git · ${OP_LABEL[op]}\n\n❌ ${msg}`;
 }

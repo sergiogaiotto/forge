@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { hostT } from "../i18n";
 import { log } from "../util/logger";
 
 // Wrapper fino e auditado sobre o SecretStorage do VSCode. Toda credencial que a
@@ -37,10 +38,7 @@ export class SecretsStore {
       if (roundtrip !== expected && !this.weakBackendWarned) {
         this.weakBackendWarned = true;
         log.warn("SecretStorage round-trip mismatch — keyring may be unavailable.");
-        void vscode.window.showWarningMessage(
-          "FORGE: o armazenamento seguro de credenciais não parece disponível neste sistema (keyring ausente). " +
-            "As credenciais podem não estar protegidas. Configure um keyring (ex.: gnome-keyring/libsecret) antes de usar em produção."
-        );
+        void vscode.window.showWarningMessage(hostT("secrets.weakKeyring"));
       }
     } catch (err) {
       log.warn("SecretStorage verifyBackend failed", err);
