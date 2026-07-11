@@ -4,7 +4,7 @@
 import { ChatMessage } from "../api/types";
 import { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
 import { findOpeningFence } from "./fences";
-import { parsePartialFileBlocks } from "./fileBlocks";
+import { parseFileBlocks, parsePartialFileBlocks } from "./fileBlocks";
 import { sanitizeHarmonyPreamble } from "./harmony";
 
 // Omissões/elipses proibidas (espelham o NO_ELLIPSIS_RULE do systemPrompt): sinais fortes de que o
@@ -175,7 +175,11 @@ export interface ResilientOptions {
   maxContinuations: number;
   anchorChars: number; // quanto da CAUDA do texto reenviar como âncora na continuação (não o todo)
   buildContinuation: (path: string | undefined) => string; // continuar um arquivo cortado (cerca aberta)
-  buildTailContinuation: () => string; // continuar a resposta cortada ENTRE blocos (ex.: faltam arquivos)
+  buildTailContinuation: (missing?: string[]) => string; // continuar a resposta cortada ENTRE blocos (ex.: faltam arquivos)
+  // Modo Projeto: os caminhos ESPERADOS do blueprint. Enquanto algum não tiver sido emitido como bloco
+  // FECHADO, a geração NÃO está completa — mesmo sem cerca aberta e sem o provider sinalizar corte (o
+  // gpt-oss às vezes auto-encerra a cauda com arquivos faltando). A continuação NOMEIA os que faltam. (F-02)
+  expectedPaths?: string[];
   onContinue?: (attempt: number, path: string | undefined) => void;
   aborted?: () => boolean;
 }
@@ -186,6 +190,24 @@ export interface ResilientResult {
   attempts: number; // nº de continuações efetuadas
   truncated: boolean; // ao final, ainda estava cortado (cerca aberta OU provider sinalizou o corte)
   error?: string;
+}
+
+// Normaliza caminho para casar o path do blueprint com o `path=` emitido: separadores/`./` divergem, e a
+// caixa também — o FS do dev costuma ser case-insensitive e um eco com caixa diferente não deve virar
+// falso-faltante e queimar continuações. (Ser leniente aqui só reduz continuações espúrias.)
+function normResilientPath(p: string): string {
+  return p.replace(/^[.\/\\]+/, "").replace(/\\/g, "/").toLowerCase();
+}
+// Arquivos do plano (expectedPaths) que AINDA não foram emitidos. Usa o parser AUTORITATIVO — parseFileBlocks,
+// o MESMO que vira proposta aplicável e que RECUPERA um bloco com a cerca mal-contada (recoverOpen) — e não
+// closedBlockPaths (scanner de streaming, que exige o nº de crases EXATO no fechamento). Senão um arquivo do
+// plano emitido POR INTEIRO mas fechado com crases a menos seria falso-faltante e dispararia continuação
+// espúria (+ proposta duplicada, + aviso de truncamento falso) — reintroduzindo, só no Modo Projeto, a
+// falsa-continuação que o BARE_FENCE_TAIL/recoverOpen existem para evitar. (Achado da revisão adversarial.)
+export function missingExpectedFiles(full: string, expected: string[] | undefined): string[] {
+  if (!expected || expected.length === 0) return [];
+  const emitted = new Set(parseFileBlocks(full).map((b) => normResilientPath(b.path)));
+  return expected.filter((p) => !emitted.has(normResilientPath(p)));
 }
 
 // Laço de geração resiliente (puro e testável, sem dependência de vscode): executa uma passagem via
@@ -216,17 +238,20 @@ export async function resilientGenerate(
     full = attempt === 0 ? part : stitchContinuation(full, sanitizeContinuation(part));
     completeness = checkCompleteness(full);
     const openFence = !completeness.complete && completeness.reason === "cerca-aberta";
-    const incomplete = openFence || res.truncated === true; // provider cortou (mesmo entre blocos fechados)
+    // Modo Projeto: arquivos do plano ainda NÃO emitidos ⇒ incompleto, mesmo sem cerca aberta e sem o
+    // provider sinalizar corte (o gpt-oss auto-encerra a cauda com arquivos faltando — achado F-02).
+    const missing = missingExpectedFiles(full, opts.expectedPaths);
+    const incomplete = openFence || res.truncated === true || missing.length > 0;
     const stalled = attempt > 0 && full.length <= before; // a continuação não avançou → não insista
     if (!incomplete) return { full, completeness, attempts: attempt, truncated: false };
     if (attempt >= opts.maxContinuations || stalled || opts.aborted?.()) {
-      return { full, completeness, attempts: attempt, truncated: true }; // esgotou ainda cortado
+      return { full, completeness, attempts: attempt, truncated: true }; // esgotou ainda cortado (ou incompleto)
     }
     attempt++;
     opts.onContinue?.(attempt, completeness.path);
     const anchor = full.length > opts.anchorChars ? full.slice(-opts.anchorChars) : full;
-    // cerca aberta → continuar o MESMO arquivo; corte entre blocos → continuar a resposta (próximos arquivos).
-    const instruction = openFence ? opts.buildContinuation(completeness.path) : opts.buildTailContinuation();
+    // cerca aberta → continuar o MESMO arquivo; senão → pedir os PRÓXIMOS/faltantes (nomeando-os quando há plano).
+    const instruction = openFence ? opts.buildContinuation(completeness.path) : opts.buildTailContinuation(missing.length ? missing : undefined);
     convo = [...baseMessages, { role: "assistant", content: anchor }, { role: "user", content: instruction }];
   }
 }

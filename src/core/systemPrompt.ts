@@ -592,10 +592,16 @@ CONTINUE a geração EXATAMENTE do ponto onde parou, no MESMO arquivo. Regras es
 // Continuação quando a resposta foi cortada por limite de tokens ENTRE blocos (o último arquivo fechou,
 // mas faltam arquivos) — caso comum numa geração de PROJETO multi-arquivo. Diferente de buildContinuation,
 // não estamos no meio de um arquivo: pedimos os PRÓXIMOS arquivos.
-export function buildTailContinuation(): string {
+export function buildTailContinuation(missing?: string[]): string {
+  // Modo Projeto: quando sabemos QUAIS arquivos do plano faltam, nomeamo-los — o pedido genérico
+  // "continue" deixava o gpt-oss auto-encerrar a cauda achando que terminou (achado F-02).
+  const missingLine =
+    missing && missing.length > 0
+      ? `\n- Faltam EXATAMENTE estes arquivos do plano — emita TODOS agora, cada um como um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO com o \`path=\` correto: ${missing.join(", ")}.`
+      : "";
   return `Sua resposta anterior foi CORTADA por limite de tokens ANTES de terminar. CONTINUE de onde parou:
 - Emita o RESTANTE do que faltava — os próximos arquivos como blocos \`${FORGE_FILE_BLOCK_LANG}\` completos
-  (ou, se o último arquivo ficou aberto, feche-o primeiro).
+  (ou, se o último arquivo ficou aberto, feche-o primeiro).${missingLine}
 - Responda APENAS com código/blocos de arquivo. NADA de saudação, confirmação ("ok", "vou continuar", "will do") nem comentário sobre a tarefa. O PRIMEIRO caractere já é a continuação.
 - NÃO repita nada do que já escreveu; NÃO reabra um bloco já fechado.
 - ${NO_ELLIPSIS_RULE}`;

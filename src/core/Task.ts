@@ -45,6 +45,9 @@ export interface TaskDeps {
   // Chamado (Modo Projeto) assim que um bloco de arquivo FECHA no streaming — habilita o status
   // "gerando…" → "gerado" um a um no modal, em vez de tudo em lote no fim.
   onFileClosed?: (path: string) => void;
+  // Modo Projeto: caminhos ESPERADOS do blueprint. A geração resiliente continua (nomeando os que
+  // faltam) até TODOS serem emitidos — não só até a cauda "parecer" fechada (achado F-02).
+  expectedPaths?: string[];
   // Validador IN-PROCESS (Onda 1 dados): o motor SQL determinístico analisa propostas .sql (anti-padrões,
   // segurança, schema dbt) sem spawnar processo — os resultados entram no MESMO canal dos validadores
   // de skill (cartão, gate, Langfuse). Opcional: só o Controller o injeta quando configurado.
@@ -177,6 +180,7 @@ export class Task {
       anchorChars: CONTINUATION_ANCHOR_CHARS,
       buildContinuation: buildContinuationPrompt,
       buildTailContinuation,
+      expectedPaths: d.expectedPaths,
       onContinue: (attempt, path) =>
         d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o restante"} (continuação ${attempt}/${MAX_CONTINUATIONS})…` }),
       aborted: () => this.controller.signal.aborted,
