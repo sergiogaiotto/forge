@@ -7,13 +7,13 @@ import { SkillValidatorSpec } from "../skills/types";
 import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
-import { CompletenessResult, partialFilePath, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, CompletenessResult, dedupeFileBlocksByPath, partialFilePath, resilientGenerate } from "../util/completeness";
 import { closedBlockPaths, parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 import { detectProseFileEdit } from "../util/proseEdits";
 import { safeWorkspacePath } from "../util/safePath";
 import { estimateTokens } from "../util/tokenEstimate";
-import { buildContinuationPrompt, buildProtocolReemitPrompt, buildTailContinuation } from "./systemPrompt";
+import { buildContinuationPrompt, buildMissingFilesContinuation, buildProtocolReemitPrompt, buildTailContinuation } from "./systemPrompt";
 
 // Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
 // completude, não custo (decisão de produto), mas com teto rígido + guarda de "stall" (passagem que
@@ -180,6 +180,9 @@ export class Task {
       anchorChars: CONTINUATION_ANCHOR_CHARS,
       buildContinuation: buildContinuationPrompt,
       buildTailContinuation,
+      // Modo Projeto (F-02): quando faltam arquivos do plano e o último bloco fechou, a continuação vira
+      // clean-room (sem âncora) e NOMEIA os faltantes — quebra o stall da cauda estagnada.
+      buildMissingFilesContinuation,
       expectedPaths: d.expectedPaths,
       onContinue: (attempt, path) =>
         d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o restante"} (continuação ${attempt}/${MAX_CONTINUATIONS})…` }),
@@ -210,8 +213,13 @@ export class Task {
       });
     }
 
-    // Faz o parse das edições de arquivo propostas e transforma cada uma em um diff revisável.
-    const blocks = parseFileBlocks(full);
+    // Faz o parse das edições de arquivo propostas e transforma cada uma em um diff revisável. Deduplica
+    // por path: uma continuação clean-room (F-02) pode re-emitir um arquivo já feito — sem dedup viraria
+    // cartão duplicado e o "Aplicar tudo" poderia gravar a re-emissão cortada por cima. Passa o path do
+    // arquivo cortado (cerca-aberta) para o dedup PREFERIR a cópia FECHADA à truncada (mesmo que a truncada
+    // seja maior); o bloco aberto só pode ser o último do texto.
+    const openPath = !completeness.complete && completeness.reason === "cerca-aberta" ? completeness.path : undefined;
+    const blocks = dedupeFileBlocksByPath(parseFileBlocks(full), openPath);
     // Qual proposta marcar como parcial. Só há parcial quando um arquivo ficou REALMENTE incompleto
     // (cerca aberta/elipse). Se o corte foi só ENTRE arquivos (todos fecharam; provider cortou por
     // tokens), nenhum bloco completo é rebaixado — corrige o "Aplicar tudo" pulando o README completo.
@@ -285,7 +293,9 @@ export class Task {
       log.warn("Reparo de protocolo falhou ao reemitir", err);
       return;
     }
-    const blocks = parseFileBlocks(text);
+    const rc = checkCompleteness(text);
+    const openP = !rc.complete && rc.reason === "cerca-aberta" ? rc.path : undefined;
+    const blocks = dedupeFileBlocksByPath(parseFileBlocks(text), openP); // 1 cartão por path (mesma regra do run)
     if (blocks.length === 0) {
       // O modelo declinou (o que ele mostrou era ilustrativo, ou insistiu em cerca comum). Desiste em
       // SILÊNCIO: nenhum aviso ao usuário — um falso-positivo da detecção fica 100% invisível.

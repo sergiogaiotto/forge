@@ -8,6 +8,7 @@ import {
   buildCharterContinuationPrompt,
   buildCharterSystemPrompt,
   buildContinuationPrompt,
+  buildMissingFilesContinuation,
   buildProjectFromBlueprintPrompt,
   buildProjectPrompt,
   buildProjectRepairPrompt,
@@ -342,6 +343,32 @@ test("buildTailContinuation: manda emitir o restante dos arquivos, sem repetir n
   assert.match(p, /CONTINUE/);
   assert.match(p, /restante|próximos arquivos/i);
   assert.match(p, /NÃO reabra/i);
+});
+
+// F-02: a variante NOMEADA (com os arquivos faltantes do plano) é a que destrava a cauda — antes só a forma
+// sem argumentos era testada, então o ramo crítico do NAMING ia sem cobertura de prompt.
+test("buildTailContinuation(missing): NOMEIA os faltantes e manda emitir TODOS agora", () => {
+  const p = buildTailContinuation(["README.md", "tests/test_x.py"]);
+  assert.match(p, /README\.md/);
+  assert.match(p, /tests\/test_x\.py/);
+  assert.match(p, /emita TODOS agora/i);
+});
+
+// F-02 (clean-room): pede os faltantes NOMEADOS como blocos NOVOS/AUTÔNOMOS, SEM o framing de âncora
+// ("continue de onde parou"/"não repita") — que é não-acionável quando não há turno de assistant reenviado.
+test("buildMissingFilesContinuation: nomeia os faltantes como blocos completos, sem framing de âncora", () => {
+  const p = buildMissingFilesContinuation(["README.md", "tests/test_x.py"]);
+  assert.match(p, /README\.md/);
+  assert.match(p, /tests\/test_x\.py/);
+  assert.match(p, /COMPLETO e AUT[ÔO]NOMO/i);
+  assert.match(p, /forge-file/);
+  assert.match(p, /SOMENTE os arquivos listados/i);
+  // NÃO deve trazer o framing de continuação ancorada (o modelo não vê o próprio output aqui)
+  assert.ok(!/continue de onde parou/i.test(p));
+  assert.ok(!/N[ÃA]O repita nada do que j[áa] escreveu/i.test(p));
+  // caso de UM único faltante (a forma mais comum da última rodada): a lista é só o nome, sem vírgula sobrando
+  const one = buildMissingFilesContinuation(["README.md"]);
+  assert.match(one, /correto: README\.md\./, "um só faltante → lista com o único nome, sem vírgula pendente");
 });
 
 // Onda 1 (quick wins 1.3/1.4): o prompt do projeto injeta o PROPÓSITO do charter e as deps FIXADAS do

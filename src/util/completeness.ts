@@ -4,7 +4,7 @@
 import { ChatMessage } from "../api/types";
 import { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
 import { findOpeningFence } from "./fences";
-import { parseFileBlocks, parsePartialFileBlocks } from "./fileBlocks";
+import { FileBlock, parseFileBlocks, parsePartialFileBlocks } from "./fileBlocks";
 import { sanitizeHarmonyPreamble } from "./harmony";
 
 // Omissões/elipses proibidas (espelham o NO_ELLIPSIS_RULE do systemPrompt): sinais fortes de que o
@@ -24,6 +24,14 @@ const ELLIPSIS_PATTERNS: RegExp[] = [
 // errada de crases). Isso é esquecimento de contagem, não truncamento — recoverOpen recupera no parse
 // final, então NÃO vale re-pedir continuação.
 const BARE_FENCE_TAIL = /(^|\n)`{3,}[ \t\r]*\n?[ \t]*$/;
+
+// Quantas rodadas CONSECUTIVAS sem PROGRESSO real antes de desistir (F-02). Uma única continuação azarada
+// (resposta vazia, ou uma re-emissão que não avança o plano) NÃO pode abandonar um projeto quase completo:
+// toleramos 1 rodada morta e desistimos só na 2ª seguida. O teto rígido (maxContinuations) e o abort
+// continuam curto-circuitando. "Progresso" é o conjunto de arquivos do plano ENCOLHER (não só o texto
+// crescer) — ver resilientGenerate: no Modo Projeto o modelo às vezes re-emite um arquivo já feito, que
+// infla o texto SEM emitir o que falta (progresso falso).
+const STALL_TOLERANCE = 2;
 
 export type IncompleteReason = "cerca-aberta" | "elipse";
 
@@ -176,6 +184,12 @@ export interface ResilientOptions {
   anchorChars: number; // quanto da CAUDA do texto reenviar como âncora na continuação (não o todo)
   buildContinuation: (path: string | undefined) => string; // continuar um arquivo cortado (cerca aberta)
   buildTailContinuation: (missing?: string[]) => string; // continuar a resposta cortada ENTRE blocos (ex.: faltam arquivos)
+  // Modo Projeto (clean-room, F-02): faltam arquivos do PLANO e o último bloco NÃO ficou aberto → pede os
+  // faltantes NOMEADOS como blocos NOVOS e completos, numa conversa LIMPA — SEM reenviar a âncora da cauda.
+  // A âncora estagnava o laço: o modelo re-emitia a cauda, o stitch dedupava, crescimento zero → stall.
+  // O plano + propósitos vivem no system prompt (constante em toda chamada), então a âncora não é sinal de
+  // retomada aqui — só um ímã de re-emissão. Ausente ⇒ mantém o caminho ancorado antigo (compat de teste).
+  buildMissingFilesContinuation?: (missing: string[]) => string;
   // Modo Projeto: os caminhos ESPERADOS do blueprint. Enquanto algum não tiver sido emitido como bloco
   // FECHADO, a geração NÃO está completa — mesmo sem cerca aberta e sem o provider sinalizar corte (o
   // gpt-oss às vezes auto-encerra a cauda com arquivos faltando). A continuação NOMEIA os que faltam. (F-02)
@@ -210,6 +224,36 @@ export function missingExpectedFiles(full: string, expected: string[] | undefine
   return expected.filter((p) => !emitted.has(normResilientPath(p)));
 }
 
+// Colapsa blocos com o MESMO path (o modelo às vezes re-emite um arquivo já gerado numa continuação
+// clean-room — não vê o que já escreveu). Sem isto, dois `path=X` no texto virariam dois cartões e o
+// "Aplicar tudo" poderia sobrescrever o arquivo bom com a re-emissão cortada. Regra: prefere o bloco
+// FECHADO ao ABERTO/truncado (senão uma re-emissão cortada porém MAIOR venceria a cópia completa e mais
+// curta — achado da revisão); entre blocos de mesma completude, MAIOR-CONTEÚDO-VENCE (ordem-independente:
+// mantém a cópia completa venha primeiro ou depois). O bloco aberto só pode ser o ÚLTIMO do texto (uma
+// cerca aberta engole o resto), e `openPath` (= completeness.path da cerca-aberta) o identifica — daí o
+// discriminador de completude NÃO cruzar com o `.closed` do parsePartialFileBlocks (que reintroduziria a
+// armadilha #158). Opera sobre parseFileBlocks (AUTORITATIVO — recupera cerca mal-contada via recoverOpen).
+// Preserva a ordem da 1ª ocorrência (a ordem topológica dos cartões).
+export function dedupeFileBlocksByPath(blocks: FileBlock[], openPath?: string): FileBlock[] {
+  const best = new Map<string, { block: FileBlock; open: boolean }>();
+  const order: string[] = [];
+  const openKey = openPath && openPath.length > 0 ? normResilientPath(openPath) : undefined;
+  const lastIdx = blocks.length - 1;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    const key = normResilientPath(b.path);
+    const open = openKey !== undefined && i === lastIdx && key === openKey; // só o último bloco pode estar aberto
+    const prev = best.get(key);
+    if (!prev) {
+      best.set(key, { block: b, open });
+      order.push(key);
+    } else if ((prev.open && !open) || (prev.open === open && b.content.length > prev.block.content.length)) {
+      best.set(key, { block: b, open }); // fechado > aberto; entre iguais, maior-conteúdo-vence
+    }
+  }
+  return order.map((k) => best.get(k)!.block);
+}
+
 // Laço de geração resiliente (puro e testável, sem dependência de vscode): executa uma passagem via
 // `streamFn`, verifica a completude, e enquanto houver TRUNCAMENTO — cerca de arquivo aberta OU o provider
 // tendo sinalizado corte por limite de tokens (res.truncated, cobre o corte ENTRE arquivos numa geração
@@ -223,6 +267,9 @@ export async function resilientGenerate(
 ): Promise<ResilientResult> {
   let full = "";
   let attempt = 0;
+  let noProgress = 0; // rodadas consecutivas SEM progresso real (F-02: quebra o stall da cauda estagnada)
+  let prevMissingCount = Number.POSITIVE_INFINITY; // arquivos do plano faltando na rodada anterior
+  let prevOpenFence = false; // a rodada anterior terminou com um arquivo aberto (cortado no meio)?
   let completeness: CompletenessResult = { complete: true };
   let convo = baseMessages;
   for (;;) {
@@ -242,16 +289,43 @@ export async function resilientGenerate(
     // provider sinalizar corte (o gpt-oss auto-encerra a cauda com arquivos faltando — achado F-02).
     const missing = missingExpectedFiles(full, opts.expectedPaths);
     const incomplete = openFence || res.truncated === true || missing.length > 0;
-    const stalled = attempt > 0 && full.length <= before; // a continuação não avançou → não insista
+    // PROGRESSO real (não só "cresceu"): no Modo Projeto, enquanto AINDA faltam arquivos do plano, o sinal
+    // autoritativo é o conjunto faltante ENCOLHER — ou um arquivo aberto avançar/fechar. Um arquivo do plano
+    // cortado no meio já conta como "emitido" (recoverOpen o recupera assim que tem corpo), então FECHÁ-LO numa
+    // rodada seguinte não muda `missing`; sem creditar essa transição (aberto→fechado) o fechamento seria lido
+    // como rodada morta e queimaria uma folga do stall bem no regime-alvo do F-02. Uma continuação clean-room
+    // às vezes re-emite um arquivo JÁ feito: o texto cresce sem emitir o que falta (progresso FALSO), e "cresceu"
+    // sozinho mascararia o stall. Sem plano (chat)/plano completo, o sinal é o texto crescer. Reseta a cada
+    // progresso; some por STALL_TOLERANCE rodadas seguidas → desiste.
+    const grew = full.length > before;
+    const hasPlan = (opts.expectedPaths?.length ?? 0) > 0;
+    const closedAnOpenFile = prevOpenFence && !openFence && grew; // fechou o arquivo que estava aberto
+    const madeProgress =
+      attempt === 0 ||
+      (hasPlan && missing.length > 0
+        ? missing.length < prevMissingCount || (openFence && grew) || closedAnOpenFile
+        : grew);
+    noProgress = madeProgress ? 0 : noProgress + 1;
+    prevMissingCount = missing.length;
+    prevOpenFence = openFence;
+    const stalled = noProgress >= STALL_TOLERANCE;
     if (!incomplete) return { full, completeness, attempts: attempt, truncated: false };
     if (attempt >= opts.maxContinuations || stalled || opts.aborted?.()) {
       return { full, completeness, attempts: attempt, truncated: true }; // esgotou ainda cortado (ou incompleto)
     }
     attempt++;
     opts.onContinue?.(attempt, completeness.path);
-    const anchor = full.length > opts.anchorChars ? full.slice(-opts.anchorChars) : full;
-    // cerca aberta → continuar o MESMO arquivo; senão → pedir os PRÓXIMOS/faltantes (nomeando-os quando há plano).
-    const instruction = openFence ? opts.buildContinuation(completeness.path) : opts.buildTailContinuation(missing.length ? missing : undefined);
-    convo = [...baseMessages, { role: "assistant", content: anchor }, { role: "user", content: instruction }];
+    if (!openFence && missing.length > 0 && opts.buildMissingFilesContinuation) {
+      // Clean-room (F-02): faltam arquivos do plano e o último bloco NÃO ficou aberto. Pede os faltantes
+      // NOMEADOS como blocos novos e autônomos, SEM a âncora da cauda — ela só convida a re-emissão da cauda
+      // (stitch dedupa → crescimento zero → stall). O plano+propósitos vivem no system prompt (constante).
+      convo = [...baseMessages, { role: "user", content: opts.buildMissingFilesContinuation(missing) }];
+    } else {
+      // cerca aberta → continuar o MESMO arquivo (âncora obrigatória p/ retomar no ponto exato do corte);
+      // corte sem faltantes conhecidos (ex.: chat, missing=[]) → tail genérico, também ancorado.
+      const anchor = full.length > opts.anchorChars ? full.slice(-opts.anchorChars) : full;
+      const instruction = openFence ? opts.buildContinuation(completeness.path) : opts.buildTailContinuation(missing.length ? missing : undefined);
+      convo = [...baseMessages, { role: "assistant", content: anchor }, { role: "user", content: instruction }];
+    }
   }
 }

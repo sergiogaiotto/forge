@@ -619,6 +619,20 @@ export function buildTailContinuation(missing?: string[]): string {
 - ${NO_ELLIPSIS_RULE}`;
 }
 
+// Continuação CLEAN-ROOM (F-02): a resposta anterior AUTO-ENCERROU a cauda com arquivos do PLANO faltando
+// e o último bloco NÃO ficou aberto. Diferente de buildTailContinuation, NÃO há turno de assistant reenviado
+// (sem âncora da cauda) — logo NADA de "continue de onde parou" / "não repita o que já escreveu" (não-acionável
+// e contraproducente aqui, o modelo não vê o próprio output): pedimos os arquivos NOMEADOS como blocos NOVOS e
+// AUTÔNOMOS. O plano + propósitos + deps já estão no system prompt (constante em toda chamada), o que preserva
+// a coerência cross-file. A âncora da cauda só estagnava o laço (re-emissão da cauda → stitch dedupa → stall).
+export function buildMissingFilesContinuation(missing: string[]): string {
+  return `Faltam EXATAMENTE estes arquivos do PLANO — emita TODOS agora, cada um como um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO e AUTÔNOMO, com o \`path=\` correto: ${missing.join(", ")}.
+- Gere o conteúdo INTEIRO de cada arquivo (não um trecho); reuse os nomes/assinaturas/deps já definidos no plano para manter a COERÊNCIA com os arquivos já gerados.
+- Responda APENAS com os blocos de arquivo. NADA de saudação, confirmação ("ok", "vou continuar") nem comentário. O PRIMEIRO caractere já é a cerca de abertura.
+- Emita SOMENTE os arquivos listados acima; não re-emita nenhum outro.
+- ${NO_ELLIPSIS_RULE}`;
+}
+
 // Reparo de protocolo (Onda 3): a resposta anterior MOSTROU o conteúdo de arquivo(s) em cerca comum (três
 // crases), sem o bloco forge-file — então NADA virou uma proposta aplicável (o sintoma do print, em que o
 // dev tinha de copiar/colar). Mensagem de USUÁRIO que pede a REEMISSÃO só como forge-file. Roda numa
