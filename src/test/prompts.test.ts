@@ -81,12 +81,16 @@ test("Modo Projeto Python/FastAPI: requirements.txt, entrypoint uvicorn, Pydanti
   assert.match(p, /__file__/); // caminho de templates robusto ao CWD
   assert.match(p, /TemplateResponse\(request/); // F-01: assinatura ATUAL do Starlette (request como 1º arg)
   assert.match(p, /Mapped\[/); // F-06: SQLAlchemy 2.0 tipado (Mapped[...] = mapped_column)
+  assert.match(p, /HTTPException/); // F-07: exceção de domínio → 4xx, não 500 no caminho infeliz
+  assert.match(p, /WIRING EXCLUSIVO/); // F-08: só o composition root faz o wiring (injeção por parâmetro)
   // o guiado (a partir do blueprint) também carrega framework + UI
   const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "main.py", purpose: "app", deps: [] }], "template-engine", "fastapi");
   assert.match(guided, /uvicorn/);
   assert.match(guided, /Form\(/);
   assert.match(guided, /TemplateResponse\(request/); // F-01
   assert.match(guided, /Mapped\[/); // F-06
+  assert.match(guided, /HTTPException/); // F-07
+  assert.match(guided, /WIRING EXCLUSIVO/); // F-08
 });
 
 test("prompts do projeto propagam o framework (e convivem com a camada de UI)", () => {

@@ -254,7 +254,7 @@ const INTERFACE_MECH: Record<ProjectLanguage, string> = {
 function archetypeLayers(architecture: ProjectArchitecture): string {
   switch (architecture) {
     case "hexagonal":
-      return "Camadas: domain (entidades e regras puras, SEM I/O) · ports (as interfaces que o domínio precisa) · adapters (implementações das ports: banco, http, fila) · application/use_cases (orquestra o domínio via ports) · composition root (wiring no main). Regra de ouro: o domínio NÃO importa adapters; os adapters implementam as ports.";
+      return "Camadas: domain (entidades e regras puras, SEM I/O) · ports (as interfaces que o domínio precisa) · adapters (implementações das ports: banco, http, fila) · application/use_cases (orquestra o domínio via ports) · composition root (wiring no main). Regra de ouro: o domínio NÃO importa adapters; os adapters implementam as ports. WIRING EXCLUSIVO do composition root: cada adapter/use_case recebe suas dependências (a PORT) por PARÂMETRO (injeção) — um adapter NUNCA importa nem instancia OUTRO adapter concreto (ex.: o adapter HTTP NÃO cria o repositório, recebe-o pronto); só o composition root instancia os adapters concretos e injeta. Um composition root vazio ou um adapter que auto-instancia a persistência quebra a arquitetura.";
     case "clean":
       return "Camadas concêntricas: entities · use cases · interface adapters (controllers/presenters/gateways) · frameworks & drivers (web/db). A dependência aponta SEMPRE para dentro (regra da dependência): as camadas internas não conhecem as externas.";
     case "layered":
@@ -312,6 +312,10 @@ export function frameworkInstruction(language: ProjectLanguage, framework: Proje
         "uvicorn.run(app, host=\"127.0.0.1\", port=8000)` para o app subir com `python <modulo>.py`. " +
         "Documente no README o comando exato `uvicorn <caminho.pontilhado.do.modulo>:app --reload`. " +
         "Não registre a MESMA rota (método + caminho) em dois lugares — evite routers duplicados. " +
+        "TRATAMENTO DE ERRO: rotas que chamam use_cases capazes de levantar exceção de domínio (ValueError " +
+        "etc. — ex.: ISBN duplicado, entidade inexistente, regra de negócio violada) DEVEM mapear para 4xx " +
+        "(`raise HTTPException(status_code=400, detail=str(exc))`, ou 404, ou um redirect com mensagem de erro) " +
+        "— NUNCA deixe a exceção propagar, senão o caminho INFELIZ NORMAL do usuário vira HTTP 500 com traceback. " +
         "Se usar SQLAlchemy 2.x na persistência, use o estilo tipado: `class Base(DeclarativeBase): pass` e " +
         "colunas com `Mapped[...]` OBRIGATÓRIO — ex.: `isbn: Mapped[str] = mapped_column(String, primary_key=True)`. " +
         "A forma sem `Mapped` (`isbn: str = mapped_column(...)`) levanta `MappedAnnotationError` no import; NÃO " +
