@@ -114,6 +114,18 @@ test("prompts do projeto propagam a camada de UI escolhida (blueprint, guiado e 
   assert.ok(!buildProjectPrompt("proj", "python", "hexagonal").includes("CAMADA DE UI"));
 });
 
+// F-09/F-12: coerência do README com a estrutura REAL emitida e urlencode em segmento de path nos templates.
+// (F-13 — __init__.py — foi movido para fora do prompt: planejá-los inflava o blueprint e causava truncamento;
+//  deve ser materializado deterministicamente pelo Controller, não pedido ao modelo.)
+test("Modo Projeto: coerência de README (F-09) e urlencode no template (F-12)", () => {
+  const guided = buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "main.py", purpose: "app", deps: [] }], "template-engine", "fastapi");
+  assert.match(guided, /COERÊNCIA DO README/); // F-09: o README reflete os símbolos/arquivos emitidos
+  assert.match(guided, /urlencode/); // F-12: segmento de path no template Jinja
+  assert.match(buildProjectPrompt("proj", "python", "hexagonal", "auto", "auto"), /COERÊNCIA DO README/); // F-09 no modo direto
+  assert.match(uiLayerInstruction("python", "template-engine"), /urlencode/); // F-12 vive no template-engine Python
+  assert.ok(!buildProjectFromBlueprintPrompt("proj", "python", "hexagonal", [{ path: "main.py", purpose: "app", deps: [] }], "template-engine", "fastapi").includes("__init__.py"));
+});
+
 // 2ª tentativa do blueprint: com resposta anterior → CONVERSÃO da própria resposta no array exato;
 // sem resposta (veio vazia) → repete o pedido com o formato reforçado. Sempre exige '[' … ']'.
 test("buildBlueprintRetryRequest: com resposta anterior pede a CONVERSÃO e inclui o texto capado", () => {

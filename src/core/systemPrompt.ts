@@ -29,6 +29,14 @@ const NO_PHANTOM_SYMBOL =
   "de um símbolo, DEFINA-o no arquivo dono ANTES de consumi-lo. Import/atributo fantasma quebra o projeto " +
   "(ImportError/AttributeError) e é reprovado pelo gate de compilação — o arquivo consumidor fica bloqueado.";
 
+// Coerência do README com o projeto REALMENTE emitido (F-09/F-11): o README é gerado junto do código e às
+// vezes descreve um wiring/estrutura ALTERNATIVOS (cita símbolo/arquivo que o código não tem, ex.: "troque
+// X em `y.py`" onde `y.py` não define X). Deve refletir SÓ o que foi emitido.
+const README_COHERENCE =
+  "COERÊNCIA DO README: descreva EXATAMENTE a estrutura e os SÍMBOLOS que você emitiu — os comandos, os " +
+  "caminhos de arquivo e os nomes de módulo/função REAIS deste projeto. NÃO descreva um wiring/estrutura " +
+  "ALTERNATIVOS nem cite arquivos/funções que você NÃO gerou (ex.: 'troque X em `y.py`' onde `y.py` não define X).";
+
 // Contexto opcional do WORKSPACE injetado nos prompts do Modo Projeto: o PROPÓSITO do charter
 // (.forge/project.md) e as dependências FIXADAS (requirements.txt). Sem isso o modelo ignora o charter
 // (sai o exemplo canônico Pedido/Pagamento) e alucina libs/versões — os dois achados da auditoria.
@@ -284,7 +292,7 @@ export function uiLayerInstruction(language: ProjectLanguage, ui: ProjectUI | un
         "código que os renderiza, e resolva o diretório de templates por caminho ABSOLUTO derivado do arquivo " +
         "(em Python: `Path(__file__).resolve().parent / \"templates\"`), nunca relativo ao CWD." +
         (language === "python"
-          ? " Em FastAPI, os campos de um formulário HTML (POST) são lidos com `Form(...)` (requer python-multipart), NÃO como parâmetros de query — declará-los como `str`/`int` puros faz o corpo do formulário ser ignorado. Ao renderizar com `Jinja2Templates`, use a assinatura ATUAL do Starlette com o `request` como PRIMEIRO argumento posicional: `templates.TemplateResponse(request, \"pagina.html\", {\"chave\": valor})`. A forma antiga `TemplateResponse(\"pagina.html\", {\"request\": request, ...})` QUEBRA em runtime nas versões atuais (`TypeError: unhashable type: 'dict'`) — a home nem renderiza."
+          ? " Em FastAPI, os campos de um formulário HTML (POST) são lidos com `Form(...)` (requer python-multipart), NÃO como parâmetros de query — declará-los como `str`/`int` puros faz o corpo do formulário ser ignorado. Ao renderizar com `Jinja2Templates`, use a assinatura ATUAL do Starlette com o `request` como PRIMEIRO argumento posicional: `templates.TemplateResponse(request, \"pagina.html\", {\"chave\": valor})`. A forma antiga `TemplateResponse(\"pagina.html\", {\"request\": request, ...})` QUEBRA em runtime nas versões atuais (`TypeError: unhashable type: 'dict'`) — a home nem renderiza. Ao interpolar um valor num SEGMENTO de path de um link ou form no template (ex.: `action`/`href` como `/livros/{isbn}/emprestar`), passe-o por `|urlencode` (ex.: `{{ isbn|urlencode }}`) — um valor com espaço, `/` ou acento gera um path malformado."
           : "")
       );
     case "spa-react":
@@ -420,7 +428,7 @@ COERÊNCIA entre arquivos: reuse os mesmos nomes/assinaturas (o adaptador implem
 ${INTERFACE_MECH[language]} — que o domínio declara; imports e assinaturas casam). Inclua o manifesto
 (${MANIFEST[language]}). O README.md deve ser COMPLETO: propósito, funcionalidades e uma seção
 \`## Como rodar\` com TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para
-${SETUP_HINT[language]}. ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`
+${SETUP_HINT[language]}. ${README_COHERENCE} ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`
   );
 }
 
@@ -458,7 +466,7 @@ arquitetura ${ARCH_LABEL[architecture]}.${uiLine ? ` ${uiLine}` : ""} Siga à ri
 6. OBRIGATÓRIO: inclua um arquivo \`README.md\` COMPLETO (como um dos blocos forge-file), contendo:
    (a) o PROPÓSITO da aplicação; (b) as FUNCIONALIDADES principais; (c) uma seção \`## Como rodar\` com
    TODOS os comandos, em blocos de shell copiáveis e na ORDEM de execução, para ${SETUP_HINT[language]}.
-   Os comandos devem ser reais e consistentes com o manifesto e a estrutura que você gerou.
+   Os comandos devem ser reais e consistentes com o manifesto e a estrutura que você gerou. ${README_COHERENCE}
 7. Prefira bibliotecas e padrões idiomáticos de ${LANG_LABEL[language]}. ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`
   );
 }
