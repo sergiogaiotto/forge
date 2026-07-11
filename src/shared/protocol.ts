@@ -130,6 +130,7 @@ export interface ProviderView {
   reasoningEffort?: ReasoningEffort;
   supportsReasoningEffort?: boolean; // true só para provedores OpenAI-compatíveis (gpt-oss)
   maxOutput?: number; // teto de saída escolhido por sessão (0/ausente = auto/catálogo)
+  outputLanguage?: "auto" | "pt-BR" | "en"; // idioma de SAÍDA da geração (forge.outputLanguage); seletor no rodapé
 }
 
 export interface LicenseView {
@@ -409,6 +410,7 @@ export type WebviewToExt =
   | { type: "provider/test"; setup: ProviderSetup }
   | { type: "provider/setEffort"; effort: ReasoningEffort }
   | { type: "provider/setMaxOutput"; maxTokens: number }
+  | { type: "provider/setOutputLanguage"; lang: "auto" | "pt-BR" | "en" }
   | { type: "provider/openSettings" }
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }

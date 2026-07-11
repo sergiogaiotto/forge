@@ -3,6 +3,13 @@ import React from "react";
 // Ícones de linha estilo Tabler inline. Empacotados (sem webfont/CDN) conforme RNF-016.
 const PATHS: Record<string, React.ReactNode> = {
   flame: <path d="M12 12c2-2.96 0-7-1-8 0 3.038-1.773 4.741-3 6-1.226 1.26-2 3.24-2 5a6 6 0 1 0 12 0c0-1.532-1.056-3.94-2-5-1.786 3-2.791 3-4 2z" />,
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3.6 9h16.8M3.6 15h16.8" />
+      <path d="M11.5 3a17 17 0 0 0 0 18M12.5 3a17 17 0 0 1 0 18" />
+    </>
+  ),
   "server-bolt": (
     <>
       <path d="M3 9a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3" />

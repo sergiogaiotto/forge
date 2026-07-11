@@ -1439,7 +1439,7 @@ export class Controller {
 
   private providerView(): ProviderView {
     const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
-    if (!p) return { configured: false };
+    if (!p) return { configured: false, outputLanguage: this.config.outputLanguage() };
     const effort = p.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
     const supports = supportsReasoningEffort(p.type, p.modelId);
     return {
@@ -1454,6 +1454,7 @@ export class Controller {
       reasoningEffort: effort,
       supportsReasoningEffort: supports,
       maxOutput: p.maxOutput ?? 0,
+      outputLanguage: this.config.outputLanguage(), // idioma de SAÍDA (seletor no rodapé)
     };
   }
 
@@ -1485,6 +1486,11 @@ export class Controller {
         break;
       case "provider/setMaxOutput":
         await this.setMaxOutput(msg.maxTokens);
+        break;
+      case "provider/setOutputLanguage":
+        // Seletor de idioma de SAÍDA no rodapé. Grava a config; o listener onChange (ctor) já chama
+        // applyOutputLanguage() + postState(), então o setOutputLanguage do systemPrompt reflete na hora.
+        await vscode.workspace.getConfiguration("forge").update("outputLanguage", msg.lang, vscode.ConfigurationTarget.Global);
         break;
       case "provider/openSettings":
         void vscode.commands.executeCommand("workbench.action.openSettings", "forge");

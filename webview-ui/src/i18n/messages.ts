@@ -164,6 +164,9 @@ export type MessageKey =
   | "sb.effort"
   | "sb.maxOutTitle"
   | "sb.maxOut"
+  | "sb.lang"
+  | "sb.langTitle"
+  | "lang.auto"
   | "sb.usageTitle"
   // Ecos da paleta (bolha do usuário)
   | "echo.review"
@@ -496,6 +499,9 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "sb.effort": "esforço: {level}",
     "sb.maxOutTitle": "Máximo de tokens de saída — clique para alternar (auto → 16k → 32k → 64k → 128k). Valores altos são rebaixados automaticamente ao que o gateway serve (sem erro).",
     "sb.maxOut": "saída: {label}",
+    "sb.lang": "saída {lang}",
+    "sb.langTitle": "Idioma de SAÍDA da geração — clique para alternar auto · PT-BR · EN (independe do idioma da UI).",
+    "lang.auto": "auto",
     "sb.usageTitle": "Tokens da sessão — entrada: {sessionIn} · saída: {sessionOut} (última geração: {lastIn}/{lastOut}). Digite /tokens para o detalhe.",
     "echo.review": "Revisar minhas alterações (git diff).",
     "echo.diagramDefault": "arquitetura do projeto",
@@ -816,6 +822,9 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "sb.effort": "effort: {level}",
     "sb.maxOutTitle": "Maximum output tokens — click to cycle (auto → 16k → 32k → 64k → 128k). High values are automatically lowered to what the gateway serves (no error).",
     "sb.maxOut": "output: {label}",
+    "sb.lang": "output {lang}",
+    "sb.langTitle": "Generation OUTPUT language — click to cycle auto · PT-BR · EN (independent of the UI language).",
+    "lang.auto": "auto",
     "sb.usageTitle": "Session tokens — input: {sessionIn} · output: {sessionOut} (last generation: {lastIn}/{lastOut}). Type /tokens for details.",
     "echo.review": "Review my changes (git diff).",
     "echo.diagramDefault": "project architecture",
@@ -1136,6 +1145,9 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "sb.effort": "esfuerzo: {level}",
     "sb.maxOutTitle": "Máximo de tokens de salida — clic para alternar (auto → 16k → 32k → 64k → 128k). Los valores altos se rebajan automáticamente a lo que sirve el gateway (sin error).",
     "sb.maxOut": "salida: {label}",
+    "sb.lang": "salida {lang}",
+    "sb.langTitle": "Idioma de SALIDA de la generación — clic para alternar auto · PT-BR · EN (independiente del idioma de la UI).",
+    "lang.auto": "auto",
     "sb.usageTitle": "Tokens de la sesión — entrada: {sessionIn} · salida: {sessionOut} (última generación: {lastIn}/{lastOut}). Escribe /tokens para el detalle.",
     "echo.review": "Revisar mis cambios (git diff).",
     "echo.diagramDefault": "arquitectura del proyecto",
