@@ -2329,6 +2329,10 @@ export class Controller {
       const securityMode = this.config.securityGate();
       let tscTypeAdvisories: string[] = []; // avisos de TIPO do tsc (advisory) — só TypeScript
       let goBuildAdvisories: string[] = []; // avisos do go build/vet (advisory) — só Go
+      // F-03: o compileall reprovou (erro de SINTAXE no conjunto)? O mypy ABORTA na 1ª falha de sintaxe e
+      // NÃO verifica o contrato cross-file dos DEMAIS arquivos — logo o contrato NÃO pode ser dado como
+      // verificado (senão o drift dos outros arquivos fica mascarado). Só Python (mypy é o checador de contrato).
+      let pySyntaxError = false;
       let py: string | undefined; // interpretador do gate Python (só no ramo Python; usado no security scan)
 
       if (language === "python") {
@@ -2342,6 +2346,7 @@ export class Controller {
         // compileall (stdlib, gate:true): pega erro de SINTAXE em qualquer arquivo do conjunto.
         const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs, outputCap });
         checks.push({ result: compile, errors: parseCompileallErrors(compile.output, root) });
+        pySyntaxError = compile.status === "failed"; // F-03: sintaxe quebrada → mypy aborta (ver contrato abaixo)
 
         // mypy (gate:true quando instalado): pega o DRIFT de contrato (import/atributo fantasma) cross-file.
         // --ignore-missing-imports neutraliza o ruído de deps de terceiros (fastapi/jinja não instalados no
@@ -2478,8 +2483,12 @@ export class Controller {
       // exigir confirmação. NÃO conta se já há bloqueio duro (o dev corrige/força esse primeiro) — a
       // supressão vale SÓ para a semântica de confirmação; a POLÍTICA usa o flag CRU abaixo (senão
       // qualquer outro bloqueio + "Forçar bloqueados" viraria bypass da política).
-      this.gateContractUnverified = requiresContractConfirmation(language, gate.partial) && totalBlocked === 0 && !dodBlocksAll;
-      this.gateContractUnverifiedHard = contractUnverified(language, gate.partial, gate.advisory);
+      // F-03: erro de SINTAXE (compileall reprovou) faz o mypy abortar sem verificar o contrato dos DEMAIS
+      // arquivos — o contrato NÃO está verificado, mesmo com gate.partial=false (que é false porque há
+      // fileErrors do compileall). OR com pySyntaxError para o passo não implicar "contrato verificado".
+      const contractUnverifiedNow = gate.partial || pySyntaxError;
+      this.gateContractUnverified = requiresContractConfirmation(language, contractUnverifiedNow) && totalBlocked === 0 && !dodBlocksAll;
+      this.gateContractUnverifiedHard = contractUnverified(language, contractUnverifiedNow, gate.advisory);
       // contractBlocked: a política do admin transforma a confirmação em bloqueio — a UI troca o botão
       // "Aplicar sem verificar contrato" pelo caminho de verificação real (Preparar ambiente → Re-verificar).
       const contractBlocked = this.gateContractUnverifiedHard && this.config.blockUnverifiedContract();
