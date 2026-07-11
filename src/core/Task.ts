@@ -7,7 +7,7 @@ import { SkillValidatorSpec } from "../skills/types";
 import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
-import { checkCompleteness, CompletenessResult, dedupeFileBlocksByPath, partialFilePath, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, CompletenessResult, dedupeFileBlocksByPath, normResilientPath, partialProposalKeys, resilientGenerate } from "../util/completeness";
 import { closedBlockPaths, parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 import { detectProseFileEdit } from "../util/proseEdits";
@@ -19,6 +19,13 @@ import { buildContinuationPrompt, buildMissingFilesContinuation, buildProtocolRe
 // completude, não custo (decisão de produto), mas com teto rígido + guarda de "stall" (passagem que
 // não avança) para nunca entrar em loop infinito nem custo descontrolado.
 const MAX_CONTINUATIONS = 6;
+// Modo Projeto: teto MAIOR — um plano que trava cedo (openFence spin) gasta até STUCK_FILE_TOLERANCE (5)
+// rodadas no arquivo travado antes de abandoná-lo; a clean-room de SALVAMENTO precisa de rodadas sobrando
+// para emitir os demais arquivos (um plano de ~48 arquivos travado no #2 → ~46 a salvar, ~6 por rodada → ~8
+// rodadas). O teto é só um LIMITE: um projeto saudável fecha em 0-1 continuações (a clean-room só encadeia
+// enquanto o conjunto faltante encolhe; sem o que salvar, trava em STALL_TOLERANCE=2). Distinto do "não suba
+// o cap como remédio do stall" (#165): aqui o orçamento extra financia o SALVAMENTO, não retentativas de stall.
+const PROJECT_MAX_CONTINUATIONS = 14;
 // Ao pedir a continuação, reenviamos apenas a CAUDA do texto acumulado como âncora (não o arquivo
 // inteiro): evita inflar a ENTRADA a cada rodada e estourar a janela do servidor (HTTP 400). A cauda
 // dá contexto de sobra para o modelo continuar, e o stitch (teto 400) dedupa a sobreposição.
@@ -164,6 +171,10 @@ export class Task {
     // P3: cada chamada ao provedor vira um span. A PRIMEIRA é a geração principal ("stream"); as seguintes
     // são continuações ("continuation") disparadas por truncamento. durationMs por chamada — onde o tempo vai.
     let streamCall = 0;
+    // Modo Projeto (expectedPaths presente) usa o teto MAIOR: financia a clean-room de salvamento quando o
+    // modelo trava num arquivo (openFence spin). Chat/TDD mantêm o teto padrão.
+    const isProject = (d.expectedPaths?.length ?? 0) > 0;
+    const maxContinuations = isProject ? PROJECT_MAX_CONTINUATIONS : MAX_CONTINUATIONS;
     const gen = await resilientGenerate(
       d.messages,
       async (msgs) => {
@@ -176,7 +187,7 @@ export class Task {
         }
       },
       {
-      maxContinuations: MAX_CONTINUATIONS,
+      maxContinuations,
       anchorChars: CONTINUATION_ANCHOR_CHARS,
       buildContinuation: buildContinuationPrompt,
       buildTailContinuation,
@@ -185,7 +196,7 @@ export class Task {
       buildMissingFilesContinuation,
       expectedPaths: d.expectedPaths,
       onContinue: (attempt, path) =>
-        d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o restante"} (continuação ${attempt}/${MAX_CONTINUATIONS})…` }),
+        d.post({ type: "stream/notice", taskId: d.taskId, level: "info", message: `Completando ${path ?? "o restante"} (continuação ${attempt}/${maxContinuations})…` }),
       aborted: () => this.controller.signal.aborted,
     });
     const usage = { inputTokens, outputTokens };
@@ -212,6 +223,18 @@ export class Task {
         message: `A geração pode estar incompleta ${alvo} após ${gen.attempts} continuações. Peça para continuar ou regenerar.`,
       });
     }
+    // openFence spin: arquivos que o modelo travou fechando — o laço abandonou-os e SALVOU o resto do plano.
+    // Aviso INDEPENDENTE do wasTruncated (no salvamento truncated=false): o dev precisa saber que esse(s)
+    // arquivo(s) saíram PARCIAIS (marcados abaixo → pulados no "Aplicar tudo"), mas os demais foram gerados.
+    const abandoned = gen.abandonedPaths ?? [];
+    if (abandoned.length > 0) {
+      d.post({
+        type: "stream/notice",
+        taskId: d.taskId,
+        level: "warn",
+        message: `${abandoned.join(", ")} ficou incompleto (o modelo travou fechando-o) — salvo como PARCIAL; os demais arquivos do plano foram gerados. Peça para continuar/regenerar esse arquivo.`,
+      });
+    }
 
     // Faz o parse das edições de arquivo propostas e transforma cada uma em um diff revisável. Deduplica
     // por path: uma continuação clean-room (F-02) pode re-emitir um arquivo já feito — sem dedup viraria
@@ -220,13 +243,13 @@ export class Task {
     // seja maior); o bloco aberto só pode ser o último do texto.
     const openPath = !completeness.complete && completeness.reason === "cerca-aberta" ? completeness.path : undefined;
     const blocks = dedupeFileBlocksByPath(parseFileBlocks(full), openPath);
-    // Qual proposta marcar como parcial. Só há parcial quando um arquivo ficou REALMENTE incompleto
-    // (cerca aberta/elipse). Se o corte foi só ENTRE arquivos (todos fecharam; provider cortou por
-    // tokens), nenhum bloco completo é rebaixado — corrige o "Aplicar tudo" pulando o README completo.
-    const partialPath = partialFilePath(wasTruncated, completeness, full);
+    // Quais propostas marcar como parciais: o arquivo cortado (último bloco aberto) MAIS os ABANDONADOS do
+    // openFence spin — estes últimos NÃO são pegos pelo partialFilePath (ficam no MEIO do texto, lidos como
+    // "fechados") e no salvamento truncated=false; sem marcá-los, o cortado seria aplicado como completo.
+    const partialKeys = partialProposalKeys(wasTruncated, completeness, full, gen.abandonedPaths);
     for (const block of blocks) {
       const proposal = await this.makeProposal(block.path, block.content);
-      if (partialPath && block.path === partialPath) proposal.partial = true;
+      if (partialKeys.has(normResilientPath(block.path))) proposal.partial = true;
       this.proposals.set(proposal.id, { proposal, results: [], gateOk: true });
       d.post({ type: "stream/proposal", taskId: d.taskId, proposal });
       d.emit?.({ type: "proposal.created", filePath: proposal.filePath, change: proposal.original ? "edição" : "novo", language: proposal.language });
