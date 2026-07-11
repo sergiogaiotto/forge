@@ -30,6 +30,11 @@ import { DEFAULT_REASONING_EFFORT, effectiveTimeoutSeconds, MAX_OUTPUT_PRESETS, 
 // módulo-nível: os módulos avaliam ANTES do initLocale() do main.tsx e o texto congelaria em pt-BR.
 const EFFORT_KEY: Record<ReasoningEffort, MessageKey> = { low: "effort.low", medium: "effort.medium", high: "effort.high" };
 const effortLabel = (e: ReasoningEffort): string => t(EFFORT_KEY[e]);
+// Idioma de SAÍDA da geração (forge.outputLanguage). Ciclo no rodapé: auto → pt-BR → en. "auto" segue o
+// locale da UI; os rótulos pt-BR/en são nomes próprios (idênticos em todos os locales), só "auto" é chave.
+type OutputLang = "auto" | "pt-BR" | "en";
+const OUTPUT_LANGS: OutputLang[] = ["auto", "pt-BR", "en"];
+const outputLangLabel = (l: OutputLang): string => (l === "auto" ? t("lang.auto") : l === "pt-BR" ? "PT-BR" : "EN");
 // Nomes próprios (Python/TypeScript/Java/Go) — idênticos em todos os locales, sem chave.
 const PROJ_LANG_LABEL: Record<ProjectLanguage, string> = { python: "Python", typescript: "TypeScript", java: "Java", go: "Go" };
 const PROJ_ARCH_KEY: Record<ProjectArchitecture, MessageKey> = {
@@ -924,6 +929,17 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
             <Icon name="activity" size={13} /> {t("sb.maxOut", { label: maxOutputLabel(forge.provider.maxOutput) })}
           </button>
         )}
+        <button
+          className="sb-item sb-btn"
+          title={t("sb.langTitle")}
+          onClick={() => {
+            const cur = (forge.provider.outputLanguage ?? "auto") as OutputLang;
+            const next = OUTPUT_LANGS[(OUTPUT_LANGS.indexOf(cur) + 1) % OUTPUT_LANGS.length];
+            post({ type: "provider/setOutputLanguage", lang: next });
+          }}
+        >
+          <Icon name="globe" size={13} /> {t("sb.lang", { lang: outputLangLabel((forge.provider.outputLanguage ?? "auto") as OutputLang) })}
+        </button>
         <div className="sb-item" style={{ color: "#9a9a9a" }}>
           timeout {forge.provider.timeoutSeconds ?? effectiveTimeoutSeconds(forge.provider.reasoningEffort)}s
         </div>
