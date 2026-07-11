@@ -3519,7 +3519,9 @@ export class Controller {
         })
         .join("\n\n");
       parts.push(`Notebook aberto: ${rel} (${nb.cellCount} células; use op=replace index=N ou op=add after=N):\n${cells}`);
-      return parts.join("\n\n");
+      // Redação antes do egress: o contexto (chunks de RAG, células) vai ao gateway (possivelmente externo)
+      // e o dev não escolheu anexá-lo — mascara segredos (chaves/tokens/senhas) que estejam nesses trechos.
+      return redactSecrets(parts.join("\n\n"));
     }
 
     const editor = vscode.window.activeTextEditor;
@@ -3530,7 +3532,9 @@ export class Controller {
       const clipped = text.length > 5000 ? text.slice(0, 5000) + "\n# … (truncado)" : text;
       parts.push(`Arquivo aberto: ${rel}\n\`\`\`\n${clipped}\n\`\`\``);
     }
-    return parts.join("\n\n");
+    // Redação antes do egress (ver acima): mascara segredos nos trechos de RAG / arquivo do editor ativo
+    // antes de o contexto ir ao gateway. O dev não escolheu anexá-los; a máscara é a mesma do preview de RAG.
+    return redactSecrets(parts.join("\n\n"));
   }
 
   // ---- anexos de contexto (workspace / upload / seleção) ---------------------
