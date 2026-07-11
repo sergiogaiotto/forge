@@ -54,6 +54,51 @@ test("resilientGenerate: corte persistente marca truncated=true (não entrega pr
   assert.equal(r.truncated, true, "corte por limite sinalizado pelo provider → aviso honesto");
 });
 
+// F-02: no Modo Projeto a completude é medida pelos ARQUIVOS DO PLANO, não só pela cauda "parecer" fechada.
+// O gpt-oss às vezes auto-encerra (finish_reason=stop, blocos fechados, sem sinal de corte) com arquivos
+// faltando — o laço tem que continuar, NOMEANDO os que faltam.
+test("resilientGenerate: expectedPaths — continua até TODOS os arquivos do plano saírem, sem sinal de corte (F-02)", async () => {
+  const s = scripted([
+    // 1ª: emite a.py e b.py FECHADOS e SEM truncated (auto-encerrou faltando c.py)
+    { text: FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n" + FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" },
+    { text: FENCE + "forge-file path=c.py\nz = 3\n" + FENCE + "\n" }, // o arquivo que faltava
+  ]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "c.py"],
+    buildTailContinuation: (missing?: string[]) => `faltam: ${(missing ?? []).join(", ")}`,
+  });
+  assert.equal(r.attempts, 1, "continua mesmo sem cerca aberta e sem truncated, pois falta arquivo do plano");
+  assert.equal(r.truncated, false);
+  assert.match(r.full, /path=c\.py/, "o arquivo faltante entrou na continuação");
+  const contMsg = s.captured[1]?.at(-1)?.content ?? ""; // a instrução de continuação é a ÚLTIMA mensagem
+  assert.match(contMsg, /c\.py/, "a continuação NOMEIA o arquivo faltante do plano");
+  assert.ok(!/a\.py|b\.py/.test(contMsg), "não re-pede os que já saíram");
+});
+
+test("resilientGenerate: expectedPaths — arquivo do plano que nunca sai marca truncated=true (F-02)", async () => {
+  const s = scripted([{ text: FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n" }]); // b.py nunca vem
+  const r = await resilientGenerate(base, s.fn, { ...opts, expectedPaths: ["a.py", "b.py"] });
+  assert.equal(r.truncated, true, "arquivo do plano ausente após stall/esgotar continuações → aviso honesto");
+});
+
+// Achado da revisão adversarial do F-02: a completude por-arquivo tem que usar o parser AUTORITATIVO
+// (parseFileBlocks, que RECUPERA um bloco com cerca mal-contada), não closedBlockPaths (fechamento exato).
+test("resilientGenerate: expectedPaths — arquivo FECHADO com nº de crases errado NÃO vira falso-faltante", async () => {
+  const FENCE3 = "```"; // 3 crases: slip comum (abriu com 4, fecha com 3) — recoverOpen ainda o recupera
+  const s = scripted([{ text: FENCE + "forge-file path=a.py\nx = 1\n" + FENCE3 + "\n" }]);
+  const r = await resilientGenerate(base, s.fn, { ...opts, expectedPaths: ["a.py"] });
+  assert.equal(r.attempts, 0, "o arquivo foi recuperado pelo parser → não dispara continuação espúria");
+  assert.equal(r.truncated, false);
+});
+
+test("resilientGenerate: expectedPaths — casa o path do plano case-insensitively (README.md vs readme.md)", async () => {
+  const s = scripted([{ text: FENCE + "forge-file path=readme.md\n# Doc\n" + FENCE + "\n" }]);
+  const r = await resilientGenerate(base, s.fn, { ...opts, expectedPaths: ["README.md"] });
+  assert.equal(r.attempts, 0, "caixa diferente não vira falso-faltante (não queima continuações)");
+  assert.equal(r.truncated, false);
+});
+
 test("resilientGenerate: reenvia só a CAUDA (âncora), não o texto inteiro", async () => {
   const big = "x".repeat(20000);
   const s = scripted([{ text: FENCE + "forge-file path=c.py\n" + big }, { text: "\nfim\n" + FENCE + "\n" }]);

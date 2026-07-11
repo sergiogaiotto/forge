@@ -2088,6 +2088,9 @@ export class Controller {
       // em vez de tudo em lote no fim. A reconciliação final (complete/failed) segue autoritativa.
       onFileClosed:
         mode === "project" && this.projectSession ? (filePath) => this.markProjectFileComplete(filePath) : undefined,
+      // F-02: a geração resiliente continua (nomeando os que faltam) até TODOS os arquivos do blueprint
+      // saírem — não só até a cauda "parecer" fechada (o gpt-oss auto-encerra a cauda com arquivos faltando).
+      expectedPaths: mode === "project" && project?.files?.length ? project.files.map((f) => f.path) : undefined,
     });
     this.currentTask = task;
     // Nova geração substitui as propostas — o veredito de contrato do fluxo ANTERIOR não pode vazar
