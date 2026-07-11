@@ -101,6 +101,7 @@ import { charterProbablyCut } from "../util/charterCut";
 import { classifyProjectIntent } from "../util/projectIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
+import { extractReferencedPaths } from "../util/errorRefs";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, PURPOSE_SECTION, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
@@ -1996,6 +1997,14 @@ export class Controller {
       this.pendingAttachments = [];
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
+    // Auto-leitura: se o input cita arquivos do workspace num erro/traceback, o HOST os lê e injeta no
+    // contexto. O provider NÃO recebe tools, então sem isto o modelo PEDE o arquivo ao dev ("cole o
+    // conteúdo de X") em vez de corrigir sozinho — apesar de o workspace estar à mão. Ver autoReadReferencedFiles.
+    const autoRead = await this.autoReadReferencedFiles(text);
+    if (autoRead.block) {
+      retrievedContext = `${autoRead.block}\n\n${retrievedContext}`;
+      this.post({ type: "notice", level: "info", message: hostT("notice.autoread", { files: autoRead.files.join(", ") }) });
+    }
     const ragMs = Date.now() - ragStart; // P3: span da recuperação de contexto (RAG + anexos)
     // Contexto do projeto (charter + deps fixadas) reforçado no prompt de GERAÇÃO, junto da lista de
     // arquivos — mesmo já indo via projectProfile, hammerar propósito/deps aqui reduz o drift (a auditoria
@@ -3592,6 +3601,53 @@ export class Controller {
       ...files.sort().map((p) => ({ path: p, kind: "file" as const })),
     ];
     this.post({ type: "context/workspaceFiles", items });
+  }
+
+  // Auto-leitura de arquivos citados num erro/traceback/log colado. O provider NÃO recebe tools, então o
+  // modelo não consegue LER um arquivo sozinho — sem isto ele pede ao dev "cole o conteúdo de X" em vez de
+  // corrigir, apesar de o workspace estar à mão. Aqui o HOST extrai os caminhos do erro (extractReferencedPaths),
+  // lê os que estão CONTIDOS no workspace (safeWorkspacePath descarta stdlib/externos e `..`) e devolve um bloco
+  // de contexto pronto, com teto de arquivos/bytes. Best-effort: nada citado / nada no workspace → bloco vazio.
+  private async autoReadReferencedFiles(text: string): Promise<{ block: string; files: string[] }> {
+    const ws = this.workspaceRoot();
+    if (!ws) return { block: "", files: [] };
+    const MAX_FILES = 6;
+    const MAX_ONE = 100_000; // bytes por arquivo
+    const MAX_TOTAL = 200_000; // bytes somados
+    const read: { rel: string; content: string; abs: string }[] = [];
+    let total = 0;
+    for (const cand of extractReferencedPaths(text)) {
+      if (read.length >= MAX_FILES) break;
+      const abs = safeWorkspacePath(ws, cand); // null p/ stdlib/externo/`..` (contenção de STRING)
+      if (!abs) continue;
+      // Symlink escape (achado da revisão): safeWorkspacePath só contém a STRING; um symlink DENTRO do
+      // workspace apontando pra FORA (ex.: config.py -> ~/.ssh/id_rsa) passaria e o fs SEGUIRIA o link.
+      // Resolve o caminho REAL e re-contém no workspace; alvo fora → recusa.
+      let real: string;
+      try {
+        real = await fs.realpath(abs);
+      } catch {
+        continue; // não existe / link quebrado
+      }
+      if (!safeWorkspacePath(ws, path.relative(ws, real)) || read.some((r) => r.abs === real)) continue;
+      try {
+        const st = await fs.stat(real);
+        if (!st.isFile() || st.size === 0 || st.size > MAX_ONE || total + st.size > MAX_TOTAL) continue;
+        // Redação (achado da revisão): o conteúdo vai ao gateway e o dev NÃO escolheu anexar este arquivo
+        // (foi lido só por aparecer no erro) — mascara segredos (chaves/tokens/senhas) antes de injetar.
+        const content = redactSecrets(await fs.readFile(real, "utf8"));
+        read.push({ rel: path.relative(ws, real).replace(/\\/g, "/"), content, abs: real });
+        total += Buffer.byteLength(content);
+      } catch {
+        /* sem permissão / binário → ignora */
+      }
+    }
+    if (read.length === 0) return { block: "", files: [] };
+    const block =
+      "CONTEÚDO ATUAL dos arquivos citados no erro/traceback (lido do WORKSPACE — corrija com base NISTO e " +
+      "emita o forge-file; NÃO peça ao usuário para colar estes arquivos):\n\n" +
+      read.map((f) => `===== ${f.rel} =====\n${f.content}`).join("\n\n");
+    return { block, files: read.map((f) => f.rel) };
   }
 
   // Menção "@": anexa por caminho. Arquivo → o CONTEÚDO (como o pickWorkspaceFile). Pasta → uma LISTAGEM leve
