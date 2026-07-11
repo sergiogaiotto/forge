@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatMessage } from "../api/types";
-import { checkCompleteness, dedupeFileBlocksByPath, partialFilePath, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, dedupeFileBlocksByPath, partialFilePath, partialProposalKeys, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 
 const FENCE = "````"; // 4 crases (FORGE_FENCE)
@@ -353,6 +353,26 @@ test("resilientGenerate: spin que ESTAGNA (não cresce) antes de K abandona e sa
   assert.equal(r.truncated, false, "o stall com arquivo travado + outros faltantes SALVA em vez de desistir");
   assert.deepEqual(r.abandonedPaths, ["README.md"]);
   assert.match(r.full, /path=b\.py/);
+});
+
+// Integridade (achado da revisão): um arquivo travado SEM corpo recuperável (só cabeçalho) NÃO é abandonado —
+// continua em `missing` e é re-emitido do ZERO pela clean-room (completo). Marcá-lo parcial gravaria um
+// arquivo completo como parcial. Sem este teste, um mutante "sempre abandona" (dropar o `bodied &&`) passaria.
+test("resilientGenerate: arquivo travado SEM corpo (só cabeçalho) NÃO é abandonado — clean-room o re-emite completo", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const readmeHeaderOnly = FENCE + "forge-file path=README.md\n"; // ABERTO, cabeçalho SEM corpo (recoverOpen → null)
+  const readmeFull = FENCE + "forge-file path=README.md\n# Doc completo\nconteudo\n" + FENCE + "\n";
+  const bClosed = FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n";
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + readmeHeaderOnly };
+    if (hasAnchor) return { text: "" }; // spin vazio → stall (o cabeçalho nunca ganha corpo)
+    return { text: readmeFull + bClosed }; // clean-room re-emite o README COMPLETO + b.py
+  });
+  const r = await resilientGenerate(base, m.fn, spinOpts({ expectedPaths: ["a.py", "README.md", "b.py"] }));
+  assert.ok(!r.abandonedPaths || r.abandonedPaths.length === 0, "sem corpo → fica em missing → re-emitido do zero, NÃO abandonado");
+  assert.match(r.full, /# Doc completo/, "clean-room re-emitiu o README COMPLETO");
+  assert.ok(!partialProposalKeys(r.truncated, r.completeness, r.full, r.abandonedPaths).has("readme.md"), "README completo NÃO é marcado parcial");
 });
 
 test("resilientGenerate: arquivo travado SEM \\n final — a injeção faz o próximo arquivo parsear após o salvamento", async () => {

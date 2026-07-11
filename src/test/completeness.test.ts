@@ -3,8 +3,11 @@ import { test } from "node:test";
 import {
   checkCompleteness,
   dedupeFileBlocksByPath,
+  MAX_CONTINUATIONS,
   missingExpectedFiles,
   partialProposalKeys,
+  pickMaxContinuations,
+  PROJECT_MAX_CONTINUATIONS,
   sanitizeContinuation,
   stitchContinuation,
 } from "../util/completeness";
@@ -190,4 +193,13 @@ test("partialProposalKeys: o ABANDONADO (salvage, truncated=false) é parcial; o
   const openTail = F + "forge-file path=a.py\nx = 1\n" + F + "\n" + F + "forge-file path=b.py\ndef f():\n    x = ";
   const keys2 = partialProposalKeys(true, { complete: false, reason: "cerca-aberta", path: "b.py" }, openTail, ["z.py"]);
   assert.ok(keys2.has("b.py") && keys2.has("z.py"), "une o cortado-no-fim (partialFilePath) com o abandonado");
+});
+
+// Modo Projeto usa o teto MAIOR de continuação (financia a clean-room de salvamento no openFence spin);
+// chat/TDD (sem plano) usam o padrão. Puro/testável — o Task puxa vscode e não é importável em teste.
+test("pickMaxContinuations: Modo Projeto (com plano) usa o teto maior; sem plano usa o padrão", () => {
+  assert.equal(pickMaxContinuations(undefined), MAX_CONTINUATIONS, "sem expectedPaths → teto padrão");
+  assert.equal(pickMaxContinuations([]), MAX_CONTINUATIONS, "plano vazio → teto padrão");
+  assert.equal(pickMaxContinuations(["a.py"]), PROJECT_MAX_CONTINUATIONS, "com plano → teto de projeto");
+  assert.ok(PROJECT_MAX_CONTINUATIONS > MAX_CONTINUATIONS, "o teto de projeto é MAIOR (financia o salvamento)");
 });

@@ -7,7 +7,7 @@ import { SkillValidatorSpec } from "../skills/types";
 import { ObsEvent } from "../obs/types";
 import { DiffProposal, ExtToWebview, ValidatorResult } from "../shared/protocol";
 import { parseCellBlocks, parseNotebookCells } from "../util/cellBlocks";
-import { checkCompleteness, CompletenessResult, dedupeFileBlocksByPath, normResilientPath, partialProposalKeys, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, CompletenessResult, dedupeFileBlocksByPath, normResilientPath, partialProposalKeys, pickMaxContinuations, resilientGenerate } from "../util/completeness";
 import { closedBlockPaths, parseFileBlocks } from "../util/fileBlocks";
 import { log } from "../util/logger";
 import { detectProseFileEdit } from "../util/proseEdits";
@@ -15,17 +15,9 @@ import { safeWorkspacePath } from "../util/safePath";
 import { estimateTokens } from "../util/tokenEstimate";
 import { buildContinuationPrompt, buildMissingFilesContinuation, buildProtocolReemitPrompt, buildTailContinuation } from "./systemPrompt";
 
-// Máximo de re-pedidos de continuação quando um arquivo é cortado (cerca aberta). Prioridade é
-// completude, não custo (decisão de produto), mas com teto rígido + guarda de "stall" (passagem que
-// não avança) para nunca entrar em loop infinito nem custo descontrolado.
-const MAX_CONTINUATIONS = 6;
-// Modo Projeto: teto MAIOR — um plano que trava cedo (openFence spin) gasta até STUCK_FILE_TOLERANCE (5)
-// rodadas no arquivo travado antes de abandoná-lo; a clean-room de SALVAMENTO precisa de rodadas sobrando
-// para emitir os demais arquivos (um plano de ~48 arquivos travado no #2 → ~46 a salvar, ~6 por rodada → ~8
-// rodadas). O teto é só um LIMITE: um projeto saudável fecha em 0-1 continuações (a clean-room só encadeia
-// enquanto o conjunto faltante encolhe; sem o que salvar, trava em STALL_TOLERANCE=2). Distinto do "não suba
-// o cap como remédio do stall" (#165): aqui o orçamento extra financia o SALVAMENTO, não retentativas de stall.
-const PROJECT_MAX_CONTINUATIONS = 14;
+// Teto de continuação (MAX_CONTINUATIONS/PROJECT_MAX_CONTINUATIONS) e a seleção por modo vivem em
+// completeness.ts (co-locados com o motor resiliente + testáveis; o Task puxa vscode e não é importável em
+// teste). Modo Projeto usa o teto MAIOR para financiar o salvamento da clean-room no openFence spin.
 // Ao pedir a continuação, reenviamos apenas a CAUDA do texto acumulado como âncora (não o arquivo
 // inteiro): evita inflar a ENTRADA a cada rodada e estourar a janela do servidor (HTTP 400). A cauda
 // dá contexto de sobra para o modelo continuar, e o stitch (teto 400) dedupa a sobreposição.
@@ -172,9 +164,8 @@ export class Task {
     // são continuações ("continuation") disparadas por truncamento. durationMs por chamada — onde o tempo vai.
     let streamCall = 0;
     // Modo Projeto (expectedPaths presente) usa o teto MAIOR: financia a clean-room de salvamento quando o
-    // modelo trava num arquivo (openFence spin). Chat/TDD mantêm o teto padrão.
-    const isProject = (d.expectedPaths?.length ?? 0) > 0;
-    const maxContinuations = isProject ? PROJECT_MAX_CONTINUATIONS : MAX_CONTINUATIONS;
+    // modelo trava num arquivo (openFence spin). Chat/TDD mantêm o teto padrão. (pickMaxContinuations é puro/testável.)
+    const maxContinuations = pickMaxContinuations(d.expectedPaths);
     const gen = await resilientGenerate(
       d.messages,
       async (msgs) => {

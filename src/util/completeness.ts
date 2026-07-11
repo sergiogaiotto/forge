@@ -44,6 +44,15 @@ const STALL_TOLERANCE = 2;
 // fecha há K rodadas" distingue.)
 const STUCK_FILE_TOLERANCE = 5; // continuações seguidas presas no mesmo arquivo aberto → abandona e salva o resto
 
+// Teto de continuações da geração resiliente. Modo Projeto (há plano/expectedPaths) usa o teto MAIOR para
+// FINANCIAR o salvamento da clean-room quando o modelo trava num arquivo (openFence spin); chat/TDD usam o
+// padrão. Exportados/puros para serem testáveis — o Task NÃO é importável em teste (puxa vscode via logger).
+export const MAX_CONTINUATIONS = 6;
+export const PROJECT_MAX_CONTINUATIONS = 14;
+export function pickMaxContinuations(expectedPaths: string[] | undefined): number {
+  return (expectedPaths?.length ?? 0) > 0 ? PROJECT_MAX_CONTINUATIONS : MAX_CONTINUATIONS;
+}
+
 export type IncompleteReason = "cerca-aberta" | "elipse";
 
 export interface CompletenessResult {
