@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatMessage } from "../api/types";
-import { checkCompleteness, partialFilePath, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, dedupeFileBlocksByPath, partialFilePath, resilientGenerate } from "../util/completeness";
+import { parseFileBlocks } from "../util/fileBlocks";
 
 const FENCE = "````"; // 4 crases (FORGE_FENCE)
 const base: ChatMessage[] = [{ role: "user", content: "gere o arquivo" }];
@@ -22,6 +23,18 @@ function scripted(scripts: { text: string; truncated?: boolean }[]) {
     return { text: s.text, truncated: s.truncated };
   };
   return { fn, captured, calls: () => i };
+}
+
+// streamFn CIENTE DAS MENSAGENS: decide a resposta pela conversa recebida (não por índice). O mock por
+// índice IGNORA as mensagens, então NÃO consegue distinguir uma continuação clean-room (que muda a
+// conversa) de um no-op — é o único jeito de PROVAR que a continuação F-02 realmente destrava a cauda.
+function messageAware(handler: (msgs: ChatMessage[]) => { text: string; truncated?: boolean }) {
+  const captured: ChatMessage[][] = [];
+  const fn = async (messages: ChatMessage[]) => {
+    captured.push(messages);
+    return handler(messages);
+  };
+  return { fn, captured };
 }
 
 test("resilientGenerate: cerca aberta na 1ª, fecha na 2ª → 1 continuação, completo", async () => {
@@ -97,6 +110,184 @@ test("resilientGenerate: expectedPaths — casa o path do plano case-insensitive
   const r = await resilientGenerate(base, s.fn, { ...opts, expectedPaths: ["README.md"] });
   assert.equal(r.attempts, 0, "caixa diferente não vira falso-faltante (não queima continuações)");
   assert.equal(r.truncated, false);
+});
+
+// ---- F-02 (resíduo): continuação CLEAN-ROOM + guarda de stall por PROGRESSO (não por crescimento) --------
+
+const AB_CLOSED =
+  FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n" + FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n";
+
+test("resilientGenerate: clean-room — continuação dos faltantes SEM âncora, nomeia só o que falta e AVANÇA (F-02)", async () => {
+  const tail =
+    FENCE + "forge-file path=README.md\n# Doc\n" + FENCE + "\n" + FENCE + "forge-file path=tests/test_x.py\nassert True\n" + FENCE + "\n";
+  // só emite a cauda quando a instrução NOMEIA os faltantes → prova que a continuação clean-room a destravou
+  const m = messageAware((msgs) => (/README\.md/.test(msgs.at(-1)?.content ?? "") ? { text: tail } : { text: AB_CLOSED }));
+  const r = await resilientGenerate(base, m.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "README.md", "tests/test_x.py"],
+    buildMissingFilesContinuation: (missing) => `emita EXATAMENTE: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, false);
+  assert.ok(r.attempts >= 1);
+  assert.match(r.full, /path=README\.md/);
+  assert.match(r.full, /path=tests\/test_x\.py/);
+  const cont = m.captured[1];
+  assert.ok(!cont.some((msg) => msg.role === "assistant"), "clean-room: NÃO reenvia âncora de assistant");
+  const instr = cont.at(-1)?.content ?? "";
+  assert.match(instr, /README\.md/);
+  assert.match(instr, /tests\/test_x\.py/);
+  assert.ok(!/\ba\.py\b|\bb\.py\b/.test(instr), "não re-pede os que já saíram");
+});
+
+test("resilientGenerate: clean-room emite arquivo que TRUNCA → próxima rodada REANCORA e fecha (F-02 handoff)", async () => {
+  const readmeOpen = FENCE + "forge-file path=README.md\n# Projeto\nlinha cortada no me"; // cerca aberta
+  const readmeClose = "io\nfim.\n" + FENCE + "\n";
+  const m = messageAware((msgs) => {
+    const last = msgs.at(-1)?.content ?? "";
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (/README\.md/.test(last) && !hasAnchor) return { text: readmeOpen }; // rodada clean-room
+    if (hasAnchor) return { text: readmeClose }; // rodada ancorada fecha o README
+    return { text: AB_CLOSED };
+  });
+  const r = await resilientGenerate(base, m.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "README.md"],
+    buildContinuation: (p?: string) => `continue ${p ?? ""}`,
+    buildMissingFilesContinuation: (missing) => `emita: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, false);
+  assert.equal(r.completeness.complete, true);
+  assert.match(r.full, /# Projeto/);
+  assert.match(r.full, /fim\./);
+  assert.ok(!m.captured[1].some((x) => x.role === "assistant"), "rodada clean-room: sem âncora");
+  assert.ok(m.captured[2].some((x) => x.role === "assistant"), "rodada de fechamento: reancorada");
+  assert.match(m.captured[2].at(-1)?.content ?? "", /continue README\.md/);
+});
+
+test("resilientGenerate: cerca aberta + faltam arquivos MANTÉM a âncora e usa buildContinuation (gating clean-room)", async () => {
+  const s = scripted([
+    { text: FENCE + "forge-file path=a.py\ndef f():\n    x = 1" }, // cortado no meio de a.py (cerca aberta)
+    { text: "\n    return x\n" + FENCE + "\n" + FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" },
+  ]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py"],
+    buildContinuation: (p?: string) => `continue ${p ?? ""}`,
+    buildMissingFilesContinuation: (missing) => `NAO_USAR: ${missing.join(", ")}`,
+  });
+  const cont = s.captured[1];
+  assert.ok(cont.some((msg) => msg.role === "assistant"), "cerca aberta preserva a âncora");
+  const instr = cont.at(-1)?.content ?? "";
+  assert.match(instr, /continue a\.py/, "usa buildContinuation, não a clean-room");
+  assert.ok(!/NAO_USAR/.test(instr), "clean-room NÃO dispara com cerca aberta (mesmo faltando arquivo)");
+});
+
+test("resilientGenerate: chat (sem expectedPaths) truncado MANTÉM a âncora e NÃO entra em clean-room (F-02)", async () => {
+  const s = scripted([
+    { text: FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n", truncated: true },
+    { text: FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" },
+  ]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    buildMissingFilesContinuation: (missing) => `NAO_USAR: ${missing.join(", ")}`, // presente, mas sem plano não dispara
+  });
+  const cont = s.captured[1];
+  assert.ok(cont.some((msg) => msg.role === "assistant"), "chat: âncora preservada");
+  assert.ok(!/NAO_USAR/.test(cont.at(-1)?.content ?? ""), "clean-room não dispara sem expectedPaths");
+  assert.match(r.full, /path=b\.py/);
+});
+
+test("resilientGenerate: tolera UMA rodada morta e depois avança (F-02 stall tolerante)", async () => {
+  const s = scripted([
+    { text: AB_CLOSED },
+    { text: "" }, // rodada morta (modelo não emitiu nada)
+    { text: FENCE + "forge-file path=c.py\nz = 3\n" + FENCE + "\n" },
+  ]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "c.py"],
+    buildMissingFilesContinuation: (missing) => `faltam: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, false);
+  assert.equal(r.attempts, 2, "1 rodada morta tolerada; avança na seguinte (antes desistia no 1º stall)");
+  assert.match(r.full, /path=c\.py/);
+});
+
+test("resilientGenerate: DUAS rodadas mortas seguidas → desiste, truncated e attempts limitado (F-02)", async () => {
+  const s = scripted([{ text: AB_CLOSED }, { text: "" }, { text: "" }]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "c.py"],
+    buildMissingFilesContinuation: (missing) => `faltam: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, true);
+  assert.equal(r.attempts, 2, "desiste em noProgress>=2 — bem abaixo de maxContinuations=6");
+  assert.ok(!/path=c\.py/.test(r.full));
+});
+
+// A prova de que a guarda é por PROGRESSO (plano encolher) e não por CRESCIMENTO: o modelo re-emite um
+// arquivo JÁ feito em vez do faltante. O texto CRESCE (sem overlap p/ deduplicar), mas o plano não encolhe —
+// uma guarda por crescimento seria enganada e queimaria as 6 continuações; a guarda por progresso desiste cedo.
+test("resilientGenerate: re-emitir arquivo já feito (cresce sem encolher o plano) é tratado como stall (F-02)", async () => {
+  const reemitA = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n"; // re-emissão do que já saiu
+  const s = scripted([{ text: AB_CLOSED }, { text: reemitA }, { text: reemitA }]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "c.py"],
+    buildMissingFilesContinuation: (missing) => `faltam: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, true, "c.py nunca saiu → aviso honesto");
+  assert.equal(r.attempts, 2, "progresso FALSO detectado (plano não encolheu); não queima as 6 continuações");
+  // contrato do dedup que o Task.run aplica sobre r.full: o a.py re-emitido colapsa (2 paths, não 4 blocos)
+  assert.equal(dedupeFileBlocksByPath(parseFileBlocks(r.full)).length, 2, "dedup colapsa o a.py duplicado");
+});
+
+// Regressão da revisão adversarial (off-by-one): FECHAR um arquivo do plano que estava cortado (aberto→
+// fechado) não muda `missing` (recoverOpen já contava o aberto como emitido) — se essa rodada fosse lida
+// como MORTA, queimaria uma folga do stall no exato regime do F-02, e a cauda ainda faltante perderia uma
+// das duas tentativas clean-room. O crédito da transição aberto→fechado preserva a folga.
+test("resilientGenerate: fechar arquivo cortado (aberto→fechado) conta como progresso — preserva a folga do stall (F-02)", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const bOpen = FENCE + "forge-file path=b.py\ndef g():\n    y = "; // cerca aberta (cortado no meio)
+  const bClose = "2\n    return y\n" + FENCE + "\n";
+  const readme = FENCE + "forge-file path=README.md\n# Doc\n" + FENCE + "\n";
+  let cleanRoom = 0;
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + bOpen }; // round0: a.py fechado + b.py ABERTO
+    if (hasAnchor) return { text: bClose }; // rodada ancorada: fecha b.py (missing NÃO muda — b já contava)
+    return ++cleanRoom >= 2 ? { text: readme } : { text: "" }; // clean-room README: 1ª morta, 2ª emite
+  });
+  const r = await resilientGenerate(base, m.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "README.md"],
+    buildContinuation: (p?: string) => `continue ${p ?? ""}`,
+    buildMissingFilesContinuation: (missing) => `emita: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, false, "fechar b.py não é rodada morta → README ainda ganha 2 tentativas clean-room");
+  assert.match(r.full, /path=README\.md/);
+});
+
+// Regressão da revisão adversarial (test-adequacy): projeto que precisa de VÁRIAS continuações, cada uma com
+// progresso (o plano encolhe 1 arquivo por vez). Prova que noProgress RESETA a cada progresso — sem o reset,
+// uma "simplificação" que só zera na rodada 0 estagnaria em 2 tentativas e dropar a cauda (o resíduo F-02).
+test("resilientGenerate: projeto grande — 3+ continuações, cada uma emite 1 arquivo do plano (F-02 reset de progresso)", async () => {
+  const plan = ["a.py", "b.py", "c.py", "d.py"];
+  const block = (p: string) => FENCE + `forge-file path=${p}\nx = 1\n` + FENCE + "\n";
+  const m = messageAware((msgs) => {
+    if (msgs.length === 1) return { text: block("a.py") }; // round0: só a.py
+    const last = msgs.at(-1)?.content ?? ""; // clean-room nomeia os faltantes — emite o 1º ainda não presente
+    const next = plan.find((p) => last.includes(p));
+    return { text: next ? block(next) : "" };
+  });
+  const r = await resilientGenerate(base, m.fn, {
+    ...opts,
+    expectedPaths: plan,
+    buildMissingFilesContinuation: (missing) => `emita: ${missing.join(", ")}`,
+  });
+  assert.equal(r.truncated, false);
+  assert.equal(r.attempts, 3, "3 continuações, todas com progresso → nunca estagna");
+  for (const p of plan) assert.match(r.full, new RegExp(`path=${p.replace(".", "\\.")}`), `${p} presente`);
 });
 
 test("resilientGenerate: reenvia só a CAUDA (âncora), não o texto inteiro", async () => {

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkCompleteness, sanitizeContinuation, stitchContinuation } from "../util/completeness";
+import {
+  checkCompleteness,
+  dedupeFileBlocksByPath,
+  missingExpectedFiles,
+  sanitizeContinuation,
+  stitchContinuation,
+} from "../util/completeness";
 
 const F = "````"; // FORGE_FENCE (4 crases)
 
@@ -97,4 +103,68 @@ test("REGRESSÃO: sanitizeContinuation NÃO come linhas em branco iniciais sem p
   assert.equal(sanitizeContinuation("Will do.\n\nx = 1\n"), "\nx = 1\n");
   // brancos entre DOIS preâmbulos são removidos junto
   assert.equal(sanitizeContinuation("Sure.\n\nWill do.\nx = 1\n"), "x = 1\n");
+});
+
+// ---- F-02: dedup de blocos por path (continuação clean-room pode re-emitir um arquivo já feito) --------
+
+test("dedupeFileBlocksByPath: cópia truncada perde para a completa (ORDEM-INDEPENDENTE)", () => {
+  const completa = { path: "a.py", content: "def f():\n    return 1\n" };
+  const truncada = { path: "a.py", content: "def f():\n    ret" }; // mais curta
+  const r1 = dedupeFileBlocksByPath([completa, truncada]);
+  assert.equal(r1.length, 1);
+  assert.equal(r1[0].content, completa.content, "completa-primeiro: mantém a completa");
+  const r2 = dedupeFileBlocksByPath([truncada, completa]);
+  assert.equal(r2.length, 1);
+  assert.equal(r2[0].content, completa.content, "truncada-primeiro: mesmo resultado (maior-vence)");
+});
+
+test("dedupeFileBlocksByPath: paths distintos preservam a ordem da 1ª ocorrência", () => {
+  const r = dedupeFileBlocksByPath([
+    { path: "a.py", content: "1" },
+    { path: "README.md", content: "doc" },
+    { path: "b.py", content: "2" },
+  ]);
+  assert.deepEqual(r.map((b) => b.path), ["a.py", "README.md", "b.py"]);
+});
+
+test("dedupeFileBlocksByPath: ./ e caixa colapsam via normResilientPath (maior-conteúdo-vence)", () => {
+  const r = dedupeFileBlocksByPath([
+    { path: "./src/a.py", content: "curto" },
+    { path: "src/a.py", content: "conteudo maior vence" },
+  ]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].content, "conteudo maior vence");
+});
+
+// Regressão da revisão adversarial: uma re-emissão TRUNCADA porém MAIOR não pode expulsar a cópia COMPLETA
+// mais curta. O bloco aberto é sempre o ÚLTIMO do texto e `openPath` (= completeness.path) o identifica →
+// preferir FECHADO ao ABERTO, independentemente do tamanho.
+test("dedupeFileBlocksByPath: cópia FECHADA vence a re-emissão ABERTA (truncada) mesmo sendo MENOR", () => {
+  const completaCurta = { path: "a.py", content: "x=1\n" }; // completa (fechada), curta
+  const truncadaLonga = { path: "a.py", content: "def verbose():\n    # muito mais longo porém cortado no fim\n    y = " }; // aberta, maior
+  // a ABERTA é o último bloco → openPath='a.py' a marca; a fechada (1ª) deve vencer
+  const r = dedupeFileBlocksByPath([completaCurta, truncadaLonga], "a.py");
+  assert.equal(r.length, 1);
+  assert.equal(r[0].content, completaCurta.content, "fechada vence mesmo sendo menor");
+  // sem openPath (compat): cai no maior-conteúdo-vence puro (a longa vence)
+  const r2 = dedupeFileBlocksByPath([completaCurta, truncadaLonga]);
+  assert.equal(r2[0].content, truncadaLonga.content);
+});
+
+// ---- F-02: missingExpectedFiles usa o parser AUTORITATIVO (recupera cerca mal-contada — armadilha #158) --
+
+test("missingExpectedFiles: cerca mal-contada é RECUPERADA (não vira falso-faltante #158)", () => {
+  const F3 = "```"; // abriu com 4, fechou com 3 — recoverOpen recupera
+  const a = F + "forge-file path=a.py\nx = 1\n" + F3 + "\n";
+  assert.deepEqual(missingExpectedFiles(a, ["a.py"]), []);
+});
+
+test("missingExpectedFiles: normaliza caixa / ./ / barra; faltante real; expected vazio → []", () => {
+  const doc =
+    F + "forge-file path=readme.md\n# Doc\n" + F + "\n" + F + "forge-file path=src/x.py\ny = 1\n" + F + "\n";
+  assert.deepEqual(missingExpectedFiles(doc, ["README.md", "./src/x.py"]), [], "caixa e ./ normalizados");
+  assert.deepEqual(missingExpectedFiles(doc, ["README.md", "src/y.py"]), ["src/y.py"], "faltante real preservado");
+  const a = F + "forge-file path=a.py\nx = 1\n" + F + "\n";
+  assert.deepEqual(missingExpectedFiles(a, []), []);
+  assert.deepEqual(missingExpectedFiles(a, undefined), []);
 });
