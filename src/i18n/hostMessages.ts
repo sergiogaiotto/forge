@@ -19,6 +19,7 @@ export type HostMessageKey =
   | "notice.rule.exists"
   | "notice.charterSaved"
   | "notice.noBlueprint"
+  | "notice.autoread"
   | "preset.note.hubgpu"
   | "preset.note.openai"
   | "preset.note.anthropic"
@@ -439,6 +440,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.rule.exists": "Essa regra já está no perfil do projeto.",
     "notice.charterSaved": "Charter salvo em .forge/project.md (injetado em todo prompt).",
     "notice.noBlueprint": "Nenhum blueprint aprovado. Planeje o projeto primeiro.",
+    "notice.autoread": "Li do workspace e usei como contexto (arquivos citados no erro): {files}",
     "preset.note.hubgpu": "O proxy autentica por outra via (rede / SSO).",
     "preset.note.openai": "Requer API key da OpenAI (egress externo deve estar liberado).",
     "preset.note.anthropic": "Formato Messages nativo. Requer API key Anthropic.",
@@ -830,6 +832,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.rule.exists": "This rule is already in the project profile.",
     "notice.charterSaved": "Charter saved to .forge/project.md (injected into every prompt).",
     "notice.noBlueprint": "No approved blueprint. Plan the project first.",
+    "notice.autoread": "Read from the workspace and used as context (files cited in the error): {files}",
     "preset.note.hubgpu": "The proxy authenticates by other means (network / SSO).",
     "preset.note.openai": "Requires an OpenAI API key (external egress must be allowed).",
     "preset.note.anthropic": "Native Messages format. Requires an Anthropic API key.",
@@ -1221,6 +1224,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.rule.exists": "Esa regla ya está en el perfil del proyecto.",
     "notice.charterSaved": "Charter guardado en .forge/project.md (inyectado en todo prompt).",
     "notice.noBlueprint": "Ningún blueprint aprobado. Planifica el proyecto primero.",
+    "notice.autoread": "Leí del workspace y usé como contexto (archivos citados en el error): {files}",
     "preset.note.hubgpu": "El proxy autentica por otra vía (red / SSO).",
     "preset.note.openai": "Requiere API key de OpenAI (el egress externo debe estar habilitado).",
     "preset.note.anthropic": "Formato Messages nativo. Requiere API key de Anthropic.",
