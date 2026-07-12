@@ -1214,7 +1214,9 @@ export class Controller {
     let blocked = 0;
     const appliedPaths: string[] = [];
     for (const p of sorted) {
-      const ok = await this.applyProposal(p.id, { force: opts?.forceBlocked });
+      // skipInitSeed: o "Aplicar tudo" semeia os __init__.py UMA vez em lote (abaixo, com o aviso de contagem),
+      // não a cada arquivo — senão o batch acharia tudo já criado e o aviso "X __init__.py criados" sumiria.
+      const ok = await this.applyProposal(p.id, { force: opts?.forceBlocked, skipInitSeed: true });
       if (ok) {
         applied++;
         appliedPaths.push(p.filePath);
@@ -3786,31 +3788,48 @@ export class Controller {
   // Anexa a seleção do TERMINAL. Não há API pública para ler a seleção de um terminal (a interface
   // Terminal não expõe `selection`), então o caminho realista é copiá-la via comando do workbench e ler
   // o clipboard — SEMPRE restaurando o conteúdo anterior depois (efeito colateral zero, mesmo sob erro).
+  private termAttachInFlight = false; // guard de reentrância (espelha ocrInFlight): dois attach sobrepostos
+  // corromperiam o clipboard (um restauraria o marcador do outro).
   async addTerminalSelectionAttachment(): Promise<void> {
     const terminal = vscode.window.activeTerminal;
     if (!terminal) {
       this.post({ type: "notice", level: "warn", message: hostT("notice.attach.noTerminal") });
       return;
     }
-    const prev = await vscode.env.clipboard.readText();
-    let sel = prev;
+    if (this.termAttachInFlight) return; // evita a corrida de clipboard entre dois attach sobrepostos
+    this.termAttachInFlight = true;
     try {
-      terminal.show(true); // torna o terminal ativo VISÍVEL sem roubar o foco do chat
-      await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
-      // A escrita no clipboard pode ser assíncrona ALÉM do await do comando (renderer/pty) — relê por um
-      // curto período até o valor mudar, evitando um falso-negativo intermitente por corrida.
-      for (let i = 0; i < 8 && sel === prev; i++) {
-        await new Promise((r) => setTimeout(r, 25));
-        sel = await vscode.env.clipboard.readText();
+      const prev = await vscode.env.clipboard.readText();
+      // ESVAZIA o clipboard ANTES de copiar a seleção: o copySelection só o preenche se HOUVER seleção. Assim
+      // distinguimos "seleção que por acaso == o clipboard anterior" (o dev já tinha copiado o mesmo texto, ou
+      // a seleção sumiu ao abrir o menu) de "nenhuma seleção" — comparar com `prev` (como antes) dava um
+      // falso-negativo SILENCIOSO nesse caso → "corrija" ia sem o contexto do terminal. Clipboard vazio ("")
+      // após o copy = nenhuma seleção. (Usar "" em vez de uma sentinela de lixo evita poluir o histórico de
+      // clipboard/Win+V — achado da revisão.) O clipboard do usuário é SEMPRE restaurado no finally.
+      let sel = "";
+      try {
+        terminal.show(true); // torna o terminal ativo VISÍVEL sem roubar o foco do chat
+        await vscode.env.clipboard.writeText("");
+        await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+        // A escrita no clipboard pode ser assíncrona ALÉM do await do comando (renderer/pty) — relê por um
+        // curto período até preencher, evitando um falso-negativo intermitente por corrida.
+        for (let i = 0; i < 8 && sel === ""; i++) {
+          await new Promise((r) => setTimeout(r, 25));
+          sel = await vscode.env.clipboard.readText();
+        }
+      } finally {
+        await vscode.env.clipboard.writeText(prev); // restaura o clipboard do usuário haja o que houver
       }
+      if (!sel) {
+        // Nenhuma seleção detectada. Sinal FORTE (error, não warn) para o dev NÃO enviar "corrija" achando que
+        // o contexto do terminal foi anexado quando não foi.
+        this.post({ type: "notice", level: "error", message: hostT("notice.attach.selectTerminal") });
+        return;
+      }
+      this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
     } finally {
-      await vscode.env.clipboard.writeText(prev); // restaura o clipboard do usuário haja o que houver
+      this.termAttachInFlight = false;
     }
-    if (!sel || sel === prev) {
-      this.post({ type: "notice", level: "warn", message: hostT("notice.attach.selectTerminal") });
-      return;
-    }
-    this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
   }
 
   // Ponto 6: OCR de um print colado no chat via o `tesseract` do SISTEMA (leve, sem inchar o .vsix).
@@ -3916,7 +3935,7 @@ export class Controller {
 
   // ---- propostas -------------------------------------------------------------
 
-  async applyProposal(proposalId: string, opts?: { force?: boolean }): Promise<boolean> {
+  async applyProposal(proposalId: string, opts?: { force?: boolean; skipInitSeed?: boolean }): Promise<boolean> {
     const entry = this.currentTask?.getProposal(proposalId);
     if (!entry) {
       this.post({ type: "notice", level: "warn", message: hostT("notice.proposal.expired") });
@@ -3973,6 +3992,13 @@ export class Controller {
     this.post({ type: "proposal/applied", proposalId });
     this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath, forced: forcedOverride });
     if (forcedOverride) this.post({ type: "notice", level: "warn", message: hostT("notice.apply.forced", { path: entry.proposal.filePath }) });
+    // F-13: no apply POR-ARQUIVO (individual) de um projeto Python, semeia os __init__.py dos pacotes
+    // ANCESTRAIS deste arquivo — o apply incremental (cartão a cartão) pulava. Silencioso, idempotente
+    // (existsSync) e gap-fill (nunca sobrescreve); syntheticInitDirs auto-filtra não-.py e dirs não-pacote.
+    // O "Aplicar tudo" passa skipInitSeed=true e faz o batch depois (com o aviso de contagem). (CR-7/F-13)
+    if (this.projectSession?.language === "python" && !opts?.skipInitSeed) {
+      await this.ensurePythonPackageInits([entry.proposal.filePath]);
+    }
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
     return true;
