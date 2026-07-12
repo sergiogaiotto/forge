@@ -341,7 +341,12 @@ test("relToRoot: absoluto vira relativo à raiz; relativo é só normalizado; va
   assert.equal(relToRoot(root, "src/app.py"), "src/app.py", "já relativo → normaliza (sem re-basear)");
   assert.equal(relToRoot(root, "./src\\app.py"), "src/app.py", "barras invertidas → normalizadas p/ frente");
   assert.equal(relToRoot(root, ""), "", "vazio → vazio");
-  assert.equal(relToRoot("C:\\ws\\gate", "C:\\ws\\gate\\src\\m.py"), "src/m.py", "drive Windows absoluto → relativo");
+});
+
+// path.relative de um caminho com drive `C:\` só é POSIX-correto no Windows (no Linux, `\` não é separador e
+// `C:\…` vira um nome relativo → `../C:/…`). win32-gated, como execSpawn.test.ts — o CI ubuntu pegou isto.
+test("relToRoot: drive Windows absoluto → relativo (win32)", { skip: process.platform !== "win32" }, () => {
+  assert.equal(relToRoot("C:\\ws\\gate", "C:\\ws\\gate\\src\\m.py"), "src/m.py");
 });
 
 // #05: isBlockingTscContract — só TS2307 de import RELATIVO a CÓDIGO bloqueia; asset relativo (css/svg/
