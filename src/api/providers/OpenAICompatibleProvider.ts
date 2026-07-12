@@ -107,7 +107,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok) {
       const text = await safeText(res);
-      const hint = res.status === 400 ? hintFor400(text) : "";
+      const hint = res.status === 400 ? hintFor400(text) : res.status === 402 ? hintFor402(text) : "";
       throw new HttpError(res.status, `Provedor retornou ${res.status}${hint}: ${text.slice(0, 500)}`);
     }
 
@@ -243,7 +243,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const res2 = await refetch();
     if (!res2.ok) {
       const text = await safeText(res2);
-      const hint = res2.status === 400 ? hintFor400(text) : "";
+      const hint = res2.status === 400 ? hintFor400(text) : res2.status === 402 ? hintFor402(text) : "";
       throw new HttpError(res2.status, `Provedor retornou ${res2.status}${hint}: ${text.slice(0, 500)}`);
     }
     return (await parse(res2)) ?? {}; // {} sem choices → o chamador emite o erro de "sem choices"
@@ -292,4 +292,12 @@ function hintFor400(text: string): string {
     return " (o limite de tokens de saída somado ao contexto pode exceder a janela do modelo no gateway)";
   }
   return "";
+}
+
+// 402 do gateway = teto de gasto (FinOps #12): o orçamento de tokens/dia da licença foi excedido. Deixa a
+// causa clara em vez de expor só o JSON cru "budget exceeded" — o dev sabe que é limite de licença, não erro.
+function hintFor402(text: string): string {
+  return text.toLowerCase().includes("budget")
+    ? " (teto de tokens/dia da licença excedido — fale com o admin para ampliar o orçamento ou aguarde a virada do dia; FinOps)"
+    : "";
 }

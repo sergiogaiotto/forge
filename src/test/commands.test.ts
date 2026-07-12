@@ -165,8 +165,23 @@ test("renderContextReport: markdown com janela, reservas, histórico, anexos, ba
   assert.ok(md.includes("98 chunks"));
   assert.ok(md.includes("█") || md.includes("░")); // barra visual
   assert.ok(md.includes("/limpar"));
+  // FinOps: sem preços configurados (sessionCost/spendBudget ausentes), NÃO mostra custo nem teto
+  assert.ok(!md.includes("Custo estimado"), "sem preços, a linha de custo some");
+  assert.ok(!md.includes("Teto de gasto"), "sem teto, a linha some");
   // sem anexos, a linha some
   assert.ok(!renderContextReport({ ...REPORT, attachments: 0, attachmentTokens: 0 }).includes("Anexos pendentes"));
+});
+
+test("renderContextReport (FinOps #12): custo + teto de gasto aparecem quando configurados", () => {
+  const md = renderContextReport({ ...REPORT, sessionCost: 0.0234, spendBudget: 5, currency: "R$" });
+  assert.ok(md.includes("Custo estimado da sessão"), "linha de custo presente com preços");
+  assert.ok(md.includes("0.0234 R$"), "custo formatado (fração → 4 casas)");
+  assert.ok(md.includes("Teto de gasto"), "linha de teto presente com budget");
+  assert.ok(md.includes("/ 5.00 R$"), "gasto / teto (budget >=1 → 2 casas)");
+  // custo sem teto: mostra o custo, mas não a linha de teto
+  const noBudget = renderContextReport({ ...REPORT, sessionCost: 1.5, currency: "US$" });
+  assert.ok(noBudget.includes("1.50 US$"), "custo >=1 com 2 casas");
+  assert.ok(!noBudget.includes("Teto de gasto"), "sem teto, só o custo");
 });
 
 test("renderTokensReport: vazio orienta; com dados mostra última geração e acumulado", () => {

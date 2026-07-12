@@ -602,6 +602,12 @@
           "default": "R$",
           "markdownDescription": "%config.observability.currency.md%"
         },
+        "forge.observability.budget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "%config.observability.budget.md%"
+        },
         "forge.observability.pricing": {
           "type": "object",
           "default": {},

@@ -25,8 +25,14 @@ escrita não-atômica que um crash corromperia, zerando o teto do dia (fechada c
   antes do upstream; uma **reserva** estimada (input + max de saída) é cobrada SINCRONAMENTE no admit para
   que um burst concorrente do mesmo subject não fure o teto, e `settle` reconcilia ao custo REAL no `finally`.
   Ledger por subject+dia (UTC) com rollover, persistido de forma **atômica** (tmp+rename) e exposto em
-  `/health.spendPersistOk`. Tokens são a unidade autoritativa (sem tabela de preços server-side). O
-  deterrente + a **visibilidade de custo** no cliente (`/tokens`) vêm no PR seguinte (escopo sequenciado).
+  `/health.spendPersistOk`. Tokens são a unidade autoritativa (sem tabela de preços server-side).
+- **Deterrente + visibilidade no cliente** (`forge.observability.budget`): acumula o **custo estimado da
+  sessão** (`estimateCost`), MOSTRA custo + teto no `/contexto` (antes o custo só ia ao trace do Langfuse),
+  avisa em ~80% e BLOQUEIA a geração ao atingir o teto (chat, revisão, blueprint e charter; `budgetGateDecision`
+  puro). É um deterrente (o teto autoritativo em tokens/dia é do gateway) e só morde com preços configurados.
+  O `/limpar` zera a sessão (tokens+custo). Um **402** do gateway aflora com mensagem clara (não JSON cru).
+  A revisão adversarial (3 eixos) fechou 4 defeitos antes do merge — incl. o `/limpar` que não zerava o gasto
+  (tornando inerte o remédio anunciado no bloqueio) e o gate que pulava blueprint/charter.
 
 ### Security
 - **Redação do RAG na origem — texto E símbolo** (`CodebaseIndex`/`indexPersistence`): os chunks passam

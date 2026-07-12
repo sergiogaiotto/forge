@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { estimateCost, matchPrice, sanitizePricing } from "../api/pricing";
+import { budgetGateDecision, estimateCost, matchPrice, sanitizePricing } from "../api/pricing";
 
 const TABLE = {
   claude: { input: 3, output: 15 },
@@ -14,6 +14,24 @@ test("matchPrice: a chave mais específica (mais longa) vence", () => {
   assert.deepEqual(matchPrice("openai/gpt-oss-120b", TABLE), { input: 0, output: 0 });
   assert.equal(matchPrice("llama-3", TABLE), undefined);
   assert.equal(matchPrice("", TABLE), undefined);
+});
+
+test("budgetGateDecision (FinOps #12): sem teto = nunca bloqueia/avisa", () => {
+  assert.deepEqual(budgetGateDecision(999, 0, false), { block: false, warn: false });
+  assert.deepEqual(budgetGateDecision(999, -1, false), { block: false, warn: false });
+});
+
+test("budgetGateDecision: bloqueia ao ATINGIR o teto (>=)", () => {
+  assert.deepEqual(budgetGateDecision(7, 10, false), { block: false, warn: false }, "abaixo de 80% passa sem avisar");
+  assert.deepEqual(budgetGateDecision(9.99, 10, false), { block: false, warn: true }, "abaixo do teto NÃO bloqueia (mas avisa >80%)");
+  assert.deepEqual(budgetGateDecision(10, 10, false), { block: true, warn: false }, "no teto → bloqueia");
+  assert.deepEqual(budgetGateDecision(11, 10, false), { block: true, warn: false });
+});
+
+test("budgetGateDecision: avisa UMA vez ao cruzar ~80% (o chamador guarda warned)", () => {
+  assert.deepEqual(budgetGateDecision(8, 10, false), { block: false, warn: true }, "80% → avisa");
+  assert.deepEqual(budgetGateDecision(8, 10, true), { block: false, warn: false }, "já avisado → não repete");
+  assert.deepEqual(budgetGateDecision(7.9, 10, false), { block: false, warn: false }, "abaixo de 80% não avisa");
 });
 
 test("estimateCost: sem usage OU sem preço → undefined (nunca custo fabricado)", () => {
