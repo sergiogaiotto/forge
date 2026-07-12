@@ -103,7 +103,7 @@ import { classifyProjectIntent } from "../util/projectIntent";
 import { isFrontendRequest } from "../util/frontendIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
-import { extractReferencedPaths } from "../util/errorRefs";
+import { extractReferencedPaths, isSensitiveFile, looksLikePrivateKey } from "../util/errorRefs";
 import { appendRule, CHARTER_SECTIONS, collectRules, defaultProfileSkeleton, getSection, PROFILE_RELPATH, PURPOSE_SECTION, renderProfileBlock, setSection } from "../util/projectProfile";
 import { DetectedStack, detectStack, renderStackBlock, STACK_PROBE_FILES } from "../util/stackDetect";
 import { validatorsFromStack } from "../skills/stackValidators";
@@ -3717,12 +3717,20 @@ export class Controller {
         continue; // não existe / link quebrado
       }
       if (!safeWorkspacePath(ws, path.relative(ws, real)) || read.some((r) => r.abs === real)) continue;
+      // Denylist de segredos (achado #02): o browse governado já exclui .env; o auto-read não tinha
+      // filtro por TIPO. Um erro colado que cite config.py/credentials/*.pem faria o HOST ler e mandar
+      // o conteúdo ao gateway — e a redação (achado #08) não pega bloco PEM. Checa o realpath (pega
+      // também o alvo de um symlink). Nunca lê .env/*.pem/*.key/credentials/secrets/keystores.
+      if (isSensitiveFile(real)) continue;
       try {
         const st = await fs.stat(real);
         if (!st.isFile() || st.size === 0 || st.size > MAX_ONE || total + st.size > MAX_TOTAL) continue;
         // Redação (achado da revisão): o conteúdo vai ao gateway e o dev NÃO escolheu anexar este arquivo
         // (foi lido só por aparecer no erro) — mascara segredos (chaves/tokens/senhas) antes de injetar.
-        const content = redactSecrets(await fs.readFile(real, "utf8"));
+        const raw = await fs.readFile(real, "utf8");
+        // Rede de segurança de conteúdo: nome escapou à denylist mas o corpo é uma chave privada PEM.
+        if (looksLikePrivateKey(raw)) continue;
+        const content = redactSecrets(raw);
         read.push({ rel: path.relative(ws, real).replace(/\\/g, "/"), content, abs: real });
         total += Buffer.byteLength(content);
       } catch {
