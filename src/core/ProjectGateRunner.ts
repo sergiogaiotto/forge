@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { ManagedConfig } from "../config/ManagedConfig";
 import type { ObsEvent } from "../obs/types";
 import type { BlueprintFileView, ExtToWebview, ProjectArchitecture, ProjectLanguage } from "../shared/protocol";
-import { hostT } from "../i18n";
+import { hostT, type HostMessageKey } from "../i18n";
 import { runFileCheck } from "../util/execCheck";
 import { safeWorkspacePath } from "../util/safePath";
 import { findLayerViolations, layerRuleLabel } from "../util/layerCheck";
@@ -27,6 +27,7 @@ import {
   mypyUnavailable,
   normGatePath,
   parseCompileallErrors,
+  relToRoot,
   parseGofmtErrors,
   parseGoBuildErrors,
   parseMypyErrors,
@@ -572,63 +573,38 @@ export class ProjectGateRunner {
     }
   }
 
-  // Onda 1.5: garante o mypy no venv do workspace (best-effort). O gate só pega o DRIFT de contrato
-  // cross-file via mypy; compileall só vê sintaxe. Sem mypy o gate fica "parcial" e não bloqueia — então
-  // um projeto que não roda (import fantasma) passaria. Instala SÓ quando o python do gate É o venv do
-  // workspace (nunca polui o python global). Falha/offline → não instala, gate degrada para "parcial".
-  private async ensureGateMypy(py: string): Promise<void> {
+  // Garante uma ferramenta Python de gate (mypy/bandit/ruff) no venv do WORKSPACE (best-effort). Instala SÓ
+  // quando o python do gate É o venv do workspace (nunca polui o python global/system). Falha/offline → não
+  // instala e o eixo correspondente degrada para consultivo. Os 3 ensureGate* eram char-a-char idênticos
+  // exceto módulo/instalador/label/aviso — parametrizados aqui p/ que um fix (ex.: no shim de instalação)
+  // propague aos três (a classe de bug "fix numa cópia não propaga" que já mordeu o repo). (#10)
+  private async ensureGateTool(py: string, spec: { module: string; buildInstall: (venv: string) => string; label: HostMessageKey; warn: string }): Promise<void> {
     try {
       const ws = this.deps.workspaceRoot();
       if (!ws) return;
-      const isWin = process.platform === "win32";
-      const venv = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+      const venv = findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV);
       if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
-      const probe = await runFileCheck({ id: "probe", label: "mypy", gate: false }, py, ["-m", "mypy", "--version"], { timeoutMs: 15_000 });
-      if (probe.status === "ok") return; // mypy já disponível no venv
+      const probe = await runFileCheck({ id: "probe", label: spec.module, gate: false }, py, ["-m", spec.module, "--version"], { timeoutMs: 15_000 });
+      if (probe.status === "ok") return; // já disponível no venv
       if (this.deps.runService.isBusy()) return; // não atropela uma execução em andamento
-      // Best-effort: se a instalação não iniciar/falhar (offline, sem índice pip), o gate fica "parcial".
-      await this.deps.runService.runCommand(hostT("run.label.gateMypy"), buildMypyInstall(venv), this.deps.config.env().timeoutSeconds * 1000);
+      // Best-effort: se a instalação não iniciar/falhar (offline, sem índice pip), o eixo fica consultivo.
+      await this.deps.runService.runCommand(hostT(spec.label), spec.buildInstall(venv), this.deps.config.env().timeoutSeconds * 1000);
     } catch (e) {
-      this.deps.log.warn("Gate: não consegui garantir o mypy no venv — seguindo (o gate pode ficar parcial)", e);
+      this.deps.log.warn(spec.warn, e);
     }
   }
 
-  // Garante o bandit no venv do workspace (best-effort, espelho do ensureGateMypy). Só num venv do
-  // workspace (nunca no python global/system). Falha/offline → não instala; o gate de segurança fica
-  // consultivo (não bloqueia). Chamado só quando forge.gate.security != "off".
-  private async ensureGateBandit(py: string): Promise<void> {
-    try {
-      const ws = this.deps.workspaceRoot();
-      if (!ws) return;
-      const isWin = process.platform === "win32";
-      const venv = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
-      if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
-      const probe = await runFileCheck({ id: "probe", label: "bandit", gate: false }, py, ["-m", "bandit", "--version"], { timeoutMs: 15_000 });
-      if (probe.status === "ok") return; // bandit já disponível no venv
-      if (this.deps.runService.isBusy()) return; // não atropela uma execução em andamento
-      await this.deps.runService.runCommand(hostT("run.label.gateBandit"), buildBanditInstall(venv), this.deps.config.env().timeoutSeconds * 1000);
-    } catch (e) {
-      this.deps.log.warn("Gate: não consegui garantir o bandit no venv — seguindo (segurança consultiva)", e);
-    }
+  // Onda 1.5: mypy pega o DRIFT de contrato cross-file (compileall só vê sintaxe). Sem ele o gate fica "parcial".
+  private ensureGateMypy(py: string): Promise<void> {
+    return this.ensureGateTool(py, { module: "mypy", buildInstall: buildMypyInstall, label: "run.label.gateMypy", warn: "Gate: não consegui garantir o mypy no venv — seguindo (o gate pode ficar parcial)" });
   }
-
-  // Garante o ruff no venv do workspace (best-effort, espelho do ensureGateBandit). Só num venv do workspace
-  // (nunca no python global/system). Falha/offline → não instala; o gate de imports mortos fica consultivo.
-  // Chamado só quando forge.gate.deadImports != false. (F-18)
-  private async ensureGateRuff(py: string): Promise<void> {
-    try {
-      const ws = this.deps.workspaceRoot();
-      if (!ws) return;
-      const isWin = process.platform === "win32";
-      const venv = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
-      if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
-      const probe = await runFileCheck({ id: "probe", label: "ruff", gate: false }, py, ["-m", "ruff", "--version"], { timeoutMs: 15_000 });
-      if (probe.status === "ok") return; // ruff já disponível no venv
-      if (this.deps.runService.isBusy()) return; // não atropela uma execução em andamento
-      await this.deps.runService.runCommand(hostT("run.label.gateRuff"), buildRuffInstall(venv), this.deps.config.env().timeoutSeconds * 1000);
-    } catch (e) {
-      this.deps.log.warn("Gate: não consegui garantir o ruff no venv — seguindo (imports mortos consultivo)", e);
-    }
+  // Bandit (SAST) para o gate de segurança morder out-of-the-box. Chamado só quando forge.gate.security != "off".
+  private ensureGateBandit(py: string): Promise<void> {
+    return this.ensureGateTool(py, { module: "bandit", buildInstall: buildBanditInstall, label: "run.label.gateBandit", warn: "Gate: não consegui garantir o bandit no venv — seguindo (segurança consultiva)" });
+  }
+  // Ruff (regra F401, imports mortos). Chamado só quando forge.gate.deadImports != false. (F-18)
+  private ensureGateRuff(py: string): Promise<void> {
+    return this.ensureGateTool(py, { module: "ruff", buildInstall: buildRuffInstall, label: "run.label.gateRuff", warn: "Gate: não consegui garantir o ruff no venv — seguindo (imports mortos consultivo)" });
   }
 
   // Gate de SEGURANÇA (P2): roda o bandit (SAST) sobre a árvore temp materializada e classifica os achados
@@ -656,12 +632,9 @@ export class ProjectGateRunner {
     const reportRaw = await fs.readFile(reportPath, "utf8").catch(() => "");
     const findings = parseBanditReport(reportRaw);
     if (findings === null) return null;
-    // bandit emite caminhos relativos ao cwd (=root) por causa do `-r .`; o ramo absoluto é defensivo.
-    const rel = (p: string): string => {
-      const raw = (p ?? "").trim();
-      return raw && (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)) ? normGatePath(path.relative(root, raw)) : normGatePath(raw);
-    };
-    return splitSecurityFindings(findings.map((f) => ({ ...f, path: rel(f.path) })), mode);
+    // bandit emite caminhos relativos ao cwd (=root) por causa do `-r .`; relToRoot normaliza (ramo absoluto
+    // defensivo) — mesma fonte do parse*Errors e do runDeadImportScan (antes 3 cópias char-a-char). (#10)
+    return splitSecurityFindings(findings.map((f) => ({ ...f, path: relToRoot(root, f.path) })), mode);
   }
 
   // Gate de IMPORTS MORTOS (F-18): roda o ruff (regra F401) sobre a árvore temp e devolve linhas ADVISORY
@@ -681,12 +654,8 @@ export class ProjectGateRunner {
     const reportRaw = await fs.readFile(reportPath, "utf8").catch(() => "");
     const findings = parseRuffReport(reportRaw);
     if (findings === null) return null; // relatório ausente/truncado → indisponível (fail-open)
-    // O ruff emite caminhos ABSOLUTOS (diferente do bandit, relativo por causa do `-r .`) → normaliza p/
-    // relativo à raiz do gate (casa com os paths das propostas). Mesmo normalizador do runSecurityScan.
-    const rel = (p: string): string => {
-      const raw = (p ?? "").trim();
-      return raw && (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)) ? normGatePath(path.relative(root, raw)) : normGatePath(raw);
-    };
-    return ruffAdvisories(findings.map((f) => ({ ...f, path: rel(f.path) })));
+    // O ruff emite caminhos ABSOLUTOS (diferente do bandit) → relToRoot normaliza p/ relativo à raiz (mesmo
+    // normalizador do runSecurityScan e do parse* — agora uma única fonte). (#10)
+    return ruffAdvisories(findings.map((f) => ({ ...f, path: relToRoot(root, f.path) })));
   }
 }
