@@ -2216,6 +2216,11 @@ export class Controller {
         if (gate?.securityErrors?.length) {
           this.post({ type: "notice", level: "warn", message: hostT("notice.project.security", { count: gate.securityErrors.length }) });
         }
+        // A11y (#06): achados de acessibilidade no frontend gerado — ADVISORY (nunca bloqueia; info, não warn).
+        // O motor puro-TS (a11yLint) valida a SAÍDA; o isFrontendRequest só forçava a skill no prompt.
+        if (gate?.a11yAdvisories?.length) {
+          this.post({ type: "notice", level: "info", message: hostT("notice.project.a11y", { count: gate.a11yAdvisories.length, issues: gate.a11yAdvisories.slice(0, 5).join(" · ") }) });
+        }
         // Reconciliação de dependências (P4): o DoD garante que o manifesto EXISTE; aqui garantimos que está
         // CORRETO — acrescenta ao requirements.txt gerado os pacotes que o código importa mas não declara.
         // Só com o projeto COMPLETO (uma geração parcial ainda não tem todos os imports). Não é gate: corrige
