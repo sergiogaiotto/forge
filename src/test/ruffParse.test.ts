@@ -54,6 +54,23 @@ test("parseRuffReport: erros de SINTAXE (code:null) são filtrados — só F401 
   assert.deepEqual(parseRuffReport(JSON.stringify([synErr("x.py", 1, "SyntaxError: bad")])), []);
 });
 
+// #9: o gate amplia de só-F401 para a família de referência-fantasma (F811/F821/F822/F823) + f-string (F5xx).
+// Os novos códigos passam; um código Pyflakes FORA do set (ex.: F841 variável local não usada — ruidoso) é filtrado.
+test("parseRuffReport (#9): F821/F811/F822/F823/F5xx passam; F841 (fora do set) é filtrado", () => {
+  const items = [
+    issue({ file: "a.py", code: "F821", row: 5, message: "Undefined name `OrderStatus`" }),
+    issue({ file: "a.py", code: "F811", row: 2, message: "Redefinition of unused `foo`" }),
+    issue({ file: "a.py", code: "F822", row: 1, message: "Undefined name `Bar` in `__all__`" }),
+    issue({ file: "a.py", code: "F823", row: 7, message: "Local variable `x` referenced before assignment" }),
+    issue({ file: "a.py", code: "F502", row: 3, message: "`%` format expected mapping but got sequence" }),
+    issue({ file: "a.py", code: "F841", row: 9, message: "Local variable `tmp` assigned but never used" }),
+  ];
+  const f = parseRuffReport(report(items));
+  assert.ok(f);
+  assert.deepEqual(f!.map((x) => x.code).sort(), ["F502", "F811", "F821", "F822", "F823"], "F841 fora do set → filtrado; os gateados passam");
+  assert.ok(ruffAdvisories(f!).some((a) => /ruff F821: Undefined name `OrderStatus`/.test(a)), "o F821 (símbolo-fantasma) aparece legível");
+});
+
 test("parseRuffReport: sem relatório-array válido → null (fail-open, não confundir com 0 achados)", () => {
   assert.equal(parseRuffReport(""), null);
   assert.equal(parseRuffReport("   "), null);

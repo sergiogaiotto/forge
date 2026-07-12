@@ -16,7 +16,7 @@ import { buildBanditInstall, buildMypyInstall, buildRuffInstall, findVenvPython 
 import { reconcileRequirements } from "../util/pythonDeps";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
-import { parseRuffReport, ruffAdvisories } from "../util/ruffParse";
+import { parseRuffReport, ruffAdvisories, RUFF_GATE_CODES } from "../util/ruffParse";
 import type { RunService } from "./RunService";
 import type { Task } from "./Task";
 import {
@@ -637,17 +637,18 @@ export class ProjectGateRunner {
     return splitSecurityFindings(findings.map((f) => ({ ...f, path: relToRoot(root, f.path) })), mode);
   }
 
-  // Gate de IMPORTS MORTOS (F-18): roda o ruff (regra F401) sobre a árvore temp e devolve linhas ADVISORY
-  // (nunca bloqueia — não há split de bloqueio). Análise por AST — NÃO executa o código. ruff ausente/sem
-  // relatório → null (fail-open). Espelha o runSecurityScan: relatório num ARQUIVO (`-o`), veredito do
-  // relatório e NÃO do exit code (ruff sai 1 quando ACHA algo — normal); --isolated ignora ruff.toml/pyproject
-  // do dev (hermético); --select F401 fixa a regra.
+  // Gate de PYFLAKES via ruff (F-18 + #9): roda o ruff (família RUFF_GATE_CODES — F401 import morto, F811
+  // redefinição, F821 NOME INDEFINIDO/símbolo-fantasma, F822/F823, f-string quebrada) sobre a árvore temp e
+  // devolve linhas ADVISORY (nunca bloqueia — sem split de bloqueio; F821→bloqueante é follow-up). Análise por
+  // AST — NÃO executa o código. ruff ausente/sem relatório → null (fail-open). Espelha o runSecurityScan:
+  // relatório num ARQUIVO (`-o`), veredito do relatório e NÃO do exit code (ruff sai 1 quando ACHA algo —
+  // normal); --isolated ignora ruff.toml/pyproject do dev (hermético); --select fixa o set de regras.
   private async runDeadImportScan(py: string, root: string): Promise<string[] | null> {
     const reportPath = path.join(root, ".forge-ruff-report.json");
     const result = await runFileCheck(
       { id: "gate:ruff", label: "ruff", gate: false },
       py,
-      ["-m", "ruff", "check", "--isolated", "--output-format", "json", "--select", "F401", "-o", reportPath, "-q", "."],
+      ["-m", "ruff", "check", "--isolated", "--output-format", "json", "--select", RUFF_GATE_CODES.join(","), "-o", reportPath, "-q", "."],
       { cwd: root, timeoutMs: 120_000, outputCap: 8_000 }
     );
     if (result.status === "skipped") return null; // ENOENT (sem python) / timeout → inconclusivo (fail-open)
