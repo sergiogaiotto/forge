@@ -45,10 +45,15 @@ export function parseRuffReport(raw: string): RuffFinding[] | null {
   for (const r of arr as any[]) {
     const path = String(r?.filename ?? "").trim();
     if (!path) continue;
+    // O ruff emite os erros de SINTAXE do parser SEMPRE (com `code: null`), mesmo sob `--select F401` —
+    // esses NÃO são imports mortos (o compileall/mypy já os pega) e virariam ruído rotulado errado. Fica só
+    // o F401. Um relatório só com sintaxe → [] (rodou, 0 imports mortos), distinto de null (não rodou).
+    const code = String(r?.code ?? "").trim();
+    if (code !== "F401") continue;
     out.push({
       path,
       line: Number(r?.location?.row) || 0,
-      code: String(r?.code ?? "").trim(),
+      code,
       message: String(r?.message ?? "").replace(/\s+/g, " ").trim().slice(0, 300),
     });
   }

@@ -35,6 +35,25 @@ test("parseRuffReport: rodou e nada achou ([]) → [] (NÃO null)", () => {
   assert.deepEqual(ruffAdvisories([]), []);
 });
 
+// REGRESSÃO (revisão adversarial, repro ao vivo com ruff 0.8.4): o ruff emite os erros de SINTAXE do parser
+// SEMPRE (com `code: null`), mesmo sob `--select F401`. Esses NÃO são imports mortos — devem ser filtrados,
+// senão vazariam como avisos fantasma com o prefixo malformado "ruff : SyntaxError…".
+test("parseRuffReport: erros de SINTAXE (code:null) são filtrados — só F401 sobrevive", () => {
+  const synErr = (file: string, row: number, msg: string) => ({ cell: null, code: null, filename: file, location: { row, column: 1 }, message: msg, noqa_row: row, url: null });
+  const mixed = JSON.stringify([
+    synErr("C:/tmp/broken.py", 2, "SyntaxError: Expected an identifier"),
+    synErr("C:/tmp/broken.py", 3, "SyntaxError: unexpected EOF while parsing"),
+    issue({ file: "C:/tmp/dead.py", code: "F401", row: 1, message: "`os` imported but unused" }),
+  ]);
+  const f = parseRuffReport(mixed);
+  assert.ok(f);
+  assert.equal(f!.length, 1, "só o F401 sobrevive; os SyntaxError (code:null) são filtrados");
+  assert.equal(f![0].code, "F401");
+  assert.ok(!ruffAdvisories(f!).some((a) => /SyntaxError|ruff : /.test(a)), "nenhum aviso fantasma de sintaxe / prefixo malformado");
+  // relatório SÓ com erros de sintaxe → [] (rodou, 0 imports mortos), NÃO null (não rodou)
+  assert.deepEqual(parseRuffReport(JSON.stringify([synErr("x.py", 1, "SyntaxError: bad")])), []);
+});
+
 test("parseRuffReport: sem relatório-array válido → null (fail-open, não confundir com 0 achados)", () => {
   assert.equal(parseRuffReport(""), null);
   assert.equal(parseRuffReport("   "), null);
