@@ -328,6 +328,9 @@ export interface ProjectGateSummary {
   // project-level, só surface. Ambos FORA do summarizeGate e do auto-reparo. Ver util/banditParse.ts.
   securityErrors?: { path: string; errors: string[] }[];
   securityAdvisories?: string[];
+  // Símbolo-fantasma (ruff F821/F822/F823 — nome indefinido) promovido a BLOQUEANTE (#9 follow-up): entra em
+  // fileErrors e fecha o Aplicar, como securityErrors. Fora do auto-reparo. Preenchido pelo runner.
+  undefinedNameErrors?: { path: string; errors: string[] }[];
   // Achados de IMPORTS MORTOS (ruff F401), project-level, SEMPRE advisory (nunca bloqueia — não há modo
   // conservador). FORA do summarizeGate/auto-reparo. Preenchido pelo Controller. Ver util/ruffParse.ts. (F-18)
   deadImportAdvisories?: string[];

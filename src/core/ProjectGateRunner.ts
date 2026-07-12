@@ -16,7 +16,7 @@ import { buildBanditInstall, buildMypyInstall, buildRuffInstall, findVenvPython 
 import { reconcileRequirements } from "../util/pythonDeps";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
-import { parseRuffReport, ruffAdvisories, RUFF_GATE_CODES } from "../util/ruffParse";
+import { parseRuffReport, RUFF_GATE_CODES, splitRuffFindings } from "../util/ruffParse";
 import type { RunService } from "./RunService";
 import type { Task } from "./Task";
 import {
@@ -243,9 +243,12 @@ export class ProjectGateRunner {
       const security = language === "python" && securityMode !== "off" ? await this.runSecurityScan(py!, root, securityMode) : null;
       const securityErrors = security?.blocking ?? [];
       const securityAdvisories = security?.advisories ?? [];
-      // F-18: imports mortos (ruff F401) — Python-only + ligado. Advisory PURO: string[] (sem split de
-      // bloqueio), coalescido a []. NUNCA toca `blocked`/`gateOk`/`totalBlocked`/`files` (invariante advisory).
-      const deadImportAdvisories = language === "python" && deadImportsMode ? (await this.runDeadImportScan(py!, root)) ?? [] : [];
+      // ruff Pyflakes (F-18 + #9): Python-only + ligado. Split em BLOQUEANTE (F821/F822/F823 — nome-indefinido/
+      // símbolo-fantasma, análogo do TS2307 do #05) e ADVISORY (F401/F811/f-string). Empíria ao vivo provou o
+      // F821 sem falso-positivo (star-import/forward-ref/TYPE_CHECKING). Fora do auto-reparo (como segurança).
+      const ruff = language === "python" && deadImportsMode ? await this.runRuffScan(py!, root) : null;
+      const undefinedNameErrors = ruff?.blocking ?? [];
+      const deadImportAdvisories = ruff?.advisories ?? [];
       // A11y (advisory, #06): linter PURO-TS sobre os arquivos de FRONTEND gerados (html/jsx/tsx/vue/svelte),
       // QUALQUER que seja a linguagem do projeto (React SPA, ou Jinja num FastAPI) — o motor que faltava (o
       // único domínio sem validação da SAÍDA; o isFrontendRequest só força a skill no prompt). Nunca bloqueia.
@@ -255,16 +258,17 @@ export class ProjectGateRunner {
       // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído), violação de
       // arquitetura OU achado de segurança bloqueante; o DoD (ausência project-level) bloqueia TODOS.
       // gatePassed([]) = true no caso comum; um validador de skill gate:true reprovado persiste.
-      const blocked = new Set([...gate.fileErrors.map((f) => f.path), ...violations.map((v) => v.path), ...securityErrors.map((s) => s.path)]);
+      const blocked = new Set([...gate.fileErrors.map((f) => f.path), ...violations.map((v) => v.path), ...securityErrors.map((s) => s.path), ...undefinedNameErrors.map((s) => s.path)]);
       for (const e of props) {
         e.gateOk = gatePassed(e.results ?? []) && !blocked.has(normGatePath(e.proposal.filePath)) && !dodBlocksAll;
       }
 
-      const totalBlocked = gate.fileErrors.length + architectureErrors.length + securityErrors.length;
+      const totalBlocked = gate.fileErrors.length + architectureErrors.length + securityErrors.length + undefinedNameErrors.length;
       const fileParts: string[] = [];
       if (gate.fileErrors.length) fileParts.push(hostT(language === "go" ? "gate.part.syntaxGo" : "gate.part.compile", { count: gate.fileErrors.length }));
       if (architectureErrors.length) fileParts.push(hostT("gate.part.arch", { count: architectureErrors.length }));
       if (securityErrors.length) fileParts.push(hostT("gate.part.security", { count: securityErrors.length }));
+      if (undefinedNameErrors.length) fileParts.push(hostT("gate.part.undefinedName", { count: undefinedNameErrors.length }));
       // Avisos de TIPO do tsc / do go build (advisory): mostram a CONTAGEM no resumo (o veredito completo exige
       // as deps). Os erros de SINTAXE (TS1xxx / gofmt), esses, entram em gate.fileErrors (bloqueiam) e pintam
       // os cartões. Só um dos sufixos é não-vazio (a linguagem é uma só).
@@ -315,10 +319,10 @@ export class ProjectGateRunner {
       // contractBlocked: a política do admin transforma a confirmação em bloqueio — a UI troca o botão
       // "Aplicar sem verificar contrato" pelo caminho de verificação real (Preparar ambiente → Re-verificar).
       const contractBlocked = contractUnverifiedHardFlag && this.deps.config.blockUnverifiedContract();
-      this.deps.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: contractUnverifiedFlag, contractBlocked, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView, deadImports: deadImportsView });
-      this.deps.log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
+      this.deps.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: contractUnverifiedFlag, contractBlocked, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors, ...undefinedNameErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView, deadImports: deadImportsView });
+      this.deps.log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}${undefinedNameErrors.length ? ", símbolo-fantasma" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
       return {
-        summary: { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories, deadImportAdvisories, a11yAdvisories },
+        summary: { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories, deadImportAdvisories, a11yAdvisories, undefinedNameErrors },
         state: { lastGateRun, contractUnverified: contractUnverifiedFlag, contractUnverifiedHard: contractUnverifiedHardFlag },
       };
     } catch (e) {
@@ -639,11 +643,11 @@ export class ProjectGateRunner {
 
   // Gate de PYFLAKES via ruff (F-18 + #9): roda o ruff (família RUFF_GATE_CODES — F401 import morto, F811
   // redefinição, F821 NOME INDEFINIDO/símbolo-fantasma, F822/F823, f-string quebrada) sobre a árvore temp e
-  // devolve linhas ADVISORY (nunca bloqueia — sem split de bloqueio; F821→bloqueante é follow-up). Análise por
-  // AST — NÃO executa o código. ruff ausente/sem relatório → null (fail-open). Espelha o runSecurityScan:
-  // relatório num ARQUIVO (`-o`), veredito do relatório e NÃO do exit code (ruff sai 1 quando ACHA algo —
-  // normal); --isolated ignora ruff.toml/pyproject do dev (hermético); --select fixa o set de regras.
-  private async runDeadImportScan(py: string, root: string): Promise<string[] | null> {
+  // devolve o split BLOQUEANTE (F821/F822/F823) + ADVISORY (F401/F811/f-string) via splitRuffFindings.
+  // Análise por AST — NÃO executa o código. ruff ausente/sem relatório → null (fail-open). Espelha o
+  // runSecurityScan: relatório num ARQUIVO (`-o`), veredito do relatório e NÃO do exit code (ruff sai 1 quando
+  // ACHA algo — normal); --isolated ignora ruff.toml/pyproject do dev (hermético); --select fixa o set de regras.
+  private async runRuffScan(py: string, root: string): Promise<{ blocking: { path: string; errors: string[] }[]; advisories: string[] } | null> {
     const reportPath = path.join(root, ".forge-ruff-report.json");
     const result = await runFileCheck(
       { id: "gate:ruff", label: "ruff", gate: false },
@@ -656,7 +660,7 @@ export class ProjectGateRunner {
     const findings = parseRuffReport(reportRaw);
     if (findings === null) return null; // relatório ausente/truncado → indisponível (fail-open)
     // O ruff emite caminhos ABSOLUTOS (diferente do bandit) → relToRoot normaliza p/ relativo à raiz (mesmo
-    // normalizador do runSecurityScan e do parse* — agora uma única fonte). (#10)
-    return ruffAdvisories(findings.map((f) => ({ ...f, path: relToRoot(root, f.path) })));
+    // normalizador do runSecurityScan e do parse* — uma única fonte, #10). splitRuffFindings separa blocking/advisory.
+    return splitRuffFindings(findings.map((f) => ({ ...f, path: relToRoot(root, f.path) })));
   }
 }

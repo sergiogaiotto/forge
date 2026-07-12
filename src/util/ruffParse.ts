@@ -81,3 +81,29 @@ export function parseRuffReport(raw: string): RuffFinding[] | null {
 export function ruffAdvisories(findings: RuffFinding[]): string[] {
   return findings.map((f) => `${f.path}:${f.line} — ruff ${f.code}: ${f.message}`).sort();
 }
+
+// Códigos PROMOVIDOS a BLOQUEANTE (família de NOME-INDEFINIDO / símbolo-fantasma — o análogo Python do
+// TS2307 que já bloqueia no #05). Validado por empíria exaustiva AO VIVO (ruff 0.8.4, 6 categorias de código
+// gerado): F821 (nome indefinido) NÃO acusa star-import/forward-ref/TYPE_CHECKING/import-condicional/def-tardia;
+// F822 (nome indefinido em __all__) e F823 (var local usada antes de atribuir) são drift real do mesmo eixo.
+// O resto (F401 import morto, F811 redefinição, F5xx f-string) segue ADVISORY.
+export const RUFF_BLOCKING_CODES = new Set(["F821", "F822", "F823"]);
+
+// Separa os achados do ruff em BLOQUEANTES (agrupados por arquivo, como o splitSecurityFindings do bandit —
+// entram em gate.fileErrors e fecham o Aplicar) e ADVISORY (o resto). Puro. Fora do auto-reparo, como a
+// segurança/arquitetura: um símbolo-fantasma é bug que o dev/regeneração corrige, não o reparo de type-drift.
+export function splitRuffFindings(findings: RuffFinding[]): { blocking: { path: string; errors: string[] }[]; advisories: string[] } {
+  const byPath = new Map<string, string[]>();
+  const advisoryFindings: RuffFinding[] = [];
+  for (const f of findings) {
+    if (RUFF_BLOCKING_CODES.has(f.code)) {
+      const arr = byPath.get(f.path) ?? [];
+      arr.push(`linha ${f.line}: [${f.code}] ${f.message}`);
+      byPath.set(f.path, arr);
+    } else {
+      advisoryFindings.push(f);
+    }
+  }
+  const blocking = [...byPath.entries()].map(([path, errors]) => ({ path, errors })).sort((a, b) => a.path.localeCompare(b.path));
+  return { blocking, advisories: ruffAdvisories(advisoryFindings) };
+}
