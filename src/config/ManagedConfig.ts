@@ -104,6 +104,15 @@ export class ManagedConfig {
     return v === "advisory" || v === "off" ? v : "conservative";
   }
 
+  // Gate de IMPORTS MORTOS (F-18) no Modo Projeto: roda o ruff (regra F401) sobre o Python gerado e lista os
+  // imports não usados. SEMPRE advisory — nunca bloqueia o Aplicar (não há modo conservador). Python-only.
+  // ruff ausente → consultivo (fail-open). Espelha o definitionOfDone (boolean default-on): o fallback do
+  // get() (`true`) DEVE ser igual ao default do contributes (`true`) — senão o default do manifesto anula o
+  // fallback e um workspace sem a chave leria `undefined`.
+  deadImportsGate(): boolean {
+    return this.cfg().get<boolean>("gate.deadImports", true);
+  }
+
   // Conexões de warehouse (Onda 3): caminho tradicional (CLIs do dev: SQLcl/sqlplus, psql, bq,
   // duckdb, aws/oci) e/ou MCP. Senhas NUNCA aqui — SecretStorage (pedidas no primeiro uso).
   warehouse(): { connections: import("../warehouse/types").WarehouseConnection[]; defaultId: string; rowCap: number; timeoutSeconds: number } {

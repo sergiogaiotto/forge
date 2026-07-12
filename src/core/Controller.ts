@@ -29,7 +29,7 @@ import { planTemplateFiles, toIdentifierSlug } from "../skills/templates";
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, reconcileRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
-import { buildBanditInstall, buildMypyInstall, buildPytestInstall, buildPytestProbe, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
+import { buildBanditInstall, buildMypyInstall, buildPytestInstall, buildPytestProbe, buildRuffInstall, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
 import { redactSecrets } from "../util/redact";
 import { ObsEvent } from "../obs/types";
 import { estimateTokens, estimateTokensOf } from "../util/tokenEstimate";
@@ -95,6 +95,7 @@ import { compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCa
 import { SqlRunResult, WarehouseConnection } from "../warehouse/types";
 import { evaluateDodGate } from "../util/dodCheck";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
+import { parseRuffReport, ruffAdvisories } from "../util/ruffParse";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
@@ -2327,6 +2328,7 @@ export class Controller {
       const outputCap = 32_000; // teto amplo: um projeto MUITO drifado emite muitos erros; não truncar a atribuição
       const checks: GateCheckResult[] = [];
       const securityMode = this.config.securityGate();
+      const deadImportsMode = this.config.deadImportsGate(); // F-18: gate advisory de imports mortos (ruff F401)
       let tscTypeAdvisories: string[] = []; // avisos de TIPO do tsc (advisory) — só TypeScript
       let goBuildAdvisories: string[] = []; // avisos do go build/vet (advisory) — só Go
       // F-03: o compileall reprovou (erro de SINTAXE no conjunto)? O mypy ABORTA na 1ª falha de sintaxe e
@@ -2342,6 +2344,7 @@ export class Controller {
         await this.ensureGateMypy(py);
         // Garante o bandit no venv (best-effort, como o mypy) para o gate de segurança morder out-of-the-box.
         if (securityMode !== "off") await this.ensureGateBandit(py);
+        if (deadImportsMode) await this.ensureGateRuff(py); // F-18: ruff no venv (best-effort), só se ligado
 
         // compileall (stdlib, gate:true): pega erro de SINTAXE em qualquer arquivo do conjunto.
         const compile = await runFileCheck({ id: "gate:compileall", label: "compileall", gate: true }, py, ["-m", "compileall", "-q", "."], { cwd: root, timeoutMs, outputCap });
@@ -2433,6 +2436,9 @@ export class Controller {
       const security = language === "python" && securityMode !== "off" ? await this.runSecurityScan(py!, root, securityMode) : null;
       const securityErrors = security?.blocking ?? [];
       const securityAdvisories = security?.advisories ?? [];
+      // F-18: imports mortos (ruff F401) — Python-only + ligado. Advisory PURO: string[] (sem split de
+      // bloqueio), coalescido a []. NUNCA toca `blocked`/`gateOk`/`totalBlocked`/`files` (invariante advisory).
+      const deadImportAdvisories = language === "python" && deadImportsMode ? (await this.runDeadImportScan(py!, root)) ?? [] : [];
 
       // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído), violação de
       // arquitetura OU achado de segurança bloqueante; o DoD (ausência project-level) bloqueia TODOS.
@@ -2453,6 +2459,9 @@ export class Controller {
       const tscSuffix = tscTypeAdvisories.length ? hostT("gate.tscSuffix", { count: tscTypeAdvisories.length }) : "";
       const goSuffix = goBuildAdvisories.length ? hostT("gate.goSuffix", { count: goBuildAdvisories.length }) : "";
       const langSuffix = tscSuffix + goSuffix;
+      // F-18: sufixo advisory de imports mortos — só decora o resumo quando NADA bloqueia (mesma semântica
+      // de supressão do gate.securitySuffix). Só Python, então não interage com langSuffix (TS/Go).
+      const deadImportsSuffix = deadImportAdvisories.length && totalBlocked === 0 && !dodBlocksAll ? hostT("gate.deadImportsSuffix", { count: deadImportAdvisories.length }) : "";
       // O resumo-base do summarizeGate é redigido para o toolchain Python (compileall/mypy). Em Go, reescreve
       // com os nomes das ferramentas certas (gofmt/go build) para os casos SEM bloqueio (advisory/parcial/verde);
       // os casos COM bloqueio já têm texto próprio abaixo.
@@ -2473,12 +2482,14 @@ export class Controller {
             ? hostT("gate.blocked", { count: totalBlocked, parts: fileParts.length ? ` — ${fileParts.join(" · ")}` : "" })
             : securityAdvisories.length
               ? baseSummary + hostT("gate.securitySuffix", { count: securityAdvisories.length })
-              : baseSummary) + langSuffix;
+              : baseSummary) + langSuffix + deadImportsSuffix;
       if (tscTypeAdvisories.length) log.info(`Gate TS: ${tscTypeAdvisories.length} aviso(s) de tipo (advisory) — ${tscTypeAdvisories.slice(0, 5).join(" | ")}`);
       if (goBuildAdvisories.length) log.info(`Gate Go: ${goBuildAdvisories.length} aviso(s) do go build (advisory) — ${goBuildAdvisories.slice(0, 5).join(" | ")}`);
       // A UI pinta os cartões de compilação/arquitetura/segurança (por-arquivo) e mostra DoD + avisos de
       // segurança como project-level; o auto-reparo (que consome o gate RETORNADO) recebe só os fileErrors.
       const securityView = securityAdvisories.length > 12 ? [...securityAdvisories.slice(0, 12), hostT("gate.moreSecurity", { count: securityAdvisories.length - 12 })] : securityAdvisories;
+      // F-18: mesma poda de 12 dos avisos de segurança, com chave de overflow própria (canais independentes).
+      const deadImportsView = deadImportAdvisories.length > 12 ? [...deadImportAdvisories.slice(0, 12), hostT("gate.moreDeadImports", { count: deadImportAdvisories.length - 12 })] : deadImportAdvisories;
       // Contrato cross-file NÃO verificado (Python compilou mas o mypy não rodou): "Aplicar tudo" passa a
       // exigir confirmação. NÃO conta se já há bloqueio duro (o dev corrige/força esse primeiro) — a
       // supressão vale SÓ para a semântica de confirmação; a POLÍTICA usa o flag CRU abaixo (senão
@@ -2492,9 +2503,9 @@ export class Controller {
       // contractBlocked: a política do admin transforma a confirmação em bloqueio — a UI troca o botão
       // "Aplicar sem verificar contrato" pelo caminho de verificação real (Preparar ambiente → Re-verificar).
       const contractBlocked = this.gateContractUnverifiedHard && this.config.blockUnverifiedContract();
-      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: this.gateContractUnverified, contractBlocked, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView });
+      this.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: this.gateContractUnverified, contractBlocked, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView, deadImports: deadImportsView });
       log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
-      return { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories };
+      return { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories, deadImportAdvisories };
     } catch (e) {
       // Falha do PRÓPRIO gate (temp/exec) nunca deve travar a entrega — degrada para consultivo. MAS
       // para a POLÍTICA, gate que não rodou = contrato não verificado (senão quebrar o gate seria o
@@ -2503,7 +2514,7 @@ export class Controller {
       this.gateContractUnverified = false; // não trava o Aplicar por CONFIRMAÇÃO (retrocompat)
       this.gateContractUnverifiedHard = contractUnverified(language, false, true);
       const contractBlocked = this.gateContractUnverifiedHard && this.config.blockUnverifiedContract();
-      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, contractBlocked, summary: contractBlocked ? hostT("gate.couldntRun.policy") : hostT("gate.couldntRun"), files: [], projectErrors: [], dod: [], security: [] });
+      this.post({ type: "project/gate", advisory: true, partial: false, requiresContractConfirm: false, contractBlocked, summary: contractBlocked ? hostT("gate.couldntRun.policy") : hostT("gate.couldntRun"), files: [], projectErrors: [], dod: [], security: [], deadImports: [] });
       return null;
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -2838,6 +2849,25 @@ export class Controller {
     }
   }
 
+  // Garante o ruff no venv do workspace (best-effort, espelho do ensureGateBandit). Só num venv do workspace
+  // (nunca no python global/system). Falha/offline → não instala; o gate de imports mortos fica consultivo.
+  // Chamado só quando forge.gate.deadImports != false. (F-18)
+  private async ensureGateRuff(py: string): Promise<void> {
+    try {
+      const ws = this.workspaceRoot();
+      if (!ws) return;
+      const isWin = process.platform === "win32";
+      const venv = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+      if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
+      const probe = await runFileCheck({ id: "probe", label: "ruff", gate: false }, py, ["-m", "ruff", "--version"], { timeoutMs: 15_000 });
+      if (probe.status === "ok") return; // ruff já disponível no venv
+      if (this.runService.isBusy()) return; // não atropela uma execução em andamento
+      await this.runService.runCommand(hostT("run.label.gateRuff"), buildRuffInstall(venv), this.config.env().timeoutSeconds * 1000);
+    } catch (e) {
+      log.warn("Gate: não consegui garantir o ruff no venv — seguindo (imports mortos consultivo)", e);
+    }
+  }
+
   // Gate de SEGURANÇA (P2): roda o bandit (SAST) sobre a árvore temp materializada e classifica os achados
   // de forma conservadora (só severidade+confiança ALTAS bloqueiam). bandit ausente/sem relatório → null
   // (fail-open: nada bloqueia). Análise por AST — NÃO executa o código gerado (distinto do smoke test).
@@ -2869,6 +2899,32 @@ export class Controller {
       return raw && (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)) ? normGatePath(path.relative(root, raw)) : normGatePath(raw);
     };
     return splitSecurityFindings(findings.map((f) => ({ ...f, path: rel(f.path) })), mode);
+  }
+
+  // Gate de IMPORTS MORTOS (F-18): roda o ruff (regra F401) sobre a árvore temp e devolve linhas ADVISORY
+  // (nunca bloqueia — não há split de bloqueio). Análise por AST — NÃO executa o código. ruff ausente/sem
+  // relatório → null (fail-open). Espelha o runSecurityScan: relatório num ARQUIVO (`-o`), veredito do
+  // relatório e NÃO do exit code (ruff sai 1 quando ACHA algo — normal); --isolated ignora ruff.toml/pyproject
+  // do dev (hermético); --select F401 fixa a regra.
+  private async runDeadImportScan(py: string, root: string): Promise<string[] | null> {
+    const reportPath = path.join(root, ".forge-ruff-report.json");
+    const result = await runFileCheck(
+      { id: "gate:ruff", label: "ruff", gate: false },
+      py,
+      ["-m", "ruff", "check", "--isolated", "--output-format", "json", "--select", "F401", "-o", reportPath, "-q", "."],
+      { cwd: root, timeoutMs: 120_000, outputCap: 8_000 }
+    );
+    if (result.status === "skipped") return null; // ENOENT (sem python) / timeout → inconclusivo (fail-open)
+    const reportRaw = await fs.readFile(reportPath, "utf8").catch(() => "");
+    const findings = parseRuffReport(reportRaw);
+    if (findings === null) return null; // relatório ausente/truncado → indisponível (fail-open)
+    // O ruff emite caminhos ABSOLUTOS (diferente do bandit, relativo por causa do `-r .`) → normaliza p/
+    // relativo à raiz do gate (casa com os paths das propostas). Mesmo normalizador do runSecurityScan.
+    const rel = (p: string): string => {
+      const raw = (p ?? "").trim();
+      return raw && (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)) ? normGatePath(path.relative(root, raw)) : normGatePath(raw);
+    };
+    return ruffAdvisories(findings.map((f) => ({ ...f, path: rel(f.path) })));
   }
 
   private workspaceName(): string {

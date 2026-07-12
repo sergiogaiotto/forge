@@ -189,6 +189,7 @@ export type MessageKey =
   | "plan.hintReview"
   | "plan.dodHeader"
   | "plan.securityHeader"
+  | "plan.deadImportsHeader"
   | "plan.noPurpose"
   | "plan.dependsOn"
   | "plan.gateFailedTip"
@@ -522,6 +523,7 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "plan.hintReview": "Revise os arquivos abaixo — passe o mouse para ver o objetivo e as dependências de cada um. “Aprovar e gerar” cria todos na ordem de dependência; “Cancelar” descarta o plano.",
     "plan.dodHeader": "Definição de pronto — Aplicar bloqueado até fechar:",
     "plan.securityHeader": "Segurança (bandit) — avisos (não bloqueiam):",
+    "plan.deadImportsHeader": "Imports mortos (ruff) — avisos (não bloqueiam):",
     "plan.noPurpose": "(sem descrição)",
     "plan.dependsOn": "Depende de: {deps}",
     "plan.gateFailedTip": "Gate reprovou:",
@@ -845,6 +847,7 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "plan.hintReview": "Review the files below — hover to see each one's purpose and dependencies. “Approve and generate” creates them all in dependency order; “Cancel” discards the plan.",
     "plan.dodHeader": "Definition of done — Apply blocked until resolved:",
     "plan.securityHeader": "Security (bandit) — advisories (non-blocking):",
+    "plan.deadImportsHeader": "Dead imports (ruff) — advisories (non-blocking):",
     "plan.noPurpose": "(no description)",
     "plan.dependsOn": "Depends on: {deps}",
     "plan.gateFailedTip": "Gate failed:",
@@ -1168,6 +1171,7 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "plan.hintReview": "Revisa los archivos de abajo — pasa el mouse para ver el objetivo y las dependencias de cada uno. “Aprobar y generar” los crea todos en orden de dependencia; “Cancelar” descarta el plan.",
     "plan.dodHeader": "Definición de listo — Aplicar bloqueado hasta resolver:",
     "plan.securityHeader": "Seguridad (bandit) — avisos (no bloquean):",
+    "plan.deadImportsHeader": "Importaciones muertas (ruff) — avisos (no bloquean):",
     "plan.noPurpose": "(sin descripción)",
     "plan.dependsOn": "Depende de: {deps}",
     "plan.gateFailedTip": "El gate reprobó:",

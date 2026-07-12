@@ -376,6 +376,11 @@
           "default": "conservative",
           "markdownDescription": "%config.gate.sql.md%"
         },
+        "forge.gate.deadImports": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.gate.deadImports.md%"
+        },
         "forge.warehouse.connections": {
           "type": "array",
           "default": [],

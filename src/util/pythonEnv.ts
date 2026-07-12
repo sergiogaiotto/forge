@@ -121,6 +121,15 @@ export function buildBanditInstall(venvPython: string): string {
   return `${interp} -m pip install bandit`;
 }
 
+// Instalação do ruff num venv EXISTENTE (nunca global). O gate de IMPORTS MORTOS (F-18) do Modo Projeto usa
+// o ruff (regra F401) para listar imports não usados no Python gerado. SEMPRE advisory — sem ruff no venv o
+// gate de imports mortos fica consultivo (não bloqueia). Best-effort, como o mypy/bandit: falhar (offline)
+// preserva a degradação segura.
+export function buildRuffInstall(venvPython: string): string {
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -m pip install ruff`;
+}
+
 // Monta o comando de teste usando o interpretador do venv quando o comando é pytest. Cobre:
 //   "pytest -q"           → `"<venv>" -m pytest -q`
 //   "python -m pytest -q" → `"<venv>" -m pytest -q`  (python/python3 SEM caminho — nome nu)
