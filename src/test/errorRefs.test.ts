@@ -75,7 +75,17 @@ test("isSensitiveFile: bloqueia .env, chaves privadas, credenciais e keystores",
     "credentials.json",
     "secrets.yaml",
     "app_secret.txt",
-    "my-private-key.txt",
+    "my-private-key.txt", // não-fonte → bloqueado por nome; conteúdo faz backstop se for PEM
+    "backup_id_rsa", // não-fonte, id_rsa embutido
+    // Dotfiles de credencial (achado #04): extensionless → sempre bloqueados.
+    ".envrc",
+    "project/.envrc",
+    ".netrc",
+    "_netrc",
+    ".pgpass",
+    ".npmrc",
+    ".pypirc",
+    ".git-credentials",
   ]) {
     assert.equal(isSensitiveFile(p), true, `deve bloquear ${p}`);
   }
@@ -90,12 +100,15 @@ test("isSensitiveFile: NÃO bloqueia código-fonte legítimo citado num tracebac
     "secretary.py", // 'secret' só casa em fronteira de palavra/sep, não substring
     "keyboard.ts", // 'key' não é '.key'
     "README.md",
-    // Módulos-FONTE cujo nome contém credentials/secrets → tratados pela redação, não bloqueados
-    // (over-block de fonte degradaria o auto-read; segredo inline num .py é mascarado, não vazado).
+    // Módulos-FONTE cujo nome contém credentials/secrets/private_key → tratados pela redação e pelo
+    // content-guard, não bloqueados (over-block de fonte degradaria o auto-read; achados #03/#02).
     "src/services/credential_service.py",
     "src/security/secrets_manager.py",
     "credentials.py",
     "app/secret.ts",
+    "src/crypto/private_key.py", // módulo de cripto legítimo; looksLikePrivateKey faz backstop se vier PEM
+    "id_rsa.py",
+    "privkey.ts",
   ]) {
     assert.equal(isSensitiveFile(p), false, `NÃO deve bloquear ${p}`);
   }

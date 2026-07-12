@@ -33,19 +33,25 @@ const PATH_LINE = /([A-Za-z]:[\\/][^\s:"'()]{1,400}\.[A-Za-z0-9]{1,6}|[^\s:"'()]
 const SOURCE_EXT =
   /\.(py|pyi|ipynb|ts|tsx|js|jsx|mjs|cjs|vue|svelte|go|rs|java|kt|scala|rb|php|cs|cpp|cc|c|h|hpp|sql|r|swift|dart)$/i;
 
-// SEMPRE sensível, qualquer que seja a extensão: .env, chaves privadas SSH/PEM, keystores.
+// SEMPRE sensível, qualquer que seja a extensão: .env, dotfiles de credencial conhecidos (direnv/
+// netrc/pgpass/npm/pypi/git), chaves SSH extensionless e chaves/keystores por extensão.
 const SENSITIVE_ALWAYS: RegExp[] = [
   /^\.env(\.[^\\/]*)?$/i, // .env, .env.local, .env.production
   /\.env$/i, // production.env, config.env
-  /^id_(rsa|dsa|ecdsa|ed25519)$/i, // chaves SSH privadas (sem extensão)
+  /^\.(envrc|netrc|pgpass|npmrc|pypirc|dockercfg|git-credentials)$/i, // dotfiles de credencial (achado #04 refutado só p/ o caso sem prefixo — com caminho, .envrc é extraível)
+  /^_netrc$/i, // variante Windows do .netrc
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i, // chaves SSH privadas (extensionless)
   /\.(pem|key|pfx|p12|pkcs12|keystore|jks|ppk|asc|gpg)$/i, // chaves/keystores por extensão
-  /(^|[._-])(id_rsa|privkey|private[._-]?key)([._-].*)?$/i, // *_private_key, privkey (mesmo .txt)
 ];
 
-// STORE de segredo só quando NÃO for código-fonte (um `.py`/`.ts` é módulo, tratado pela redação).
+// Sensível SÓ quando NÃO for código-fonte (um `.py`/`.ts` é MÓDULO — o STORE de segredo é sem
+// extensão ou tem extensão de dados). A rede de segurança de CONTEÚDO (looksLikePrivateKey) faz o
+// backstop de um arquivo-fonte que por acaso carregue um PEM. Evita falso-positivo em módulos de
+// cripto legítimos (private_key.py, secrets_manager.py, credential_service.ts) — achado #03.
 const SENSITIVE_UNLESS_SOURCE: RegExp[] = [
   /(^|[._-])credentials?([._-].*)?$/i, // credentials, aws_credentials, credentials.json
   /(^|[._-])secrets?([._-].*)?$/i, // secrets, secrets.yaml, app_secret.txt
+  /(^|[._-])(id_rsa|privkey|private[._-]?key)([._-].*)?$/i, // *_private_key.txt, privkey (não-fonte)
 ];
 
 /** true se o BASENAME do caminho for um arquivo de segredo que o auto-read não deve ler. Puro/testável. */
