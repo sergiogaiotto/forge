@@ -156,6 +156,7 @@ export type HostMessageKey =
   | "run.label.pytestInstall"
   | "run.label.gateMypy"
   | "run.label.gateBandit"
+  | "run.label.gateRuff"
   | "run.label.cell"
   | "run.label.tests"
   | "run.cell.noOutput"
@@ -182,6 +183,7 @@ export type HostMessageKey =
   | "gate.alsoBlocked"
   | "gate.blocked"
   | "gate.securitySuffix"
+  | "gate.deadImportsSuffix"
   | "gate.part.compile"
   | "gate.part.syntaxGo"
   | "gate.part.arch"
@@ -189,6 +191,7 @@ export type HostMessageKey =
   | "gate.tscSuffix"
   | "gate.goSuffix"
   | "gate.moreSecurity"
+  | "gate.moreDeadImports"
   | "gate.couldntRun.policy"
   | "gate.couldntRun"
   // Smoke test (advisory)
@@ -566,6 +569,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "run.label.pytestInstall": "pytest · instalação",
     "run.label.gateMypy": "gate · mypy (coerência)",
     "run.label.gateBandit": "gate · bandit (segurança)",
+    "run.label.gateRuff": "gate · ruff (imports mortos)",
     "run.label.cell": "célula [{index}]",
     "run.label.tests": "testes",
     "run.cell.noOutput": "(sem saída capturada — veja a célula no notebook)",
@@ -589,6 +593,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.alsoBlocked": " Também {count} arquivo(s) com erro ({parts}).",
     "gate.blocked": "Gate reprovou: {count} arquivo(s) bloqueados{parts}. Corrija antes de aplicar.",
     "gate.securitySuffix": " · segurança: {count} aviso(s) do bandit (não bloqueiam).",
+    "gate.deadImportsSuffix": " · imports mortos: {count} aviso(s) do ruff (não bloqueiam).",
     "gate.part.compile": "{count} de compilação/contrato",
     "gate.part.syntaxGo": "{count} de sintaxe (gofmt)",
     "gate.part.arch": "{count} de arquitetura (regra de camadas)",
@@ -596,6 +601,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.tscSuffix": " · tsc: {count} aviso(s) de tipo (advisory — instale as deps e rode o tsc para o veredito completo)",
     "gate.goSuffix": " · go build: {count} aviso(s) (advisory — rode go build ./... com as dependências para o veredito completo)",
     "gate.moreSecurity": "… e mais {count} aviso(s) — veja o log de diagnóstico.",
+    "gate.moreDeadImports": "… e mais {count} aviso(s) — veja o log de diagnóstico.",
     "gate.couldntRun.policy": "Não consegui rodar o gate de compilação — e a política do admin exige contrato verificado. Prepare o ambiente e re-verifique.",
     "gate.couldntRun": "Não consegui rodar o gate de compilação (ambiente) — nada foi bloqueado.",
     "smoke.timeout": "Smoke test dos testes gerados: tempo esgotado (inconclusivo — não bloqueia).",
@@ -958,6 +964,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "run.label.pytestInstall": "pytest · install",
     "run.label.gateMypy": "gate · mypy (coherence)",
     "run.label.gateBandit": "gate · bandit (security)",
+    "run.label.gateRuff": "gate · ruff (dead imports)",
     "run.label.cell": "cell [{index}]",
     "run.label.tests": "tests",
     "run.cell.noOutput": "(no output captured — see the cell in the notebook)",
@@ -981,6 +988,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.alsoBlocked": " Also {count} file(s) with errors ({parts}).",
     "gate.blocked": "Gate failed: {count} file(s) blocked{parts}. Fix before applying.",
     "gate.securitySuffix": " · security: {count} bandit advisory(ies) (non-blocking).",
+    "gate.deadImportsSuffix": " · dead imports: {count} ruff advisory(ies) (non-blocking).",
     "gate.part.compile": "{count} compilation/contract",
     "gate.part.syntaxGo": "{count} syntax (gofmt)",
     "gate.part.arch": "{count} architecture (layer rule)",
@@ -988,6 +996,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.tscSuffix": " · tsc: {count} type advisory(ies) (advisory — install the deps and run tsc for the full verdict)",
     "gate.goSuffix": " · go build: {count} advisory(ies) (advisory — run go build ./... with the dependencies for the full verdict)",
     "gate.moreSecurity": "… and {count} more advisory(ies) — see the diagnostics log.",
+    "gate.moreDeadImports": "… and {count} more advisory(ies) — see the diagnostics log.",
     "gate.couldntRun.policy": "I couldn't run the compilation gate — and the admin policy requires a verified contract. Prepare the environment and re-verify.",
     "gate.couldntRun": "I couldn't run the compilation gate (environment) — nothing was blocked.",
     "smoke.timeout": "Smoke test of the generated tests: time ran out (inconclusive — non-blocking).",
@@ -1350,6 +1359,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "run.label.pytestInstall": "pytest · instalación",
     "run.label.gateMypy": "gate · mypy (coherencia)",
     "run.label.gateBandit": "gate · bandit (seguridad)",
+    "run.label.gateRuff": "gate · ruff (importaciones muertas)",
     "run.label.cell": "celda [{index}]",
     "run.label.tests": "pruebas",
     "run.cell.noOutput": "(sin salida capturada — mira la celda en el notebook)",
@@ -1373,6 +1383,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.alsoBlocked": " También {count} archivo(s) con error ({parts}).",
     "gate.blocked": "El gate reprobó: {count} archivo(s) bloqueados{parts}. Corrige antes de aplicar.",
     "gate.securitySuffix": " · seguridad: {count} aviso(s) de bandit (no bloquean).",
+    "gate.deadImportsSuffix": " · importaciones muertas: {count} aviso(s) de ruff (no bloquean).",
     "gate.part.compile": "{count} de compilación/contrato",
     "gate.part.syntaxGo": "{count} de sintaxis (gofmt)",
     "gate.part.arch": "{count} de arquitectura (regla de capas)",
@@ -1380,6 +1391,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.tscSuffix": " · tsc: {count} aviso(s) de tipo (advisory — instala las deps y ejecuta tsc para el veredicto completo)",
     "gate.goSuffix": " · go build: {count} aviso(s) (advisory — ejecuta go build ./... con las dependencias para el veredicto completo)",
     "gate.moreSecurity": "… y {count} aviso(s) más — mira el log de diagnóstico.",
+    "gate.moreDeadImports": "… y {count} aviso(s) más — mira el log de diagnóstico.",
     "gate.couldntRun.policy": "No pude ejecutar el gate de compilación — y la política del admin exige contrato verificado. Prepara el entorno y re-verifica.",
     "gate.couldntRun": "No pude ejecutar el gate de compilación (entorno) — nada fue bloqueado.",
     "smoke.timeout": "Smoke test de las pruebas generadas: tiempo agotado (inconcluso — no bloquea).",

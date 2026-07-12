@@ -1106,6 +1106,18 @@ function ProjectPlanPanel({ state, dispatch }: { state: UIState; dispatch: React
                     ))}
                   </div>
                 )}
+                {(gate.deadImports ?? []).length > 0 && (
+                  // Imports mortos (F-18): avisos ADVISORY do ruff (F401). Âmbar — NUNCA bloqueiam (não entram
+                  // em `files`/gateErrors, então a borda/ícone do banner não mudam).
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#d1a13a" }}>{t("plan.deadImportsHeader")}</div>
+                    {(gate.deadImports ?? []).map((e, i) => (
+                      <div key={i} className="mono" style={{ marginTop: 3, fontSize: 11, color: "#d1a13a", whiteSpace: "pre-wrap" }}>
+                        • {e}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             <div className="plan-list">

@@ -266,6 +266,9 @@ export interface ProjectGateSummary {
   // project-level, só surface. Ambos FORA do summarizeGate e do auto-reparo. Ver util/banditParse.ts.
   securityErrors?: { path: string; errors: string[] }[];
   securityAdvisories?: string[];
+  // Achados de IMPORTS MORTOS (ruff F401), project-level, SEMPRE advisory (nunca bloqueia — não há modo
+  // conservador). FORA do summarizeGate/auto-reparo. Preenchido pelo Controller. Ver util/ruffParse.ts. (F-18)
+  deadImportAdvisories?: string[];
   projectErrors: string[]; // reprovou SEM atribuir a arquivo → bloqueia todos os .py (fallback)
   partial: boolean; // compilou (sintaxe ok) mas o mypy NÃO rodou → coerência cross-file NÃO verificada (NÃO é verde)
   summary: string;

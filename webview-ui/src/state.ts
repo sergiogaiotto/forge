@@ -23,7 +23,7 @@ import type {
 // `ui` viaja junto para o retry reenviar a mesma escolha de camada de UI.
 export type ProjectBrief = { text: string; language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework };
 // Resultado do gate workspace-wide (compileall/mypy sobre o conjunto gerado). advisory = não pôde rodar.
-export type ProjectGateState = { advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; contractBlocked?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[] };
+export type ProjectGateState = { advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; contractBlocked?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[]; deadImports: string[] };
 import { CHARTER_KEYS } from "../../src/shared/protocol";
 import { renderContextReport, renderSummarized } from "./commands";
 import { t } from "./i18n";
@@ -366,7 +366,7 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "project/gate": {
       // Gate workspace-wide: guarda o veredito para pintar os cartões reprovados e o resumo no modal.
       if (!state.project) return state;
-      const gate = { advisory: msg.advisory, partial: msg.partial, requiresContractConfirm: msg.requiresContractConfirm, contractBlocked: msg.contractBlocked, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors, dod: msg.dod, security: msg.security };
+      const gate = { advisory: msg.advisory, partial: msg.partial, requiresContractConfirm: msg.requiresContractConfirm, contractBlocked: msg.contractBlocked, summary: msg.summary, files: msg.files, projectErrors: msg.projectErrors, dod: msg.dod, security: msg.security, deadImports: msg.deadImports };
       // Carimba `contractUnverified` (mypy não rodou → partial/advisory) SÓ nas propostas DESTE projeto,
       // casadas pelo path do blueprint — para o passo "Gate" da DoD não mostrar verde otimista depois que o
       // modal fechar (state.project → null). Escopar ao projeto evita que uma edição de CHAT anterior (já

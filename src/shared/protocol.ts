@@ -356,7 +356,7 @@ export type ExtToWebview =
   // rodou, projeto Python) — o "Aplicar tudo" exige confirmação explícita (não é verde nem bloqueio duro).
   // contractBlocked: a política do admin (forge.gate.blockUnverifiedContract) transforma essa confirmação
   // em BLOQUEIO sem escape — a UI não oferece "Aplicar sem verificar contrato"; o caminho é verificar.
-  | { type: "project/gate"; advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; contractBlocked?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[] }
+  | { type: "project/gate"; advisory: boolean; partial: boolean; requiresContractConfirm?: boolean; contractBlocked?: boolean; summary: string; files: ProjectGateFileView[]; projectErrors: string[]; dod: string[]; security: string[]; deadImports: string[] }
   | { type: "project/done" }
   // Todos os arquivos do projeto foram APLICADOS (após "Aplicar tudo"). O webview desmarca o Modo
   // Projeto automaticamente — fim de fluxo: a próxima mensagem volta a ser chat/diagnóstico normal.
