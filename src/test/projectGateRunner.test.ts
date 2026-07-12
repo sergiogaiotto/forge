@@ -125,6 +125,22 @@ test("run: projeto java COERENTE (sem violação, DoD off) → nada bloqueia, ga
   assert.equal(res.state!.contractUnverified, false, "sem bloqueio + DoD off + java advisory → sem confirmação");
 });
 
+test("run: a11y adverte sobre o frontend gerado (advisory, NÃO bloqueia) — independe da linguagem", async () => {
+  const { task, entries } = makeTask([
+    { path: "Main.java", content: "package com.acme.app;\npublic class Main {}" },
+    { path: "templates/index.html", content: '<html>\n<body>\n<img src="logo.png">\n</body>\n</html>' },
+  ]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  const res = await new ProjectGateRunner(deps).run("java", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.ok((res.summary!.a11yAdvisories ?? []).length >= 2, "html sem lang + img sem alt → advisories");
+  assert.ok(res.summary!.a11yAdvisories!.some((a) => /index\.html/.test(a)));
+  // Advisory: NUNCA vira fileError/bloqueio.
+  assert.equal(res.summary!.fileErrors.length, 0, "a11y não bloqueia");
+  assert.equal(entries.get("templates/index.html")!.gateOk, true);
+  assert.equal(entries.get("Main.java")!.gateOk, true);
+});
+
 test("runProjectSmoke: não-python retorna cedo, sem post", async () => {
   const { task } = makeTask([{ path: "Main.java", content: "class Main {}" }]);
   const { deps, posts } = makeDeps(task, { testEnabled: true });

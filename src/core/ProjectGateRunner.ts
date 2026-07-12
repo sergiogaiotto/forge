@@ -10,6 +10,7 @@ import { runFileCheck } from "../util/execCheck";
 import { safeWorkspacePath } from "../util/safePath";
 import { findLayerViolations, layerRuleLabel } from "../util/layerCheck";
 import { evaluateDodGate } from "../util/dodCheck";
+import { scanA11y } from "../util/a11yLint";
 import { summarizeSmoke } from "../util/smoke";
 import { buildBanditInstall, buildMypyInstall, buildRuffInstall, findVenvPython } from "../util/pythonEnv";
 import { reconcileRequirements } from "../util/pythonDeps";
@@ -244,6 +245,11 @@ export class ProjectGateRunner {
       // F-18: imports mortos (ruff F401) — Python-only + ligado. Advisory PURO: string[] (sem split de
       // bloqueio), coalescido a []. NUNCA toca `blocked`/`gateOk`/`totalBlocked`/`files` (invariante advisory).
       const deadImportAdvisories = language === "python" && deadImportsMode ? (await this.runDeadImportScan(py!, root)) ?? [] : [];
+      // A11y (advisory, #06): linter PURO-TS sobre os arquivos de FRONTEND gerados (html/jsx/tsx/vue/svelte),
+      // QUALQUER que seja a linguagem do projeto (React SPA, ou Jinja num FastAPI) — o motor que faltava (o
+      // único domínio sem validação da SAÍDA; o isFrontendRequest só força a skill no prompt). Nunca bloqueia.
+      const a11yAdvisories = scanA11y(props.map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified }))).map((f) => `${f.path}:${f.line} — ${f.message}`);
+      if (a11yAdvisories.length) this.deps.log.info(`Gate a11y: ${a11yAdvisories.length} aviso(s) de acessibilidade (advisory) — ${a11yAdvisories.slice(0, 5).join(" | ")}`);
 
       // Propaga por-arquivo para gateOk: bloqueia arquivo com erro do TOOLCHAIN (atribuído), violação de
       // arquitetura OU achado de segurança bloqueante; o DoD (ausência project-level) bloqueia TODOS.
@@ -311,7 +317,7 @@ export class ProjectGateRunner {
       this.deps.post({ type: "project/gate", advisory: gate.advisory, partial: gate.partial, requiresContractConfirm: contractUnverifiedFlag, contractBlocked, summary, files: [...gate.fileErrors, ...architectureErrors, ...securityErrors], projectErrors: gate.projectErrors, dod: dodErrors, security: securityView, deadImports: deadImportsView });
       this.deps.log.info(`Gate do projeto: ${summary} (rodou: ${gate.ran.join(", ") || "nada"}${architectureErrors.length ? ", camadas" : ""}${dodBlocksAll ? ", definição-de-pronto" : ""}${security ? ", segurança" : ""}; pulou: ${gate.skipped.join(", ") || "nada"})`);
       return {
-        summary: { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories, deadImportAdvisories },
+        summary: { ...gate, summary, architectureErrors, dodErrors, securityErrors, securityAdvisories, deadImportAdvisories, a11yAdvisories },
         state: { lastGateRun, contractUnverified: contractUnverifiedFlag, contractUnverifiedHard: contractUnverifiedHardFlag },
       };
     } catch (e) {
