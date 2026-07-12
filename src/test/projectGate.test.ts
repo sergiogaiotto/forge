@@ -5,6 +5,7 @@ import {
   contractGateDecision,
   contractUnverified,
   GateCheckResult,
+  isBlockingTscContract,
   isTscSyntaxError,
   mypyUnavailable,
   normGatePath,
@@ -330,4 +331,30 @@ test("parseGoBuildErrors: FILTRA o ruído de deps de terceiros ausentes (offline
   const e = parseGoBuildErrors(out);
   assert.equal(e.length, 1);
   assert.deepEqual(e[0], { path: "domain/order.go", line: 9, message: "undefined: RealDrift" });
+});
+
+// #05: isBlockingTscContract — só TS2307 de import RELATIVO a CÓDIGO bloqueia; asset relativo (css/svg/
+// json...) e não-TS2307 NÃO bloqueiam (evita o falso-bloqueio nº1 de um React SPA).
+test("isBlockingTscContract: TS2307 relativo a código (extensionless / .ts / .js) BLOQUEIA", () => {
+  for (const mod of ["./missing", "../domain/orderStatus", "./components/Foo.tsx", "./util/x.js"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), true, mod);
+  }
+});
+
+test("isBlockingTscContract: import de ASSET relativo NÃO bloqueia (bundler resolve; falso-bloqueio evitado)", () => {
+  for (const mod of ["./App.css", "./styles.scss", "./logo.svg", "../assets/hero.png", "./data.json", "./doc.md", "./font.woff2"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), false, mod);
+  }
+});
+
+test("isBlockingTscContract: import BARE / alias / stdlib NÃO bloqueia (defesa dupla com parseTscErrors)", () => {
+  for (const mod of ["react", "express", "@/components/Foo", "#internal/x", "node:fs", "@scope/pkg"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), false, mod);
+  }
+});
+
+test("isBlockingTscContract: outros códigos (TS2339, TS1005, sem módulo) NÃO bloqueiam", () => {
+  assert.equal(isBlockingTscContract({ code: "TS2339", message: "Property 'x' does not exist on type 'Y'." }), false);
+  assert.equal(isBlockingTscContract({ code: "TS1005", message: "';' expected." }), false);
+  assert.equal(isBlockingTscContract({ code: "TS2307", message: "Cannot find module (mensagem sem aspas)." }), false);
 });

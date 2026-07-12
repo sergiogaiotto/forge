@@ -21,7 +21,7 @@ import type { Task } from "./Task";
 import {
   contractUnverified,
   GateCheckResult,
-  isTscContractError,
+  isBlockingTscContract,
   isTscSyntaxError,
   mypyUnavailable,
   normGatePath,
@@ -483,8 +483,8 @@ export class ProjectGateRunner {
     // erros de tipo segue ADVISORY (cascata de tipo sem node_modules). parseTscErrors já garante que o TS2307
     // que chega aqui é de import RELATIVO (o BARE de terceiros foi filtrado) → drift interno real, seguro de
     // bloquear (o análogo TS do import-fantasma que o mypy bloqueia no Python).
-    const contract = errors.filter((e) => isTscContractError(e.code));
-    const advisory = errors.filter((e) => !isTscSyntaxError(e.code) && !isTscContractError(e.code));
+    const contract = errors.filter((e) => isBlockingTscContract(e));
+    const advisory = errors.filter((e) => !isTscSyntaxError(e.code) && !isBlockingTscContract(e));
     const blocking = [...syntax, ...contract];
     return {
       checks: [{ result: { ...raw, label: "tsc (sintaxe/contrato)", status: blocking.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(blocking) }],

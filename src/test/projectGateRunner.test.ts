@@ -164,3 +164,14 @@ test("run TS (ao vivo): import BARE de terceiros NÃO falso-bloqueia (ruído fil
   assert.equal(res.summary!.fileErrors.some((f) => /app\.ts$/.test(f.path)), false, "TS2307 de import bare (terceiros) é filtrado → NÃO bloqueia");
   assert.equal(entries.get("src/app.ts")!.gateOk, true);
 });
+
+test("run TS (ao vivo): import de ASSET relativo (./App.css) NÃO falso-bloqueia — React SPA legítimo", async () => {
+  const { task, entries } = makeTask([{ path: "src/App.tsx", content: "import './App.css';\nexport const App = () => null;\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  // TS2307 relativo a .css é ASSET → advisory, NÃO bloqueia (o tsc não conhece css sem ambient decl, o bundler resolve).
+  assert.equal(res.summary!.fileErrors.some((f) => /App\.tsx$/.test(f.path)), false, "import de .css não pode falso-bloquear");
+  assert.equal(entries.get("src/App.tsx")!.gateOk, true);
+});

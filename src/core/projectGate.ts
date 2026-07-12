@@ -161,15 +161,25 @@ export function isTscSyntaxError(code: string): boolean {
 }
 
 // #05: erros de CONTRATO cross-file promovidos a BLOQUEANTES no gate TS — o análogo do import-fantasma que
-// o mypy bloqueia no Python (o "OrderStatus fantasma que derruba o uvicorn", agora no frontend). SÓ TS2307
-// (Cannot find module) de import RELATIVO: parseTscErrors JÁ descartou o TS2307 de import BARE (dep de
-// terceiros ausente sem node_modules na árvore temp), então todo TS2307 que SOBREVIVE aqui é drift interno
-// REAL — um arquivo do projeto que não existe/foi renomeado. Os demais TS2xxx+ (TS2339 property-does-not-exist
-// etc.) seguem ADVISORY: sem node_modules há cascata de tipo de terceiros que falso-bloquearia (a lição do
-// falso-bloqueio do Go — só se promove a bloqueante o que é PROVADAMENTE local).
-const TS_CONTRACT_CODES = new Set(["TS2307"]);
-export function isTscContractError(code: string): boolean {
-  return TS_CONTRACT_CODES.has(code);
+// o mypy bloqueia no Python (o "OrderStatus fantasma que derruba o uvicorn", agora no frontend). Só TS2307
+// (Cannot find module) de import RELATIVO a um MÓDULO DE CÓDIGO: parseTscErrors JÁ descartou o TS2307 de
+// import BARE (dep de terceiros ausente sem node_modules), então o que sobra é RELATIVO — drift interno.
+//
+// CRÍTICO (falso-bloqueio nº1, achado do adversarial-thinking): um React SPA legítimo faz `import './App.css'`
+// / `import logo from './logo.svg'`. O tsc emite TS2307 RELATIVO para esses (não conhece asset sem uma
+// declaração ambiente `declare module '*.css'`), mas o BUNDLER (Vite/webpack) os resolve — bloquear seria a
+// mesma classe do falso-bloqueio do Go. Então SÓ bloqueia import relativo a código (extensionless ou
+// .ts/.tsx/.js/...); asset relativo (css/svg/png/json...) segue ADVISORY. TS2339 e demais TS2xxx+ também
+// seguem ADVISORY (cascata de tipo de terceiros sem node_modules falso-bloquearia).
+const TS_ASSET_EXT = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|json|jsonc|md|mdx|txt|csv|ya?ml|graphql|gql|woff2?|ttf|eot|otf|mp[34]|webm|wav|ogg|glb|gltf|wasm|html?|xml|pdf|node)$/i;
+
+/** true se o erro do tsc DEVE bloquear o Aplicar: TS2307 de import RELATIVO a um módulo de CÓDIGO (não asset). */
+export function isBlockingTscContract(e: { code: string; message: string }): boolean {
+  if (e.code !== "TS2307") return false;
+  const mod = /['"]([^'"]+)['"]/.exec(e.message)?.[1] ?? "";
+  // Defesa DUPLA (não depende só do filtro bare do parseTscErrors): exige import RELATIVO (./ ../) E não-asset.
+  // Alias de path ('@/x', '#x') e stdlib ('node:fs') não começam com "." → nunca bloqueiam (fail-safe).
+  return mod.startsWith(".") && !TS_ASSET_EXT.test(mod);
 }
 
 // Agrupa erros do tsc por arquivo no formato do gate (Map<path, string[]>).
