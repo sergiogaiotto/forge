@@ -45,8 +45,34 @@ test("isFrontendRequest: geração de dados/backend pura → false", () => {
   }
 });
 
+// REGRESSÃO (revisão adversarial): DADOS que CITAM/EMITEM/PARSEIAM HTML sem nomear uma lib NÃO podem disparar
+// (o "html"/"css" cru quebrava o isolamento). Relatório/e-mail/pytest/CSV/transform e scraping por INTENÇÃO
+// (inclusive verbos pt-BR) → false. A palavra-técnica só conta com um substantivo de artefato-UI junto.
+test("isFrontendRequest: dados-que-emitem/parseiam HTML sem lib nomeada → false (isolamento, achado da revisão)", () => {
+  for (const t of [
+    "gere um relatório em HTML das vendas do mês",
+    "gere um relatório HTML de cobertura de testes",
+    "crie um template de e-mail HTML para a newsletter",
+    "escreva testes pytest para o parser de HTML",
+    "converta este CSV em uma tabela HTML",
+    "extraia os preços desta página HTML por regex",
+    "raspe os links de uma página HTML",
+    "parseie este HTML e extraia a tabela",
+    "sanitize este CSS de entrada do usuário",
+  ]) {
+    assert.equal(isFrontendRequest(t), false, `NÃO deveria ser frontend (é dados/backend): ${t}`);
+  }
+});
+
+// A palavra-técnica (html/css/js) só dispara COM um substantivo de artefato-UI — mantém o positivo legítimo.
+test("isFrontendRequest: html/css/js cru só com artefato-UI (precisão sem perder o positivo)", () => {
+  assert.equal(isFrontendRequest("monte um formulário de login em HTML/CSS/JavaScript"), true); // tem 'formulário'/'login'
+  assert.equal(isFrontendRequest("gere a tela de cadastro em HTML"), true); // 'tela'/'cadastro'
+  assert.equal(isFrontendRequest("preciso de HTML e CSS para isso"), false); // técnica sem artefato-UI → não dispara
+});
+
 // GAP de recall documentado: pedido MUITO curto de UI sem palavra-âncora não dispara (fraqueza conhecida da
-// heurística; o pedido do App1 tinha âncora "html", então dispara — este caso registra o limite).
+// heurística; o pedido do App1 tinha âncora "html"+artefato/tailwind, então dispara — este caso registra o limite).
 test("isFrontendRequest: pedido curto SEM âncora não dispara (gap de recall documentado)", () => {
   assert.equal(isFrontendRequest("faça um formulário de contato"), false);
   assert.equal(isFrontendRequest(""), false);
