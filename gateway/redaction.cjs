@@ -7,11 +7,15 @@
 //
 // Filosofia: defesa em profundidade no EGRESSO (conteúdo que sai do cliente ao gateway/diagnóstico/Langfuse) —
 // NÃO é fronteira de segurança. CONSERVADOR com conteúdo legítimo (o valor precisa PARECER segredo — tem
-// dígito), agressivo com formatos INEQUÍVOCOS. Endurecido por DUAS rodadas de stress adversarial (184 casos):
-// 0 ReDoS; leaks (sk-proj/github/slack/stripe/google/azure/npm) e falsos-positivos (color_key/pwd/prosa/CSS)
-// fechados. ReDoS: TODO quantificador é BOUNDED; o bloco PEM é NÃO-guloso ancorado no END (O(n)).
-// Limitação conhecida (long-tail aceito): `bearer <termo-técnico-com-dígito>` em prosa (ex.: "bearer md5sum")
-// pode ser mascarado — raríssimo, e só afeta trace de observabilidade, não a saída do usuário.
+// dígito), agressivo com formatos INEQUÍVOCOS. Endurecido por RODADAS de stress adversarial: leaks
+// (sk-ant/sk-svcacct/sk-proj/github/gitlab/docker/pypi/sendgrid/twilio/slack/stripe/google/azure-SAS/oracle/npm)
+// e falsos-positivos (color_key/pwd/prosa/CSS) fechados. ReDoS: TODO quantificador é BOUNDED; o bloco PEM é
+// NÃO-guloso ancorado no END (O(n)) — scaling LINEAR verificado até 8M chars. Limitações conhecidas (long-tail
+// ACEITO — over-mask que FALHA SEGURO, só afeta trace de observabilidade, não a saída do usuário): `bearer
+// <termo-com-dígito>` em prosa ("bearer md5sum"); CPF/cartão sem formatação vs. epoch/UUID-só-dígitos; e CHAMADA
+// de função com arg-dígito não-quotado após chave-segredo (kms.get_key(2), rsa.generate(2048)) — mascarar é o lado
+// SEGURO. Só a ref-de-membro de raiz de CÓDIGO conhecida (process.env.X, settings.X) é preservada; excluir por
+// forma GENÉRICA vaza (provado na 2ª rodada: password=Ab1.Cd2.Ef3, PASETO v2.local.<b64>, deadBEEF1234()).
 
 const R = "«oculto»";
 
@@ -20,6 +24,12 @@ const PEM = /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?:[- ]BLOCK)?-----[\s\S]*?--
 
 // userinfo de URL: scheme://user:SENHA@host → mascara SÓ a senha (preserva user/host). BOUNDED (anti-ReDoS).
 const URL_USERINFO = /([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,255}:)([^\s@/]{1,255})(@)/gi;
+// Oracle EZConnect/thin: a senha vem DELIMITADA POR BARRA (user/SENHA@host), forma que o URL_USERINFO (só `:`)
+// não pega. Ancorado em `oracle:<driver>:` p/ não confundir com caminho/`a/b@c`. Mascara só a senha. BOUNDED.
+const ORACLE_DSN = /(oracle:[a-z]+:@?[A-Za-z0-9_$#.]{1,60}\/)([^\s/@]{1,255})(@)/gi;
+// Assinatura em query string: SAS do Azure Storage (sig=), presigned da AWS (X-Amz-Signature=), signature=
+// genérico. É a credencial escopada que autoriza o acesso. Valor ≥16 (mata `?sig=v1`). BOUNDED (anti-ReDoS).
+const SIG_PARAM = /([?&](?:sig|signature|x-amz-signature)=)([^&\s"'#]{16,512})/gi;
 
 // KV: chave-que-parece-segredo = valor SECRET-LIKE. `account_key` (Azure Storage) incluído; `pwd` REMOVIDO
 // (ambíguo: 'print working dir'/cwd — FP de caminho). Sem o genérico `_key` e sem connection-string/dsn (a
@@ -33,6 +43,13 @@ const SECRET_KEY =
 // veio depois de uma chave secreta confirmada). BOUNDED (anti-ReDoS).
 const SECRET_VALUE = "(['\"](?=[^'\"\\n]*[0-9])[^'\"\\n]{5,255}['\"]|(?=[^\\s'\"]{0,512}[0-9])[^\\s'\"]{8,512})";
 const KV = new RegExp(`(${SECRET_KEY}\\s*[:=]\\s*)${SECRET_VALUE}`, "gi");
+// Exclusão NARROW e SEGURA do KV: preserva SÓ referência de acesso a membro ENRAIZADA num identificador de CÓDIGO
+// CONHECIDO (process.env.KEY2, settings.CLIENT_SECRET_V2, import.meta.env.X) — segredo real NÃO começa com esses
+// tokens. LIÇÃO da 2ª rodada de stress: excluir por forma GENÉRICA (qualquer cadeia pontuada / qualquer `()`) VAZA
+// (password=Ab1.Cd2.Ef3, PASETO v2.local.<b64>, api_key=deadBEEF1234() escapavam), então NÃO se exclui por forma;
+// chamada de função com arg-dígito não-quotado (kms.get_key(2), rsa.generate(2048)) segue over-mask ACEITO. Só
+// ramo não-quotado (string entre aspas = literal-segredo); ancorado ^...$; sem quantificador aninhado (BOUNDED).
+const CODE_MEMBER_REF = /^(?:process|os|self|this|cls|settings|config|import|module|globalThis|window)(?:\.[A-Za-z_$][\w$]*|\[\d+\])+$/;
 
 // Bearer com valor SECRET-LIKE (dígito) — mata o FP de prosa ("Bearer authentication" → passa limpo).
 const BEARER = /(bearer\s+)((?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{8,512})/gi;
@@ -44,6 +61,8 @@ const AWS_AKIA = /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g;
 // Tokens de provedor por PREFIXO conhecido. sk-/pk- são PRECISOS (sk-proj-/sk-lf- explícitos, ou 40+ contíguos
 // do clássico) → NÃO pegam classe CSS (sk-h2-heading, sk-col-12: segmentos curtos com hífen). Todos BOUNDED.
 const PROVIDER_TOKENS = [
+  /\bsk-ant-(?=[A-Za-z0-9_-]{0,200}[0-9])[A-Za-z0-9_-]{12,180}/g, // Anthropic API/admin key (sk-ant-api03-/sk-ant-admin01-): os hífens internos quebram o sk- clássico CONTÍGUO → entrada própria. Exige DÍGITO (lookahead bounded, como o BEARER) p/ não casar classe CSS digit-less (sk-ant-button-primary); chave real sempre tem dígito (api03 + base64).
+  /\bsk-svcacct-(?=[A-Za-z0-9_-]{0,200}[0-9])[A-Za-z0-9_-]{16,120}/g, // OpenAI service-account key: o hífen após 'svcacct' quebra o sk- contíguo (como o sk-ant-); mesma defesa (dígito obrigatório, bounded).
   /\bsk-proj-[A-Za-z0-9]{16,120}/g, // OpenAI project key
   /\b[sp]k-lf-[A-Za-z0-9-]{16,120}/g, // Langfuse sk-lf-/pk-lf- (uuid com hífen)
   /\bsk-[A-Za-z0-9]{20,120}/g, // OpenAI clássico. 20+ CONTÍGUOS (sem hífen) → CSS (sk-h2-heading, segmentos curtos hifenados) não casa
@@ -54,12 +73,17 @@ const PROVIDER_TOKENS = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,120}/g, // Slack xoxb-/xoxp-/xoxa-/xoxr-/xoxs-
   /\bhooks\.slack\.com\/services\/[A-Za-z0-9/]{20,120}/g, // Slack incoming-webhook URL
   /\bAIza[A-Za-z0-9_-]{30,45}/g, // Google API key
+  /\bglpat-[A-Za-z0-9_-]{20,120}/g, // GitLab personal access token (glpat- + 20+)
+  /\bdckr_pat_[A-Za-z0-9_-]{16,120}/g, // Docker Hub personal access token
+  /\bpypi-(?=[A-Za-z0-9_-]{0,600}[0-9])[A-Za-z0-9_-]{32,600}/g, // PyPI upload token (macaroon longo); exige dígito + ≥32 p/ não pegar prosa "pypi-index-url"
+  /\bSG\.[A-Za-z0-9_-]{20,28}\.[A-Za-z0-9_-]{38,64}/g, // SendGrid API key (SG.<22>.<43>)
+  /\bSK[0-9a-f]{32}\b/g, // Twilio API Key SID (SK + 32 hex minúsculo; forma inequívoca)
 ];
 
 // PII (LGPD) em formatos INEQUÍVOCOS:
 const CPF = /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/g; // 123.456.789-01
 const CNPJ = /\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/g; // 12.345.678/0001-90
-const PHONE_BR = /(?:\+55[\s-]?)?\(\d{2}\)[\s-]?9?\d{4}[\s-]?\d{4}\b/g; // exige (DD) → sem falso-positivo
+const PHONE_BR = /(?:\+55[\s-]?)?\(\d{2}\)[\s-]?(?:9[\s-]?)?\d{4}[\s-]?\d{4}\b/g; // exige (DD); separador opcional após o 9 ("(11) 9 1234-5678")
 const EMAIL = /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}\b/g; // BOUNDED (RFC)
 const RAW_DIGITS = /\b\d{11,16}\b/g; // CPF/CNPJ/cartão sem formatação. Por ÚLTIMO.
 
@@ -69,7 +93,17 @@ function redact(text) {
   let s = text
     .replace(PEM, R)
     .replace(URL_USERINFO, `$1${R}$3`)
-    .replace(KV, `$1${R}`)
+    .replace(ORACLE_DSN, `$1${R}$3`)
+    .replace(SIG_PARAM, `$1${R}`)
+    .replace(KV, (full, keyPart, value) => {
+      const unquoted = value[0] !== '"' && value[0] !== "'";
+      // tolera QUALQUER pontuação de fim (`process.env.KEY2;` `,` `)` `}`) — o valor não-quotado a engole. Uma
+      // ref-de-membro termina em char-de-palavra ou `]`, então tudo que não for isso no fim é terminador. Seguro:
+      // a trava anti-leak é a RAIZ conhecida, exigida no core (password=Ab1.Cd2.Ef3; → raiz Ab1 ≠ conhecida → mascara;
+      // deadBEEF1234() → strip `)` → deadBEEF1234( ≠ ref-de-membro → mascara; kms.get(2) → raiz kms ≠ conhecida → mascara).
+      const core = unquoted ? value.replace(/[^\w$\]]+$/, "") : value;
+      return unquoted && CODE_MEMBER_REF.test(core) ? full : keyPart + R; // preserva SÓ ref-de-membro de raiz de código conhecida
+    })
     .replace(BEARER, `$1${R}`)
     .replace(JWT, R)
     .replace(AWS_AKIA, R);

@@ -70,8 +70,11 @@ test("redactSecrets: NÃO over-masca URL pública, versão, porta (preserva util
 });
 
 // Coverage de tokens de PROVEDOR modernos (achados do stress: escapavam do `sk-` simples por terem hífen/_).
-test("redactSecrets: tokens de provedor (sk-proj/sk-lf/github/slack/google/stripe) não vazam", () => {
+test("redactSecrets: tokens de provedor (sk-ant/sk-proj/sk-lf/github/slack/google/stripe) não vazam", () => {
   const secrets = [
+    S("sk-", "ant-api03-Ab12Cd34Ef56Gh78Ij90KlMnOpQrStUvWxYz"), // Anthropic (hífens quebram o sk- contíguo → entrada própria; gap tapado no #8-followup)
+    S("sk-", "ant-admin01-Ab12Cd34Ef56Gh78Ij90Kl"), // Anthropic admin key
+    S("sk-", "svcacct-Ab12Cd34Ef56Gh78Ij90KlMnOpQr"), // OpenAI service-account (hífen após svcacct quebra o sk- contíguo)
     S("sk-", "proj-Ab12Cd34Ef56Gh78Ij90Kl"),
     S("sk-", "lf-1234abcd-5678-efgh-9012-ijklmnop3456"),
     S("ghp", "_16C7e42F292c6912E7710c838347Ae178B4a"),
@@ -106,6 +109,7 @@ test("redactSecrets: NÃO over-masca *_key de config, pwd=path, database_url sem
     "Bearer authentication is required for this endpoint.",
     'class="sk-h2-heading"', // classe CSS com prefixo sk- + dígito (rodada 2 — sk- agora é preciso)
     'class="sk-col-12-wide pk-step-3-active"',
+    'class="sk-ant-button-primary-active"', // sk-ant- SEM dígito → não é chave Anthropic, preserva (lookahead exige dígito)
   ];
   for (const k of keep) assert.equal(redactSecrets(k), k, `deve preservar: ${k}`);
   // mas o segredo DENTRO da connection string (senha) ainda é mascarado:
@@ -128,4 +132,72 @@ test("redactSecrets: anti-ReDoS — entrada adversária longa retorna rápido (b
     const ms = Date.now() - t0;
     assert.ok(ms < 1000, `redação deve retornar <1s (foi ${ms}ms) — sem blow-up quadrático`);
   }
+});
+
+// #8 round-3 (achados da 3ª rodada de stress adversarial): provedores que ainda escapavam. Fixtures por partes (S).
+test("redactSecrets: provedores adicionais (gitlab/docker/pypi/sendgrid/twilio) não vazam", () => {
+  const secrets = [
+    S("glpat-", "AbCd1234EfGh5678Ijkl"), // GitLab PAT
+    S("dckr", "_pat_", "AbCd1234EfGh5678IjKl9012"), // Docker Hub PAT
+    S("pypi-", "AgEIcHlwaS5vcmc", "1234567890abcdefghij"), // PyPI macaroon (≥32, com dígito)
+    S("SG", ".", "AbCdEf012345GhIjKlMnOp", ".", "AbCdEfGhIjKlMnOpQrStUvWx0123456789ABCDEFGHI"), // SendGrid SG.<22>.<43>
+    S("SK", "0123456789abcdef0123456789abcdef"), // Twilio API Key SID (SK + exatamente 32 hex)
+  ];
+  for (const s of secrets) {
+    const out = redactSecrets(`token ${s} end`);
+    assert.ok(!out.includes(s), `${s.slice(0, 12)}… não pode vazar`);
+  }
+  // prosa NÃO-segredo com prefixo pypi- curto/digit-less é preservada (guarda de ≥32 + dígito)
+  assert.equal(redactSecrets("veja pypi-index-url na config"), "veja pypi-index-url na config");
+});
+
+test("redactSecrets: assinatura em query string (Azure SAS sig= / AWS X-Amz-Signature=) some, resto da URL fica", () => {
+  const sas = "https://acct.blob.core.windows.net/c/b?sv=2021-06-08&sig=aB9%2FcD3eFgH4567jKl%3D&se=2025";
+  const out = redactSecrets(sas);
+  assert.ok(!out.includes("aB9%2FcD3eFgH4567jKl"), "a assinatura SAS não vaza");
+  assert.match(out, /sig=«oculto»/);
+  assert.match(out, /se=2025/, "o resto da query é preservado");
+  assert.ok(!redactSecrets("GET /o?X-Amz-Signature=abcdef0123456789abcdef&X-Amz-Date=1").includes("abcdef0123456789abcdef"));
+});
+
+test("redactSecrets: DSN Oracle (senha delimitada por barra user/SENHA@host) mascara só a senha", () => {
+  const out = redactSecrets("jdbc:oracle:thin:scott/P4ssw0rd123@ora-host:1521:orcl");
+  assert.ok(!out.includes("P4ssw0rd123"), "a senha Oracle não vaza");
+  assert.match(out, /oracle:thin:scott\/«oculto»@ora-host/, "user e host preservados");
+});
+
+test("redactSecrets: telefone BR com espaço após o 9 ('(11) 9 1234-5678') é mascarado", () => {
+  assert.ok(!redactSecrets("ligue (11) 9 1234-5678 hoje").includes("1234-5678"));
+  assert.ok(!redactSecrets("ligue (11) 9 1234 5678 hoje").includes("1234 5678"));
+  assert.equal(redactSecrets("porta 5432 e versão 1.2.3"), "porta 5432 e versão 1.2.3"); // controle: não over-masca
+});
+
+// #8 round-2 (LIÇÃO CRÍTICA): excluir "código" do KV por forma GENÉRICA abre leak (um segredo pode ter a mesma
+// forma: password=Ab1.Cd2.Ef3, PASETO v2.local.<b64>, api_key=deadBEEF1234()). A exclusão SEGURA é NARROW: só
+// ref-de-membro enraizada em identificador de código CONHECIDO (process/settings/config/import/self...), onde um
+// segredo real jamais começa. Este teste FIXA o contrato E guarda contra reintroduzir o carve-out genérico.
+test("redactSecrets: KV preserva ref-de-membro de RAIZ DE CÓDIGO conhecida; mascara o resto; NÃO vaza segredo-forma-de-código", () => {
+  // ref-de-membro de raiz CONHECIDA (todas com dígito → o KV casaria; a exclusão narrow é o que preserva).
+  // Inclui terminador de statement `;`/`,` (o valor não-quotado engole o `;`; a 3ª rodada de stress pegou isso).
+  for (const k of [
+    "const apiKey = process.env.KEY2",
+    "client_secret = settings.CLIENT_SECRET_V2",
+    "api_key = config.API_KEY_2",
+    "auth_token = self.config.token_v2",
+    "secret = import.meta.env.VITE_KEY2",
+    "const apiKey = process.env.KEY2;", // com ponto-e-vírgula (forma mais comum em JS/TS)
+    "password = this.opts.pass2;",
+    "secret = self.keys[2];",
+    "{ api_key: config.API_KEY_2, }", // dentro de object literal (vírgula final)
+  ]) assert.equal(redactSecrets(k), k, `deve preservar ref-de-membro de raiz conhecida: ${k}`);
+  // chamada de função com arg-dígito não-quotado / raiz DESCONHECIDA → over-mask ACEITO (fail-safe)
+  for (const k of ["signing_key = kms.get_key(key_id=42)", "private_key = rsa.generate(2048)"])
+    assert.match(redactSecrets(k), /«oculto»/, `over-mask aceito (não é raiz conhecida): ${k}`);
+  // sem dígito → não dispara valor-secret-like → preservado
+  assert.equal(redactSecrets("access_token = response.json()"), "access_token = response.json()");
+  // GUARDA anti-regressão (leaks da 2ª rodada): segredo com FORMA de código NÃO pode vazar
+  assert.ok(!redactSecrets("password=Ab1.Cd2.Ef3").includes("Ab1.Cd2.Ef3"), "dotted password não vaza");
+  assert.ok(!redactSecrets("secret=v2.local.Abc123def").includes("v2.local.Abc123def"), "PASETO não vaza");
+  assert.ok(!redactSecrets("secret=Prod.Db.Cluster.Node7").includes("Prod.Db.Cluster.Node7"), "dotted secret não vaza");
+  assert.ok(!redactSecrets("api_key=deadBEEF1234()").includes("deadBEEF1234"), "paren secret não vaza");
 });
