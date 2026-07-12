@@ -171,15 +171,55 @@ export function isTscSyntaxError(code: string): boolean {
 // mesma classe do falso-bloqueio do Go. Então SÓ bloqueia import relativo a código (extensionless ou
 // .ts/.tsx/.js/...); asset relativo (css/svg/png/json...) segue ADVISORY. TS2339 e demais TS2xxx+ também
 // seguem ADVISORY (cascata de tipo de terceiros sem node_modules falso-bloquearia).
-const TS_ASSET_EXT = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|json|jsonc|md|mdx|txt|csv|ya?ml|graphql|gql|woff2?|ttf|eot|otf|mp[34]|webm|wav|ogg|glb|gltf|wasm|html?|xml|pdf|node)$/i;
+// Assets (css/img/font/dados) + SINGLE-FILE-COMPONENTS (.vue/.svelte/.astro): o tsc emite TS2307 pra esses
+// mesmo com o arquivo no disco (não os resolve sem plugin/ambient decl), mas o BUNDLER resolve — advisory.
+const TS_ASSET_EXT = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|json|jsonc|md|mdx|txt|csv|ya?ml|graphql|gql|woff2?|ttf|eot|otf|mp[34]|webm|wav|ogg|glb|gltf|wasm|html?|xml|pdf|node|vue|svelte|astro)$/i;
 
-/** true se o erro do tsc DEVE bloquear o Aplicar: TS2307 de import RELATIVO a um módulo de CÓDIGO (não asset). */
-export function isBlockingTscContract(e: { code: string; message: string }): boolean {
+// Extensões de CÓDIGO que o tsc resolveria para um specifier relativo extensionless (./B → ./B.ts, ./B/index.tsx…).
+const TS_CODE_EXT = ["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+
+// Resolve um specifier RELATIVO (./B, ../util/x) a partir do arquivo importador e devolve os caminhos de
+// arquivo candidatos (normalizados) que o TS aceitaria — usado para NÃO bloquear um TS2307 cujo alvo EXISTE
+// no universo do projeto (proposta PARCIAL não-materializada, ou arquivo APLICADO em rodada anterior). Puro.
+function resolveRelCandidates(fromFile: string, spec: string): string[] {
+  const segs = normGatePath(fromFile).split("/").slice(0, -1); // diretório do importador
+  for (const p of spec.split("/")) {
+    if (p === "." || p === "") continue;
+    else if (p === "..") segs.pop();
+    else segs.push(p);
+  }
+  const base = segs.join("/");
+  const out = new Set<string>();
+  if (/\.[a-z0-9]+$/i.test(base)) {
+    out.add(base); // já com extensão (./x.js) — e o mapeamento .js→.ts do TS:
+    out.add(base.replace(/\.jsx?$/i, ".ts"));
+    out.add(base.replace(/\.jsx?$/i, ".tsx"));
+  } else {
+    for (const e of TS_CODE_EXT) out.add(`${base}.${e}`);
+    for (const e of TS_CODE_EXT) out.add(`${base}/index.${e}`);
+  }
+  return [...out];
+}
+
+/**
+ * true se o erro do tsc DEVE bloquear o Aplicar: TS2307 de import RELATIVO a um módulo de CÓDIGO que NÃO
+ * existe no universo conhecido do projeto (drift interno real). Fica ADVISORY (retorna false) quando:
+ * - o import é bare/alias/stdlib (não começa com ".") — dep de terceiros;
+ * - carrega query-suffix do Vite (./x.svg?url, ./y?worker) — bundler-only, o tsc nunca resolve;
+ * - é asset ou SFC (css/svg/vue/svelte/…) — o bundler resolve, o tsc não;
+ * - RESOLVE para um arquivo conhecido (proposta parcial não-materializada / aplicado antes) — não é drift.
+ */
+export function isBlockingTscContract(e: { code: string; message: string; path?: string }, knownFiles?: Set<string>): boolean {
   if (e.code !== "TS2307") return false;
   const mod = /['"]([^'"]+)['"]/.exec(e.message)?.[1] ?? "";
-  // Defesa DUPLA (não depende só do filtro bare do parseTscErrors): exige import RELATIVO (./ ../) E não-asset.
-  // Alias de path ('@/x', '#x') e stdlib ('node:fs') não começam com "." → nunca bloqueiam (fail-safe).
-  return mod.startsWith(".") && !TS_ASSET_EXT.test(mod);
+  if (!mod.startsWith(".")) return false; // bare/alias/stdlib — dep de terceiros (defesa dupla c/ parseTscErrors)
+  if (mod.includes("?")) return false; // query-suffix do Vite (?url/?raw/?inline/?worker) → só o bundler resolve
+  if (TS_ASSET_EXT.test(mod)) return false; // asset/SFC → advisory (bundler resolve, tsc não)
+  // O alvo EXISTE no projeto mas não estava na árvore temp desta rodada (parcial/aplicado)? Então não é drift.
+  if (knownFiles && knownFiles.size && e.path) {
+    if (resolveRelCandidates(e.path, mod).some((c) => knownFiles.has(c))) return false;
+  }
+  return true; // relativo, código, sem query, não-asset, não-resolvível no universo conhecido → drift REAL
 }
 
 // Agrupa erros do tsc por arquivo no formato do gate (Map<path, string[]>).
