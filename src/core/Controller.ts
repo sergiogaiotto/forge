@@ -2216,6 +2216,11 @@ export class Controller {
         if (gate?.securityErrors?.length) {
           this.post({ type: "notice", level: "warn", message: hostT("notice.project.security", { count: gate.securityErrors.length }) });
         }
+        // Símbolo-fantasma (#9 follow-up): nome INDEFINIDO (ruff F821/F822/F823) BLOQUEIA — o análogo Python do
+        // import-fantasma. Fora do auto-reparo (como segurança/arquitetura): o dev define/importa o símbolo.
+        if (gate?.undefinedNameErrors?.length) {
+          this.post({ type: "notice", level: "warn", message: hostT("notice.project.undefinedName", { count: gate.undefinedNameErrors.length }) });
+        }
         // A11y (#06): achados de acessibilidade no frontend gerado — ADVISORY (nunca bloqueia; info, não warn).
         // O motor puro-TS (a11yLint) valida a SAÍDA; o isFrontendRequest só forçava a skill no prompt.
         if (gate?.a11yAdvisories?.length) {
@@ -2229,11 +2234,12 @@ export class Controller {
         // Smoke test ADVISORY (P4): se o conjunto passou no gate estático (sem erros por-arquivo nem
         // amplos), tenta RODAR a suíte gerada no venv do workspace — o sinal "de fato roda". Nunca
         // bloqueia; degrada em silêncio sem venv/pytest/deps. NÃO roda se QUALQUER eixo do gate bloqueou:
-        // além de compilação/contrato, um bloqueio de SEGURANÇA (bandit) ou de ARQUITETURA. O de segurança é
-        // crítico — o gate marcou o arquivo como ALTO risco de EXECUÇÃO (shell injection / eval); rodar o
-        // pytest importaria e EXECUTARIA justo o código que o gate recusou aplicar (o bandit é AST, não
-        // executa — o smoke executaria). Achado da revisão adversarial.
-        if (gate && gate.fileErrors.length === 0 && gate.projectErrors.length === 0 && !gate.securityErrors?.length && !gate.architectureErrors?.length) {
+        // além de compilação/contrato, um bloqueio de SEGURANÇA (bandit), de ARQUITETURA, ou de SÍMBOLO-
+        // FANTASMA (ruff F821 — nome indefinido; o pytest importaria o módulo e bateria num NameError, além de
+        // EXECUTAR justo o código que o gate recusou aplicar). O de segurança é crítico — o gate marcou o
+        // arquivo como ALTO risco de EXECUÇÃO (shell injection / eval); os achados são por AST (não executam),
+        // mas o smoke executaria. Achados da revisão adversarial.
+        if (gate && gate.fileErrors.length === 0 && gate.projectErrors.length === 0 && !gate.securityErrors?.length && !gate.architectureErrors?.length && !gate.undefinedNameErrors?.length) {
           await this.projectGateRunner.runProjectSmoke(project.language, taskId);
         }
         this.post({ type: "project/done" });

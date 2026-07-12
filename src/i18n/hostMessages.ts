@@ -72,6 +72,7 @@ export type HostMessageKey =
   | "notice.project.architecture"
   | "notice.project.dod"
   | "notice.project.security"
+  | "notice.project.undefinedName"
   | "notice.project.a11y"
   | "notice.project.incomplete"
   | "notice.project.scaffold"
@@ -189,6 +190,7 @@ export type HostMessageKey =
   | "gate.part.syntaxGo"
   | "gate.part.arch"
   | "gate.part.security"
+  | "gate.part.undefinedName"
   | "gate.tscSuffix"
   | "gate.goSuffix"
   | "gate.moreSecurity"
@@ -492,6 +494,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.project.architecture": "Arquitetura: {count} arquivo(s) violam a regra de camadas (a camada interna importa a externa) — corrija a DIREÇÃO do import (inverta a dependência / use uma port). Esses arquivos estão bloqueados no Aplicar.",
     "notice.project.dod": "Definição de pronto: o projeto está incompleto ({count} requisito(s) faltando) — Aplicar bloqueado até fechar. {errors}",
     "notice.project.security": "Segurança: {count} arquivo(s) com achado de ALTO risco do bandit (severidade+confiança altas) — Aplicar bloqueado. Corrija a vulnerabilidade apontada no cartão.",
+    "notice.project.undefinedName": "Símbolo-fantasma: {count} arquivo(s) com nome INDEFINIDO (ruff F821/F822/F823 — o análogo Python do import-fantasma) — Aplicar bloqueado. Defina/importe o símbolo apontado no cartão.",
     "notice.project.a11y": "Acessibilidade: {count} aviso(s) de a11y no frontend gerado (advisory — NÃO bloqueia) — {issues}",
     "notice.project.incomplete": "Projeto: {done}/{total} arquivos gerados. Os que faltaram estão em vermelho — clique em \"Aprovar e gerar\" de novo para completar.",
     "notice.project.scaffold": "Scaffold determinístico: {count} arquivo(s) NOVOS materializados de skills ativadas — {files}. Herdaram o gate.",
@@ -595,11 +598,12 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.alsoBlocked": " Também {count} arquivo(s) com erro ({parts}).",
     "gate.blocked": "Gate reprovou: {count} arquivo(s) bloqueados{parts}. Corrija antes de aplicar.",
     "gate.securitySuffix": " · segurança: {count} aviso(s) do bandit (não bloqueiam).",
-    "gate.deadImportsSuffix": " · ruff (Pyflakes): {count} aviso(s) — imports/símbolos-fantasma (não bloqueiam).",
+    "gate.deadImportsSuffix": " · ruff (Pyflakes): {count} aviso(s) — import morto/redefinição/f-string (não bloqueiam).",
     "gate.part.compile": "{count} de compilação/contrato",
     "gate.part.syntaxGo": "{count} de sintaxe (gofmt)",
     "gate.part.arch": "{count} de arquitetura (regra de camadas)",
     "gate.part.security": "{count} de segurança (bandit ALTO)",
+    "gate.part.undefinedName": "{count} de símbolo-fantasma (ruff F821/F822/F823)",
     "gate.tscSuffix": " · tsc: {count} aviso(s) de tipo (advisory — instale as deps e rode o tsc para o veredito completo)",
     "gate.goSuffix": " · go build: {count} aviso(s) (advisory — rode go build ./... com as dependências para o veredito completo)",
     "gate.moreSecurity": "… e mais {count} aviso(s) — veja o log de diagnóstico.",
@@ -888,6 +892,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.project.architecture": "Architecture: {count} file(s) violate the layer rule (an inner layer imports an outer one) — fix the DIRECTION of the import (invert the dependency / use a port). Those files are blocked in Apply.",
     "notice.project.dod": "Definition of done: the project is incomplete ({count} requirement(s) missing) — Apply blocked until resolved. {errors}",
     "notice.project.security": "Security: {count} file(s) with a HIGH-risk bandit finding (high severity+confidence) — Apply blocked. Fix the vulnerability shown on the card.",
+    "notice.project.undefinedName": "Phantom symbol: {count} file(s) with an UNDEFINED name (ruff F821/F822/F823 — the Python analog of the phantom import) — Apply blocked. Define/import the symbol shown on the card.",
     "notice.project.a11y": "Accessibility: {count} a11y warning(s) in the generated frontend (advisory — does NOT block) — {issues}",
     "notice.project.incomplete": "Project: {done}/{total} files generated. The missing ones are in red — click \"Approve and generate\" again to complete.",
     "notice.project.scaffold": "Deterministic scaffold: {count} NEW file(s) materialized from enabled skills — {files}. They inherit the gate.",
@@ -991,11 +996,12 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.alsoBlocked": " Also {count} file(s) with errors ({parts}).",
     "gate.blocked": "Gate failed: {count} file(s) blocked{parts}. Fix before applying.",
     "gate.securitySuffix": " · security: {count} bandit advisory(ies) (non-blocking).",
-    "gate.deadImportsSuffix": " · ruff (Pyflakes): {count} advisory(ies) — imports/phantom symbols (non-blocking).",
+    "gate.deadImportsSuffix": " · ruff (Pyflakes): {count} advisory(ies) — dead import/redefinition/f-string (non-blocking).",
     "gate.part.compile": "{count} compilation/contract",
     "gate.part.syntaxGo": "{count} syntax (gofmt)",
     "gate.part.arch": "{count} architecture (layer rule)",
     "gate.part.security": "{count} security (bandit HIGH)",
+    "gate.part.undefinedName": "{count} undefined-name (ruff F821/F822/F823)",
     "gate.tscSuffix": " · tsc: {count} type advisory(ies) (advisory — install the deps and run tsc for the full verdict)",
     "gate.goSuffix": " · go build: {count} advisory(ies) (advisory — run go build ./... with the dependencies for the full verdict)",
     "gate.moreSecurity": "… and {count} more advisory(ies) — see the diagnostics log.",
@@ -1284,6 +1290,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.project.architecture": "Arquitectura: {count} archivo(s) violan la regla de capas (la capa interna importa la externa) — corrige la DIRECCIÓN del import (invierte la dependencia / usa un port). Esos archivos están bloqueados en Aplicar.",
     "notice.project.dod": "Definición de listo: el proyecto está incompleto ({count} requisito(s) faltantes) — Aplicar bloqueado hasta resolver. {errors}",
     "notice.project.security": "Seguridad: {count} archivo(s) con hallazgo de ALTO riesgo de bandit (severidad+confianza altas) — Aplicar bloqueado. Corrige la vulnerabilidad señalada en la tarjeta.",
+    "notice.project.undefinedName": "Símbolo-fantasma: {count} archivo(s) con nombre INDEFINIDO (ruff F821/F822/F823 — el análogo Python del import-fantasma) — Aplicar bloqueado. Define/importa el símbolo señalado en la tarjeta.",
     "notice.project.a11y": "Accesibilidad: {count} aviso(s) de a11y en el frontend generado (advisory — NO bloquea) — {issues}",
     "notice.project.incomplete": "Proyecto: {done}/{total} archivos generados. Los que faltaron están en rojo — haz clic en \"Aprobar y generar\" de nuevo para completar.",
     "notice.project.scaffold": "Scaffold determinístico: {count} archivo(s) NUEVOS materializados de skills activadas — {files}. Heredaron el gate.",
@@ -1387,11 +1394,12 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "gate.alsoBlocked": " También {count} archivo(s) con error ({parts}).",
     "gate.blocked": "El gate reprobó: {count} archivo(s) bloqueados{parts}. Corrige antes de aplicar.",
     "gate.securitySuffix": " · seguridad: {count} aviso(s) de bandit (no bloquean).",
-    "gate.deadImportsSuffix": " · ruff (Pyflakes): {count} aviso(s) — importaciones/símbolos-fantasma (no bloquean).",
+    "gate.deadImportsSuffix": " · ruff (Pyflakes): {count} aviso(s) — import muerto/redefinición/f-string (no bloquean).",
     "gate.part.compile": "{count} de compilación/contrato",
     "gate.part.syntaxGo": "{count} de sintaxis (gofmt)",
     "gate.part.arch": "{count} de arquitectura (regla de capas)",
     "gate.part.security": "{count} de seguridad (bandit ALTO)",
+    "gate.part.undefinedName": "{count} de símbolo-fantasma (ruff F821/F822/F823)",
     "gate.tscSuffix": " · tsc: {count} aviso(s) de tipo (advisory — instala las deps y ejecuta tsc para el veredicto completo)",
     "gate.goSuffix": " · go build: {count} aviso(s) (advisory — ejecuta go build ./... con las dependencias para el veredicto completo)",
     "gate.moreSecurity": "… y {count} aviso(s) más — mira el log de diagnóstico.",

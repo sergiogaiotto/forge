@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseRuffReport, RuffFinding, ruffAdvisories } from "../util/ruffParse";
+import { parseRuffReport, RuffFinding, ruffAdvisories, splitRuffFindings } from "../util/ruffParse";
 
 // Fábrica de item do relatório do ruff (`--output-format json`) — inclui os campos REAIS que o ruff emite
 // (cell/end_location/fix.edits[]/noqa_row/url), não só os 4 que consumimos, para o parser ser exercitado
@@ -69,6 +69,29 @@ test("parseRuffReport (#9): F821/F811/F822/F823/F5xx passam; F841 (fora do set) 
   assert.ok(f);
   assert.deepEqual(f!.map((x) => x.code).sort(), ["F502", "F811", "F821", "F822", "F823"], "F841 fora do set → filtrado; os gateados passam");
   assert.ok(ruffAdvisories(f!).some((a) => /ruff F821: Undefined name `OrderStatus`/.test(a)), "o F821 (símbolo-fantasma) aparece legível");
+});
+
+// #9 follow-up: split BLOQUEANTE (F821/F822/F823 nome-indefinido) vs ADVISORY (F401/F811/f-string). Os
+// bloqueantes agrupam por arquivo (como o splitSecurityFindings do bandit → entram em fileErrors, fecham o Aplicar).
+test("splitRuffFindings: F821/F822/F823 bloqueiam (agrupados por arquivo); F401/F811/F5xx viram advisory", () => {
+  const findings: RuffFinding[] = [
+    { path: "src/svc.py", line: 5, code: "F821", message: "Undefined name `OrderStatus`" },
+    { path: "src/svc.py", line: 8, code: "F821", message: "Undefined name `Foo`" },
+    { path: "src/mod.py", line: 1, code: "F822", message: "Undefined name `Bar` in `__all__`" },
+    { path: "src/late.py", line: 4, code: "F823", message: "Local variable `x` referenced before assignment" },
+    { path: "src/a.py", line: 2, code: "F401", message: "`os` imported but unused" },
+    { path: "src/a.py", line: 3, code: "F811", message: "Redefinition of unused `x`" },
+    { path: "src/b.py", line: 4, code: "F502", message: "`%`-format expected mapping" },
+  ];
+  const { blocking, advisories } = splitRuffFindings(findings);
+  assert.equal(blocking.length, 3, "svc.py + mod.py + late.py (agrupados por arquivo)");
+  const svc = blocking.find((b) => b.path === "src/svc.py")!;
+  assert.equal(svc.errors.length, 2, "2 F821 no mesmo arquivo agrupam");
+  assert.ok(svc.errors[0].includes("F821") && svc.errors[0].includes("OrderStatus"));
+  assert.ok(blocking.some((b) => b.path === "src/mod.py" && b.errors[0].includes("F822")));
+  assert.deepEqual(advisories.length, 3, "F401 + F811 + F502");
+  assert.ok(advisories.every((a) => /F401|F811|F502/.test(a)));
+  assert.ok(!advisories.some((a) => /F82[123]/.test(a)), "nenhum bloqueante vaza para o canal advisory");
 });
 
 test("parseRuffReport: sem relatório-array válido → null (fail-open, não confundir com 0 achados)", () => {
