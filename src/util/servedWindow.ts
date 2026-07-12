@@ -5,6 +5,7 @@
 // (`{data:[{id, max_model_len, …}]}`). Só faz sentido p/ provedores openai-compatible (OpenAI/Anthropic
 // não reduzem a janela nem expõem esse campo). FAIL-OPEN: qualquer falha → null → o chamador usa o catálogo.
 import { EgressEnforcer } from "../net/EgressEnforcer";
+import { safeFetch } from "../net/safeFetch";
 
 // Extrai o max_model_len servido para `modelId` do corpo do GET /v1/models. Casa por id exato, por
 // sufixo (o gateway serve "openai/gpt-oss-120b" e o config pode pedir só "gpt-oss-120b" — ou vice-versa),
@@ -39,7 +40,7 @@ export async function probeServedContextWindow(
   const timer = setTimeout(() => ctrl.abort(), Math.max(1000, timeoutMs));
   try {
     egress.assertAllowed(url);
-    const res = await fetch(url, { method: "GET", headers, signal: ctrl.signal });
+    const res = await safeFetch(url, { method: "GET", headers, signal: ctrl.signal });
     if (!res.ok) return null;
     return parseServedContextWindow(await res.json(), modelId);
   } catch {

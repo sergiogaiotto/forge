@@ -1,4 +1,5 @@
 import { EgressEnforcer } from "../../net/EgressEnforcer";
+import { safeFetch } from "../../net/safeFetch";
 import { combineSignals, HttpError, sseLines } from "../../util/http";
 import { DEFAULT_MAX_TOKENS } from "../presets";
 import { ChatMessage, CreateMessageOptions, LLMProvider, ProviderRuntimeConfig, StreamChunk, ToolDefinition } from "../types";
@@ -51,7 +52,7 @@ export class AnthropicProvider implements LLMProvider {
     const signal = combineSignals(opts.signal, opts.timeoutMs);
     let res: Response;
     try {
-      res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
+      res = await safeFetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
     } catch (err) {
       const e = err as Error;
       yield { kind: "error", message: e.name === "TimeoutError" ? `Tempo limite (${this.cfg.timeoutSeconds}s).` : `Falha de conexão: ${e.message}` };

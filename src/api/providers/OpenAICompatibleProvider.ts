@@ -1,4 +1,5 @@
 import { EgressEnforcer } from "../../net/EgressEnforcer";
+import { safeFetch } from "../../net/safeFetch";
 import { ProviderType } from "../../shared/protocol";
 import { combineSignals, HttpError, sseLines } from "../../util/http";
 import { DEFAULT_MAX_TOKENS } from "../presets";
@@ -83,7 +84,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const timeoutMs = streaming ? opts.timeoutMs : Math.max(opts.timeoutMs, NON_STREAMING_MIN_TIMEOUT_MS);
     const signal = combineSignals(opts.signal, timeoutMs);
     const doFetch = (payload: Record<string, unknown>): Promise<Response> =>
-      fetch(url, {
+      safeFetch(url, {
         method: "POST",
         headers: { ...buildAuthHeaders(this.cfg), ...(opts.extraHeaders ?? {}) },
         body: JSON.stringify(payload),
