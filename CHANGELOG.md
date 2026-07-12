@@ -11,6 +11,23 @@ de referência e a via de embeddings do RAG. Cada correção passou por revisão
 defeitos antes do merge — incluindo um **HIGH de exfiltração descoberto na própria revisão** (o `symbol`
 do chunk ficava fora da redação). 1019 testes (eram 996).
 
+**FinOps: teto de gasto AUTORITATIVO por tokens/dia (#12).** O gateway passa a enforçar um orçamento de
+tokens/dia por subject **assinado na licença** (`issue --budget`), com **402** no proxy quando estoura e um
+**ledger durável** (escrita atômica) que sobrevive a restart. A revisão adversarial (4 eixos + verificação
+por achado) descobriu e fechou 2 defeitos antes do merge: uma **corrida check-then-charge** que deixava um
+burst concorrente furar o teto ~96x (fechada com reserva síncrona no admit + reconciliação no `finally`) e a
+escrita não-atômica que um crash corromperia, zerando o teto do dia (fechada com tmp+rename). 1034 testes.
+
+### Added
+- **Orçamento de tokens/dia na licença** (`admin-cli issue --budget <n>`): assina o teto por subject
+  (0/ausente = ilimitado; licenças antigas seguem ilimitadas — byte-idênticas).
+- **Enforcement no gateway** (`gateway/spend.mjs` + `server.mjs`): `overBudget` barra o proxy com **402**
+  antes do upstream; uma **reserva** estimada (input + max de saída) é cobrada SINCRONAMENTE no admit para
+  que um burst concorrente do mesmo subject não fure o teto, e `settle` reconcilia ao custo REAL no `finally`.
+  Ledger por subject+dia (UTC) com rollover, persistido de forma **atômica** (tmp+rename) e exposto em
+  `/health.spendPersistOk`. Tokens são a unidade autoritativa (sem tabela de preços server-side). O
+  deterrente + a **visibilidade de custo** no cliente (`/tokens`) vêm no PR seguinte (escopo sequenciado).
+
 ### Security
 - **Redação do RAG na origem — texto E símbolo** (`CodebaseIndex`/`indexPersistence`): os chunks passam
   a ser redigidos (`redactChunks`) antes de sair pela via de embeddings (endpoint **externo**, fora do

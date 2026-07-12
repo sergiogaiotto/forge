@@ -109,6 +109,17 @@ function mint(keysDir: string, subject: string, ...extra: string[]): string {
   return (JSON.parse(iss.stdout) as { license: string }).license;
 }
 
+// Ativa uma licença e devolve o token de sessão.
+async function activate(base: string, key: string): Promise<string> {
+  const r = await fetch(`${base}/license/activate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }) });
+  assert.equal(r.status, 200, `activate falhou: ${r.status}`);
+  return ((await r.json()) as { token: string }).token;
+}
+// Uma "geração" pelo proxy (o upstream fake gasta 11 tokens: prompt 7 + completion 4).
+function proxyGen(base: string, token: string): Promise<Response> {
+  return fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ model: "m", messages: [{ role: "user", content: "oi" }] }) });
+}
+
 // Sobe o gateway REAL com env customizado; devolve base + stop() que espera o exit real (sem sleep-palpite).
 async function bootGateway(keysDir: string, upstreamUrl: string, extraEnv: Record<string, string>): Promise<{ base: string; stop: () => Promise<void>; log: () => string }> {
   const port = await freePort();
@@ -277,6 +288,87 @@ test("E2E escopo + capacidade: skills sem escopo → 403; codegen passa; teto 50
     // e a sessão A (viva) sobrevive à ativação recusada de B — NÃO é mass-logout (o cerne do fix de DoS).
     const stillOk = await fetch(`${gw.base}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${tokenA}` }, body: JSON.stringify({ model: "m", messages: [{ role: "user", content: "de novo" }] }) });
     assert.equal(stillOk.status, 200, "a sessão viva NÃO foi deslogada pelo 503");
+  } catch (e) {
+    failed = true;
+    throw e;
+  } finally {
+    await gw?.stop();
+    await fake.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (failed || process.env.FORGE_E2E_DEBUG) process.stderr.write(gw?.log() ?? "");
+  }
+});
+
+test("E2E teto de tokens/dia (FinOps #12): estoura → 402 (upstream não chamado); e o ledger é DURÁVEL (sobrevive a restart)", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "forge-e2e-budget-"));
+  const keysDir = path.join(tmp, "keys");
+  const ledgerPath = path.join(tmp, "ledger.json");
+  const fake = await startFakeUpstream(); // cada geração gasta 11 tokens (prompt 7 + completion 4)
+  let gw: { base: string; stop: () => Promise<void>; log: () => string } | undefined;
+  let failed = false;
+  try {
+    const kg = spawnSync(process.execPath, [ADMIN_CLI, "keygen", "--keys-dir", keysDir, "--json"], { encoding: "utf8" });
+    assert.equal(kg.status, 0, `keygen falhou: ${kg.stderr}`);
+    const lic = mint(keysDir, "budget@claro.com", "--budget", "5"); // teto 5 < 11 → estoura em 1 geração
+    // SPEND_FLUSH_MS baixo: a durabilidade é provada pelo TIMER de persistência (não pelo shutdown, que no
+    // Windows pode não rodar o handler de SIGTERM) — mais robusto cross-platform.
+    gw = await bootGateway(keysDir, fake.url, { SPEND_LEDGER: ledgerPath, SPEND_FLUSH_MS: "150" });
+
+    const tokenA = await activate(gw.base, lic);
+    // 1ª geração: passa (200) e cobra 11 tokens (> teto 5).
+    assert.equal((await proxyGen(gw.base, tokenA)).status, 200, "1ª geração passa e cobra");
+    assert.equal(fake.hits(), 1);
+    // 2ª geração: já estourou o teto → 402; o upstream NÃO é chamado.
+    const over = await proxyGen(gw.base, tokenA);
+    assert.equal(over.status, 402, "estourou o orçamento → 402");
+    assert.equal(((await over.json()) as { error: string }).error, "budget exceeded");
+    assert.equal(fake.hits(), 1, "402 NÃO chama o upstream");
+
+    // Espera um flush do ledger para o disco (durabilidade via timer), depois REINICIA com o MESMO ledger.
+    await new Promise((r) => setTimeout(r, 450));
+    assert.ok(fs.existsSync(ledgerPath), "o ledger foi persistido em disco");
+    await gw.stop();
+    gw = await bootGateway(keysDir, fake.url, { SPEND_LEDGER: ledgerPath, SPEND_FLUSH_MS: "150" });
+    // Re-ativa o MESMO subject; o gasto do dia foi carregado do disco → segue 402 (o teto sobrevive ao restart).
+    const tokenB = await activate(gw.base, lic);
+    const afterRestart = await proxyGen(gw.base, tokenB);
+    assert.equal(afterRestart.status, 402, "o teto do dia SOBREVIVE ao restart (ledger durável — não zera)");
+    assert.equal(fake.hits(), 1, "após o restart, ainda não chamou o upstream");
+  } catch (e) {
+    failed = true;
+    throw e;
+  } finally {
+    await gw?.stop();
+    await fake.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (failed || process.env.FORGE_E2E_DEBUG) process.stderr.write(gw?.log() ?? "");
+  }
+});
+
+test("E2E corrida do teto (FinOps #12): um BURST concorrente do mesmo subject NÃO fura o orçamento (reserva síncrona)", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "forge-e2e-race-"));
+  const keysDir = path.join(tmp, "keys");
+  const fake = await startFakeUpstream();
+  let gw: { base: string; stop: () => Promise<void>; log: () => string } | undefined;
+  let failed = false;
+  try {
+    const kg = spawnSync(process.execPath, [ADMIN_CLI, "keygen", "--keys-dir", keysDir, "--json"], { encoding: "utf8" });
+    assert.equal(kg.status, 0, `keygen falhou: ${kg.stderr}`);
+    const lic = mint(keysDir, "race@claro.com", "--budget", "5"); // teto minúsculo; a reserva (~4KB) o excede
+    // RATE alto para o rate-limit NÃO mascarar o teste: o que barra o burst tem de ser a RESERVA, não o 429.
+    gw = await bootGateway(keysDir, fake.url, { SPEND_LEDGER: path.join(tmp, "l.json"), RATE_LIMIT_PER_MIN: "1000" });
+    const token = await activate(gw.base, lic);
+
+    // Dispara 8 gerações CONCORRENTES antes de qualquer uma completar. Sem a reserva síncrona, todas veriam
+    // spent=0 e passariam (o furo ~96x da revisão). Com a reserva, só a 1ª passa; as demais → 402.
+    const N = 8;
+    const results = await Promise.all(Array.from({ length: N }, () => proxyGen(gw!.base, token)));
+    const codes = results.map((r) => r.status);
+    const blocked = codes.filter((c) => c === 402).length;
+    const passed = codes.filter((c) => c === 200).length;
+    assert.equal(passed, 1, `só UMA geração deveria passar o teto no burst (códigos: ${codes.join(",")})`);
+    assert.equal(blocked, N - 1, "as demais do burst concorrente são barradas por 402 (reserva fecha a corrida)");
+    assert.equal(fake.hits(), 1, "o upstream só é chamado pela única geração admitida");
   } catch (e) {
     failed = true;
     throw e;
