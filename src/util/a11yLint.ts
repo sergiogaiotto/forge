@@ -3,10 +3,14 @@
 // gerado era 100% prompt: o isFrontendRequest (#168) só FORÇA a skill de a11y no prompt, sem validar a
 // SAÍDA. O modelo pode ignorar a skill e ninguém pega (a classe F-15/F-16: placeholder no lugar de rótulo).
 //
-// Heurístico e PURO (sem parser/DOM, sem deps): casa tags de abertura por regex. É ADVISORY (nunca bloqueia
-// o Aplicar), então a postura é CONSERVADORA — melhor perder um caso do que gritar um falso-positivo:
-// - um spread JSX ({...props}) numa tag é tratado como "pode ter o atributo" → não acusa (evita FP em
-//   <input {...register("x")} /> ou <button {...props}>);
+// Heurístico e PURO (sem parser/DOM, sem deps). É ADVISORY (nunca bloqueia o Aplicar), então a postura é
+// CONSERVADORA — melhor perder um caso do que gritar um falso-positivo sobre markup acessível legítimo:
+// - a extração de tag é ROBUSTA a JSX (scanner char-a-char que rastreia {} e aspas): um '>' dentro de uma
+//   expressão {() => ...} ou de um valor "a>b" NÃO termina a tag — um regex [^>]* truncava no 1º '>' e
+//   gerava 6 falsos-positivos/negativos (achado da revisão adversarial);
+// - um spread JSX ({...props}) numa tag é tratado como "pode ter o atributo" → não acusa;
+// - o nome acessível de um <button> pode vir de um DESCENDENTE (<img alt>, aria-label) — a computação de
+//   nome do W3C deriva do subtree, então não acusamos botão-imagem;
 // - só varre arquivos de frontend (html/jsx/tsx/vue/svelte).
 // As 4 regras (o pedido do survey): img sem alt, html sem lang, botão-ícone sem nome, input sem rótulo.
 
@@ -29,17 +33,60 @@ function lineOf(content: string, idx: number): number {
   return line;
 }
 
-// Um spread JSX na tag ({...x}) esconde atributos que não conseguimos ver → tratamos como "rotulável" p/ não
-// acusar falso. Fora isso, casa `attr=`, `attr={`, `attr "` (booleano) na string da tag de abertura.
+// Extrai as tags de ABERTURA <name ...> de forma robusta a JSX. O '>' que fecha a tag é o primeiro em
+// profundidade-0 de chaves E fora de aspas — assim um '>' dentro de {() => x}, {a > b} ou "data>x" não
+// corta a tag no meio (a fragilidade do [^>]* que a revisão pegou). Devolve a string COMPLETA da tag + índice.
+function findOpenTags(content: string, name: string): { tag: string; index: number }[] {
+  const out: { tag: string; index: number }[] = [];
+  const re = new RegExp(`<${name}\\b`, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    const start = m.index;
+    let i = start + m[0].length;
+    let depth = 0;
+    let quote = "";
+    for (; i < content.length; i++) {
+      const ch = content[i];
+      if (quote) {
+        if (ch === quote) quote = "";
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+      else if (ch === "{") depth++;
+      else if (ch === "}") depth = Math.max(0, depth - 1);
+      else if (ch === ">" && depth === 0) {
+        i++;
+        break;
+      }
+    }
+    out.push({ tag: content.slice(start, i), index: start });
+    re.lastIndex = i; // retoma DEPOIS desta tag (não re-casa o miolo)
+  }
+  return out;
+}
+
+// Um spread JSX na tag ({...x}) esconde atributos que não vemos → tratamos como "rotulável" p/ não acusar falso.
 function hasSpread(openTag: string): boolean {
   return /\{\s*\.\.\./.test(openTag);
 }
+// Exige `attr=` — todos os atributos que checamos são de VALOR (alt/lang/aria-label/placeholder/title), nunca
+// booleanos. Sem o `=`, a palavra do atributo DENTRO do valor de outro (ex.: title="the alt text") casaria e
+// suprimiria o aviso por engano (falso-negativo confirmado na revisão).
 function tagHasAttr(openTag: string, attr: string): boolean {
   if (hasSpread(openTag)) return true;
-  return new RegExp(`(^|[\\s{])${attr}(\\s*=|[\\s/>]|$)`, "i").test(openTag);
+  return new RegExp(`(^|[\\s{])${attr}\\s*=`, "i").test(openTag);
 }
 function attrValue(openTag: string, attr: string): string | undefined {
   return new RegExp(`(?:^|[\\s{])${attr}\\s*=\\s*["']([^"']*)["']`, "i").exec(openTag)?.[1];
+}
+
+// O <input> está DENTRO de um <label> ancestral (associação implícita, válida)? Length-INDEPENDENTE: há um
+// `<label` aberto depois do último `</label>` antes do input? (A janela fixa de 80 chars perdia o label
+// envolvente com markup intermediário — achado da revisão.)
+function insideOpenLabel(content: string, idx: number): boolean {
+  const before = content.slice(0, idx).toLowerCase();
+  const lastOpen = before.lastIndexOf("<label");
+  return lastOpen >= 0 && lastOpen > before.lastIndexOf("</label>");
 }
 
 /** Varre os arquivos de FRONTEND e devolve achados de a11y (advisory). Puro/testável. */
@@ -53,42 +100,51 @@ export function scanA11y(files: { path: string; content: string }[]): A11yFindin
     const c = file.content ?? "";
 
     // 1) <img> sem alt (alt="" explícito é VÁLIDO — imagem decorativa; só a AUSÊNCIA do atributo acusa).
-    for (const m of c.matchAll(/<img\b[^>]*?\/?>/gi)) {
-      if (!tagHasAttr(m[0], "alt")) add({ path: file.path, line: lineOf(c, m.index ?? 0), rule: "img-alt", message: '<img> sem atributo alt (use alt="" se for decorativa; senão descreva a imagem)' });
+    for (const t of findOpenTags(c, "img")) {
+      if (!tagHasAttr(t.tag, "alt")) add({ path: file.path, line: lineOf(c, t.index), rule: "img-alt", message: '<img> sem atributo alt (use alt="" se for decorativa; senão descreva a imagem)' });
     }
 
-    // 2) <html> sem lang (leitor de tela precisa do idioma; um por documento).
-    for (const m of c.matchAll(/<html\b[^>]*>/gi)) {
-      if (!tagHasAttr(m[0], "lang")) add({ path: file.path, line: lineOf(c, m.index ?? 0), rule: "html-lang", message: "<html> sem atributo lang (ex.: lang=\"pt-BR\") — o leitor de tela precisa do idioma" });
+    // 2) <html> sem lang (o leitor de tela precisa do idioma; um por documento).
+    for (const t of findOpenTags(c, "html")) {
+      if (!tagHasAttr(t.tag, "lang")) add({ path: file.path, line: lineOf(c, t.index), rule: "html-lang", message: '<html> sem atributo lang (ex.: lang="pt-BR") — o leitor de tela precisa do idioma' });
     }
 
-    // 3) <button> só com ícone e SEM nome acessível: conteúdo sem TEXTO nem expressão {…} (só <svg>/<i>…),
-    //    e sem aria-label/aria-labelledby/title. Manter {…} como "tem nome" evita FP em <button>{t("save")}</button>.
-    for (const m of c.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
-      const attrs = m[1];
-      if (tagHasAttr(attrs, "aria-label") || tagHasAttr(attrs, "aria-labelledby") || tagHasAttr(attrs, "title")) continue;
-      const innerNoTags = m[2].replace(/<[^>]+>/g, "").trim(); // remove tags aninhadas; PRESERVA texto e {…}
+    // 3) <button> só com ícone e SEM nome acessível. O nome pode vir do próprio botão (aria-label/title) OU de
+    //    um DESCENDENTE (<img alt="…"> não-vazio, ou filho com aria-label/title — a computação de nome do W3C
+    //    deriva do subtree). Só acusa quando não há NENHUM texto/expressão {…} e nenhum nome no subtree.
+    const openButtons = findOpenTags(c, "button");
+    for (const b of openButtons) {
+      if (/\/>\s*$/.test(b.tag)) continue; // <button/> self-closing (raríssimo) — sem miolo
+      if (tagHasAttr(b.tag, "aria-label") || tagHasAttr(b.tag, "aria-labelledby") || tagHasAttr(b.tag, "title")) continue;
+      const openEnd = b.index + b.tag.length;
+      const close = c.toLowerCase().indexOf("</button>", openEnd);
+      const inner = close >= 0 ? c.slice(openEnd, close) : c.slice(openEnd);
+      // Nome vindo do subtree: <img alt NÃO-vazio> (decorativo alt="" ainda acusa), ou aria-label/title num filho.
+      if (/<img\b[^>]*\balt\s*=\s*["'][^"']+["']/i.test(inner) || /\b(?:aria-label|aria-labelledby|title)\s*=/i.test(inner)) continue;
+      const innerNoTags = inner.replace(/<[^>]+>/g, "").trim(); // remove tags aninhadas; PRESERVA texto e {…}
       if (innerNoTags.length > 0) continue; // sobrou texto ou expressão JSX → provável nome acessível
-      add({ path: file.path, line: lineOf(c, m.index ?? 0), rule: "button-name", message: "<button> só com ícone e sem nome acessível (adicione aria-label ou um texto visível)" });
+      add({ path: file.path, line: lineOf(c, b.index), rule: "button-name", message: "<button> só com ícone e sem nome acessível (adicione aria-label ou um texto visível)" });
     }
 
-    // 4) <input> de texto sem RÓTULO: sem aria-label/labelledby/title, sem <label for=id> casando o id, e sem
-    //    um <label> imediatamente antes (janela curta — cobre o label adjacente/envolvente). placeholder NÃO
-    //    conta como rótulo (a classe F-15/F-16). Conservador: só acusa quando há placeholder (sinaliza campo
-    //    de entrada) — reduz FP em inputs rotulados por composição cross-arquivo que não enxergamos.
+    // 4) <input> de texto com placeholder mas SEM rótulo: sem aria-label/labelledby/title, sem <label for=id>
+    //    casando o id, e sem um <label> ANCESTRAL (envolvente). placeholder NÃO conta como rótulo (F-15/F-16).
+    //    Conservador: só acusa quando há placeholder (sinal de campo de entrada) — reduz FP em inputs rotulados
+    //    por composição cross-arquivo que não enxergamos.
     const labelFor = new Set<string>();
-    for (const lm of c.matchAll(/<label\b[^>]*\b(?:for|htmlFor)\s*=\s*["'{]?\s*([\w-]+)/gi)) labelFor.add(lm[1]);
-    for (const m of c.matchAll(/<input\b[^>]*?\/?>/gi)) {
-      const tag = m[0];
+    for (const t of findOpenTags(c, "label")) {
+      const f = attrValue(t.tag, "for") ?? attrValue(t.tag, "htmlFor");
+      if (f) labelFor.add(f);
+    }
+    for (const t of findOpenTags(c, "input")) {
+      const tag = t.tag;
       const type = (attrValue(tag, "type") ?? "").toLowerCase();
       if (UNLABELED_INPUT_TYPES.has(type)) continue;
-      if (!tagHasAttr(tag, "placeholder")) continue; // sinal de campo de entrada; sem ele, alto risco de FP
+      if (!tagHasAttr(tag, "placeholder")) continue; // sem placeholder → alto risco de FP → conservador, não acusa
       if (tagHasAttr(tag, "aria-label") || tagHasAttr(tag, "aria-labelledby") || tagHasAttr(tag, "title")) continue;
       const id = attrValue(tag, "id");
       if (id && labelFor.has(id)) continue; // tem <label for=id> casando
-      const before = c.slice(Math.max(0, (m.index ?? 0) - 80), m.index ?? 0);
-      if (/<label\b/i.test(before)) continue; // label adjacente/envolvente logo antes → provável rótulo
-      add({ path: file.path, line: lineOf(c, m.index ?? 0), rule: "input-label", message: "<input> com placeholder mas sem rótulo acessível (placeholder NÃO é rótulo — associe um <label for> ou aria-label)" });
+      if (insideOpenLabel(c, t.index)) continue; // <label> ancestral envolvente (independe da distância)
+      add({ path: file.path, line: lineOf(c, t.index), rule: "input-label", message: "<input> com placeholder mas sem rótulo acessível (placeholder NÃO é rótulo — associe um <label for> ou aria-label)" });
     }
   }
   return out;
