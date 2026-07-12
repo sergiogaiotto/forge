@@ -5,6 +5,7 @@ import {
   contractGateDecision,
   contractUnverified,
   GateCheckResult,
+  isBlockingTscContract,
   isTscSyntaxError,
   mypyUnavailable,
   normGatePath,
@@ -330,4 +331,49 @@ test("parseGoBuildErrors: FILTRA o ruído de deps de terceiros ausentes (offline
   const e = parseGoBuildErrors(out);
   assert.equal(e.length, 1);
   assert.deepEqual(e[0], { path: "domain/order.go", line: 9, message: "undefined: RealDrift" });
+});
+
+// #05: isBlockingTscContract — só TS2307 de import RELATIVO a CÓDIGO bloqueia; asset relativo (css/svg/
+// json...) e não-TS2307 NÃO bloqueiam (evita o falso-bloqueio nº1 de um React SPA).
+test("isBlockingTscContract: TS2307 relativo a código (extensionless / .ts / .js) BLOQUEIA", () => {
+  for (const mod of ["./missing", "../domain/orderStatus", "./components/Foo.tsx", "./util/x.js"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), true, mod);
+  }
+});
+
+test("isBlockingTscContract: ASSET e SFC relativos NÃO bloqueiam (bundler resolve; falso-bloqueio evitado)", () => {
+  for (const mod of ["./App.css", "./styles.scss", "./logo.svg", "../assets/hero.png", "./data.json", "./doc.md", "./font.woff2", "./App.vue", "./Card.svelte", "./Page.astro"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), false, mod);
+  }
+});
+
+test("isBlockingTscContract: query-suffix do Vite (?url/?raw/?worker) NÃO bloqueia (achado da revisão)", () => {
+  for (const mod of ["./icon.svg?url", "./styles.css?inline", "./data.txt?raw", "./my.worker?worker", "./Comp.vue?vue&type=script"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), false, mod);
+  }
+});
+
+test("isBlockingTscContract: import relativo que RESOLVE a arquivo conhecido (parcial/aplicado) NÃO bloqueia", () => {
+  const known = new Set(["src/lib.ts", "src/components/card/index.tsx", "src/util/x.ts"]);
+  const err = (mod: string, path: string) => ({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.`, path });
+  // ./lib de src/main.ts → src/lib.ts (conhecido) → advisory
+  assert.equal(isBlockingTscContract(err("./lib", "src/main.ts"), known), false, "./lib resolve a src/lib.ts");
+  // ./card de src/components/App.tsx → src/components/card/index.tsx (conhecido) → advisory
+  assert.equal(isBlockingTscContract(err("./card", "src/components/App.tsx"), known), false, "./card resolve a index.tsx");
+  // ../util/x.js de src/app/y.ts → src/util/x.ts (mapeamento .js→.ts) → advisory
+  assert.equal(isBlockingTscContract(err("../util/x.js", "src/app/y.ts"), known), false, "../util/x.js resolve a src/util/x.ts");
+  // ./missing de src/main.ts → não existe no universo → BLOQUEIA (drift real)
+  assert.equal(isBlockingTscContract(err("./missing", "src/main.ts"), known), true, "./missing é drift real");
+});
+
+test("isBlockingTscContract: import BARE / alias / stdlib NÃO bloqueia (defesa dupla com parseTscErrors)", () => {
+  for (const mod of ["react", "express", "@/components/Foo", "#internal/x", "node:fs", "@scope/pkg"]) {
+    assert.equal(isBlockingTscContract({ code: "TS2307", message: `Cannot find module '${mod}' or its corresponding type declarations.` }), false, mod);
+  }
+});
+
+test("isBlockingTscContract: outros códigos (TS2339, TS1005, sem módulo) NÃO bloqueiam", () => {
+  assert.equal(isBlockingTscContract({ code: "TS2339", message: "Property 'x' does not exist on type 'Y'." }), false);
+  assert.equal(isBlockingTscContract({ code: "TS1005", message: "';' expected." }), false);
+  assert.equal(isBlockingTscContract({ code: "TS2307", message: "Cannot find module (mensagem sem aspas)." }), false);
 });
