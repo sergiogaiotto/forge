@@ -100,6 +100,7 @@ import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
 import { classifyProjectIntent } from "../util/projectIntent";
+import { isFrontendRequest } from "../util/frontendIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
 import { extractReferencedPaths } from "../util/errorRefs";
@@ -1991,7 +1992,16 @@ export class Controller {
       topK: this.config.topK(),
     });
     const discovery = selector.selectForDiscovery(this.skills, text);
-    const toActivate = selector.selectForActivation(discovery, text);
+    let toActivate = selector.selectForActivation(discovery, text);
+    // Família frontend (F-10/F-14..F-21): um pedido curto de UI de cliente ("todo app em html com tailwind")
+    // não passa o limiar léxico de ativação → a skill de a11y não entra e os defeitos voltam. Quando a
+    // heurística (porta-negativa de dados-que-cita-web + porta-positiva de UI de cliente) detecta frontend,
+    // FORÇA a ativação da skill frontend-html-a11y (se habilitada e ainda não ativada). Só no CHAT ("normal"):
+    // o Modo Projeto injeta as MESMAS regras deterministicamente (uiLayerInstruction), sem heurística.
+    if (mode === "normal" && isFrontendRequest(text)) {
+      const fe = this.skills.find((s) => s.enabled && s.name === "frontend-html-a11y");
+      if (fe && !toActivate.some((s) => s.name === fe.name)) toActivate = [...toActivate, fe];
+    }
     const activated = await Promise.all(
       toActivate.map(async (meta) => ({ meta, body: await this.loader.loadBody(meta) }))
     );

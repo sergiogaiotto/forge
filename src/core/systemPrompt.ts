@@ -163,6 +163,25 @@ ${FORGE_FENCE}
   dentro do código da célula — emita o conteúdo inteiro da célula.`;
 }
 
+// Regras de ROBUSTEZ + ACESSIBILIDADE para geração de UI de CLIENTE (HTML/JS/CSS) — os achados F-10/F-14..
+// F-21 do QA. Fonte-da-verdade ÚNICA: no CHAT chega pela skill frontend-html-a11y (ativada por isFrontendRequest);
+// no MODO PROJETO é injetada AQUI deterministicamente (uiLayerInstruction, ui spa-react/template-engine) — o
+// sinal lá é ESTRUTURAL, não heurístico. Núcleo imperativo e curto (o corpo rico com exemplos vive na skill).
+export const FRONTEND_A11Y_RULES = [
+  "ROBUSTEZ + ACESSIBILIDADE (UI de cliente HTML/JS):",
+  "- localStorage/sessionStorage: SEMPRE leia dentro de try/catch e valide o TIPO antes de usar (ex.: `Array.isArray`",
+  "  no que deveria ser lista) — dado corrompido/ausente cai para o estado vazio, não quebra o load (F-10). Toda",
+  "  ESCRITA (setItem/removeItem) também em try/catch — QuotaExceededError e modo privado não podem propagar (F-14).",
+  "- Todo controle de formulário (input/checkbox/radio/select/textarea) precisa de RÓTULO acessível: `<label for>`",
+  "  associado OU aria-label/aria-labelledby; botão-ícone leva aria-label. placeholder NÃO é rótulo (F-15/F-16).",
+  "- Contador/status/toast que muda sozinho vai em região viva: aria-live=\"polite\" ou role=\"status\" (F-19).",
+  "- NÃO recrie listas com `container.innerHTML=\"\"` a cada mudança (destrói o foco e é lento): atualize o nó",
+  "  específico; se um re-render total for inevitável, salve `document.activeElement` e refoque depois (F-20).",
+  "- Inputs com `maxlength` e `trim()`; ignore entrada vazia; renderize um EMPTY-STATE explícito quando a lista",
+  "  estiver vazia (F-21).",
+  "- XSS: nunca injete texto do usuário via `innerHTML`; use `textContent`/`createElement`.",
+].join("\n");
+
 // Prompt do Modo TDD (test-first): o modelo escreve os testes antes da
 // implementação, para o ciclo vermelho → verde → refatora.
 export function buildTddPrompt(workspaceName: string): string {
@@ -293,10 +312,15 @@ export function uiLayerInstruction(language: ProjectLanguage, ui: ProjectUI | un
         "(em Python: `Path(__file__).resolve().parent / \"templates\"`), nunca relativo ao CWD." +
         (language === "python"
           ? " Em FastAPI, os campos de um formulário HTML (POST) são lidos com `Form(...)` (requer python-multipart), NÃO como parâmetros de query — declará-los como `str`/`int` puros faz o corpo do formulário ser ignorado. Ao renderizar com `Jinja2Templates`, use a assinatura ATUAL do Starlette com o `request` como PRIMEIRO argumento posicional: `templates.TemplateResponse(request, \"pagina.html\", {\"chave\": valor})`. A forma antiga `TemplateResponse(\"pagina.html\", {\"request\": request, ...})` QUEBRA em runtime nas versões atuais (`TypeError: unhashable type: 'dict'`) — a home nem renderiza. Ao interpolar um valor num SEGMENTO de path de um link ou form no template (ex.: `action`/`href` como `/livros/{isbn}/emprestar`), passe-o por `|urlencode` (ex.: `{{ isbn|urlencode }}`) — um valor com espaço, `/` ou acento gera um path malformado."
-          : "")
+          : "") +
+        "\n" +
+        FRONTEND_A11Y_RULES
       );
     case "spa-react":
-      return "CAMADA DE UI: inclua um frontend SPA em React (diretório frontend/ com Vite, package.json próprio) consumindo a API via HTTP; documente os dois lados no README.";
+      return (
+        "CAMADA DE UI: inclua um frontend SPA em React (diretório frontend/ com Vite, package.json próprio) consumindo a API via HTTP; documente os dois lados no README.\n" +
+        FRONTEND_A11Y_RULES
+      );
     case "streamlit":
       // Python-only (a webview filtra; defensivo aqui: outra linguagem cai no "auto").
       return language === "python" ? "CAMADA DE UI: a interface é um app Streamlit (arquivo de UI chamando o núcleo como biblioteca)." : "";
