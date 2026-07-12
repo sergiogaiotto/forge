@@ -33,6 +33,26 @@ const BARE_FENCE_TAIL = /(^|\n)`{3,}[ \t\r]*\n?[ \t]*$/;
 // infla o texto SEM emitir o que falta (progresso falso).
 const STALL_TOLERANCE = 2;
 
+// openFence "spin" (Modo Projeto): o gpt-oss às vezes TRAVA fechando a cerca de UM arquivo — vaza fragmentos
+// de raciocínio/confusão de fence ("Proceed.", "Thus final.") a cada continuação SEM fechar a cerca. O laço
+// então queima TODAS as continuações nesse arquivo, sem alcançar o resto do plano (achado empírico ao vivo:
+// 1/48, 38/48). Defesa: contar rodadas de continuação CONSECUTIVAS com o MESMO arquivo aberto; ao atingir o
+// teto — OU quando a guarda de stall dispara nele — ABANDONA o arquivo (marca parcial) e faz clean-room do
+// resto. O teto é ALTO o bastante para não abandonar um arquivo grande legítimo (que fecha em poucas rodadas):
+// medido ao vivo, um arquivo legítimo fecha em ≤4 continuações; um spin não fecha em 6-7. (NÃO se usa piso de
+// crescimento: o spin real cresce bastante — "cresceu pouco" não distingue spin de arquivo grande; só "não
+// fecha há K rodadas" distingue.)
+const STUCK_FILE_TOLERANCE = 5; // continuações seguidas presas no mesmo arquivo aberto → abandona e salva o resto
+
+// Teto de continuações da geração resiliente. Modo Projeto (há plano/expectedPaths) usa o teto MAIOR para
+// FINANCIAR o salvamento da clean-room quando o modelo trava num arquivo (openFence spin); chat/TDD usam o
+// padrão. Exportados/puros para serem testáveis — o Task NÃO é importável em teste (puxa vscode via logger).
+export const MAX_CONTINUATIONS = 6;
+export const PROJECT_MAX_CONTINUATIONS = 14;
+export function pickMaxContinuations(expectedPaths: string[] | undefined): number {
+  return (expectedPaths?.length ?? 0) > 0 ? PROJECT_MAX_CONTINUATIONS : MAX_CONTINUATIONS;
+}
+
 export type IncompleteReason = "cerca-aberta" | "elipse";
 
 export interface CompletenessResult {
@@ -83,6 +103,27 @@ export function partialFilePath(
   }
   const last = blocks[blocks.length - 1];
   return last && !last.closed ? last.path || undefined : undefined;
+}
+
+// Conjunto de paths (NORMALIZADOS) que Task.run deve marcar como PARCIAL: o arquivo cortado do partialFilePath
+// (o último bloco aberto) MAIS os arquivos ABANDONADOS pelo laço (openFence spin salvo). Puro/testável — o
+// Task não tem harness de teste, e o abandonado é o ÚNICO ponto de integridade do fix do spin. NÃO cruza com
+// closedBlockPaths (o scanner de streaming "fecha" o abandonado emprestando a cerca do bloco seguinte —
+// reportaria o cortado como fechado e o deixaria escapar; achado CRÍTICO da revisão adversarial). Marcar um
+// abandonado como parcial é sempre o lado SEGURO: o laço só o inclui quando tem corpo truncado e NUNCA o
+// re-pede — então nem chega a ser re-emitido fechado; e se um modelo desobediente o re-emitisse, pular o
+// Aplicar + avisar é melhor que gravar um arquivo possivelmente cortado.
+export function partialProposalKeys(
+  wasTruncated: boolean,
+  completeness: CompletenessResult,
+  full: string,
+  abandonedPaths: string[] | undefined
+): Set<string> {
+  const keys = new Set<string>();
+  const p = partialFilePath(wasTruncated, completeness, full);
+  if (p) keys.add(normResilientPath(p));
+  for (const a of abandonedPaths ?? []) keys.add(normResilientPath(a));
+  return keys;
 }
 
 // Fragmentos conversacionais que o modelo às vezes emite no INÍCIO de uma continuação, apesar de
@@ -203,13 +244,18 @@ export interface ResilientResult {
   completeness: CompletenessResult;
   attempts: number; // nº de continuações efetuadas
   truncated: boolean; // ao final, ainda estava cortado (cerca aberta OU provider sinalizou o corte)
+  // Arquivos ABANDONADOS pelo laço (openFence spin: o modelo travou fechando-os — salvamos o RESTO do plano
+  // via clean-room). INDEPENDENTE de `truncated` (no salvamento bem-sucedido truncated=false): depois que um
+  // bloco fechado sucede o abandonado, o scanner o lê como "fechado" e o partialFilePath não o pega — então
+  // Task.run usa ESTE campo para marcá-lo PARCIAL (senão o arquivo cortado seria aplicado como completo).
+  abandonedPaths?: string[];
   error?: string;
 }
 
 // Normaliza caminho para casar o path do blueprint com o `path=` emitido: separadores/`./` divergem, e a
 // caixa também — o FS do dev costuma ser case-insensitive e um eco com caixa diferente não deve virar
 // falso-faltante e queimar continuações. (Ser leniente aqui só reduz continuações espúrias.)
-function normResilientPath(p: string): string {
+export function normResilientPath(p: string): string {
   return p.replace(/^[.\/\\]+/, "").replace(/\\/g, "/").toLowerCase();
 }
 // Arquivos do plano (expectedPaths) que AINDA não foram emitidos. Usa o parser AUTORITATIVO — parseFileBlocks,
@@ -270,11 +316,14 @@ export async function resilientGenerate(
   let noProgress = 0; // rodadas consecutivas SEM progresso real (F-02: quebra o stall da cauda estagnada)
   let prevMissingCount = Number.POSITIVE_INFINITY; // arquivos do plano faltando na rodada anterior
   let prevOpenFence = false; // a rodada anterior terminou com um arquivo aberto (cortado no meio)?
+  let stuckPath: string | undefined; // arquivo atualmente "travado" aberto (openFence spin) — chaveia o streak
+  let stuckStreak = 0; // rodadas de continuação seguidas com o MESMO arquivo travado crescendo < o piso
+  const abandonedPaths: string[] = []; // arquivos abandonados (travados) — salvamos o resto do plano
   let completeness: CompletenessResult = { complete: true };
   let convo = baseMessages;
   for (;;) {
     const res = await streamFn(convo);
-    if (res.error !== undefined) return { full, completeness, attempts: attempt, truncated: false, error: res.error };
+    if (res.error !== undefined) return { full, completeness, attempts: attempt, truncated: false, abandonedPaths, error: res.error };
     const before = full.length;
     // Saneamento harmony do PREÂMBULO (rede de segurança do gpt-oss em STREAMING — o canal de análise às
     // vezes vaza no content antes do conteúdo; o blueprint roda em não-streaming e já é imune, a geração de
@@ -308,14 +357,47 @@ export async function resilientGenerate(
     noProgress = madeProgress ? 0 : noProgress + 1;
     prevMissingCount = missing.length;
     prevOpenFence = openFence;
+    // openFence "spin": conta rodadas de CONTINUAÇÃO (attempt>0 — a emissão inicial não é "travamento") em que
+    // o MESMO arquivo segue aberto. Chaveia por completeness.path (o 1º bloco não fechado) — X-fecha/Y-abre
+    // reseta. SEM piso de crescimento: o spin REAL do gpt-oss cresce bastante (não é fragmento minúsculo),
+    // então "cresceu pouco" NÃO distingue spin de arquivo grande legítimo — só "não fecha há K rodadas"
+    // distingue (o legítimo fecha; comprovado ao vivo). Um arquivo que fecha antes de K nunca é abandonado.
+    const onOpenPath = openFence && completeness.path !== undefined;
+    stuckStreak = attempt > 0 && onOpenPath && completeness.path === stuckPath ? stuckStreak + 1 : 0;
+    stuckPath = onOpenPath ? completeness.path : undefined;
     const stalled = noProgress >= STALL_TOLERANCE;
-    if (!incomplete) return { full, completeness, attempts: attempt, truncated: false };
-    if (attempt >= opts.maxContinuations || stalled || opts.aborted?.()) {
-      return { full, completeness, attempts: attempt, truncated: true }; // esgotou ainda cortado (ou incompleto)
+    // SALVAMENTO: estamos travados num arquivo aberto (por STALL ou por K rodadas presas nele), HÁ OUTROS
+    // arquivos do plano a salvar e temos o builder da clean-room → abandona o travado e emite o RESTO. Precede
+    // a desistência por stall (senão o spin de baixo-crescimento morreria no stall antes de salvar o plano).
+    const canSalvage =
+      openFence && missing.length > 0 && !!opts.buildMissingFilesContinuation && (stalled || stuckStreak >= STUCK_FILE_TOLERANCE);
+    if (!incomplete) return { full, completeness, attempts: attempt, truncated: false, abandonedPaths };
+    // Limites DUROS (teto/abort) sempre param. A desistência por STALL é PULADA quando dá para salvar o resto.
+    if (attempt >= opts.maxContinuations || opts.aborted?.()) {
+      return { full, completeness, attempts: attempt, truncated: true, abandonedPaths };
+    }
+    if (stalled && !canSalvage) {
+      return { full, completeness, attempts: attempt, truncated: true, abandonedPaths }; // travou sem o que salvar
     }
     attempt++;
     opts.onContinue?.(attempt, completeness.path);
-    if (!openFence && missing.length > 0 && opts.buildMissingFilesContinuation) {
+    if (canSalvage) {
+      // ABANDONA o arquivo travado (openFence spin) e faz clean-room dos OUTROS faltantes. O travado já tem
+      // corpo recuperável (recoverOpen) → NÃO está em `missing` → o registramos como abandonado (Task.run o
+      // marca PARCIAL). Um travado SEM corpo continua em `missing` e é re-emitido do zero pela clean-room —
+      // esse NÃO é abandonado. Injeta \n para a cerca do próximo arquivo cair no início de linha (senão é
+      // engolida). Reseta o streak para não vazar para o próximo arquivo travado.
+      const stuck = completeness.path;
+      if (stuck) {
+        const stuckNorm = normResilientPath(stuck);
+        const bodied = !missing.some((m) => normResilientPath(m) === stuckNorm);
+        if (bodied && !abandonedPaths.some((a) => normResilientPath(a) === stuckNorm)) abandonedPaths.push(stuck);
+      }
+      if (!full.endsWith("\n")) full += "\n";
+      stuckPath = undefined;
+      stuckStreak = 0;
+      convo = [...baseMessages, { role: "user", content: opts.buildMissingFilesContinuation!(missing) }];
+    } else if (!openFence && missing.length > 0 && opts.buildMissingFilesContinuation) {
       // Clean-room (F-02): faltam arquivos do plano e o último bloco NÃO ficou aberto. Pede os faltantes
       // NOMEADOS como blocos novos e autônomos, SEM a âncora da cauda — ela só convida a re-emissão da cauda
       // (stitch dedupa → crescimento zero → stall). O plano+propósitos vivem no system prompt (constante).

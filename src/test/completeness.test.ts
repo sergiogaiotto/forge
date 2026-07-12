@@ -3,7 +3,11 @@ import { test } from "node:test";
 import {
   checkCompleteness,
   dedupeFileBlocksByPath,
+  MAX_CONTINUATIONS,
   missingExpectedFiles,
+  partialProposalKeys,
+  pickMaxContinuations,
+  PROJECT_MAX_CONTINUATIONS,
   sanitizeContinuation,
   stitchContinuation,
 } from "../util/completeness";
@@ -167,4 +171,35 @@ test("missingExpectedFiles: normaliza caixa / ./ / barra; faltante real; expecte
   const a = F + "forge-file path=a.py\nx = 1\n" + F + "\n";
   assert.deepEqual(missingExpectedFiles(a, []), []);
   assert.deepEqual(missingExpectedFiles(a, undefined), []);
+});
+
+// ---- openFence spin: partialProposalKeys marca o arquivo ABANDONADO como parcial (contrato de integridade) --
+// Achado CRÍTICO da revisão: no salvamento o abandonado fica no MEIO do texto, o scanner o lê como "fechado"
+// e truncated=false → sem este campo o arquivo cortado seria aplicado como COMPLETO pelo "Aplicar tudo".
+test("partialProposalKeys: o ABANDONADO (salvage, truncated=false) é parcial; os fechados NÃO", () => {
+  // salvamento: a.py fechado + README ABANDONADO (aberto, com corpo) + b.py fechado + c.py fechado
+  const full =
+    F + "forge-file path=a.py\nx = 1\n" + F + "\n" +
+    F + "forge-file path=README.md\n# Doc parcial cortado\n" +
+    F + "forge-file path=b.py\ny = 2\n" + F + "\n" +
+    F + "forge-file path=c.py\nz = 3\n" + F + "\n";
+  const keys = partialProposalKeys(false, { complete: true }, full, ["README.md"]);
+  assert.ok(keys.has("readme.md"), "o abandonado é parcial mesmo com truncated=false (scanner o lê fechado)");
+  assert.ok(!keys.has("b.py"), "b.py fechado NÃO é parcial");
+  assert.ok(!keys.has("c.py"), "c.py fechado NÃO é parcial");
+  // sem abandonedPaths e sem truncamento → nada parcial (compat com o comportamento antigo do partialFilePath)
+  assert.equal(partialProposalKeys(false, { complete: true }, full, undefined).size, 0);
+  // o último bloco REALMENTE aberto continua parcial (via partialFilePath), unido aos abandonados
+  const openTail = F + "forge-file path=a.py\nx = 1\n" + F + "\n" + F + "forge-file path=b.py\ndef f():\n    x = ";
+  const keys2 = partialProposalKeys(true, { complete: false, reason: "cerca-aberta", path: "b.py" }, openTail, ["z.py"]);
+  assert.ok(keys2.has("b.py") && keys2.has("z.py"), "une o cortado-no-fim (partialFilePath) com o abandonado");
+});
+
+// Modo Projeto usa o teto MAIOR de continuação (financia a clean-room de salvamento no openFence spin);
+// chat/TDD (sem plano) usam o padrão. Puro/testável — o Task puxa vscode e não é importável em teste.
+test("pickMaxContinuations: Modo Projeto (com plano) usa o teto maior; sem plano usa o padrão", () => {
+  assert.equal(pickMaxContinuations(undefined), MAX_CONTINUATIONS, "sem expectedPaths → teto padrão");
+  assert.equal(pickMaxContinuations([]), MAX_CONTINUATIONS, "plano vazio → teto padrão");
+  assert.equal(pickMaxContinuations(["a.py"]), PROJECT_MAX_CONTINUATIONS, "com plano → teto de projeto");
+  assert.ok(PROJECT_MAX_CONTINUATIONS > MAX_CONTINUATIONS, "o teto de projeto é MAIOR (financia o salvamento)");
 });

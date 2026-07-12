@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatMessage } from "../api/types";
-import { checkCompleteness, dedupeFileBlocksByPath, partialFilePath, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, dedupeFileBlocksByPath, partialFilePath, partialProposalKeys, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 
 const FENCE = "````"; // 4 crases (FORGE_FENCE)
@@ -288,6 +288,147 @@ test("resilientGenerate: projeto grande — 3+ continuações, cada uma emite 1 
   assert.equal(r.truncated, false);
   assert.equal(r.attempts, 3, "3 continuações, todas com progresso → nunca estagna");
   for (const p of plan) assert.match(r.full, new RegExp(`path=${p.replace(".", "\\.")}`), `${p} presente`);
+});
+
+// ---- openFence "spin": o modelo trava fechando UM arquivo; abandona-o e salva o resto do plano ----------
+
+const spinOpts = (extra: object) => ({
+  ...opts,
+  maxContinuations: 12,
+  buildContinuation: (p?: string) => `continue ${p ?? ""}`,
+  buildMissingFilesContinuation: (missing: string[]) => `emita: ${missing.join(", ")}`,
+  ...extra,
+});
+
+test("resilientGenerate: openFence spin — abandona o travado após K, salva o resto e reporta abandonedPaths", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const readmeOpen = FENCE + "forge-file path=README.md\n# Projeto\n" + "linha ".repeat(60); // corpo real, ABERTO
+  const bc = FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" + FENCE + "forge-file path=c.py\nz = 3\n" + FENCE + "\n";
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + readmeOpen }; // round0: a.py fechado + README ABERTO
+    if (hasAnchor) return { text: "Proceed.\n" }; // spin: fragmento minúsculo, nunca fecha o README
+    return { text: bc }; // clean-room (sem âncora): emite os outros faltantes
+  });
+  const r = await resilientGenerate(base, m.fn, spinOpts({ expectedPaths: ["a.py", "README.md", "b.py", "c.py"] }));
+  assert.equal(r.truncated, false);
+  assert.deepEqual(r.abandonedPaths, ["README.md"]);
+  assert.match(r.full, /path=b\.py/);
+  assert.match(r.full, /path=c\.py/);
+  const cleanRoom = m.captured.find((c) => c.length > 1 && !c.some((x) => x.role === "assistant"));
+  assert.ok(cleanRoom, "houve uma continuação clean-room (sem âncora)");
+  assert.ok(!/README/.test(cleanRoom!.at(-1)?.content ?? ""), "clean-room não re-pede o README abandonado (tem corpo)");
+});
+
+test("resilientGenerate: arquivo grande legítimo que FECHA antes de K NÃO é abandonado (o legítimo fecha; o spin não)", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const bigOpen = FENCE + "forge-file path=big.py\nparte0 = 0\n"; // ABERTO
+  let anchored = 0;
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + bigOpen };
+    if (hasAnchor) {
+      anchored++; // cresce de verdade por rodada e FECHA na 4ª continuação (< STUCK_FILE_TOLERANCE=5)
+      const chunk = `parte${anchored} = ${anchored}\n`.repeat(40);
+      return anchored < 4 ? { text: chunk } : { text: chunk + FENCE + "\n" };
+    }
+    return { text: FENCE + "forge-file path=c.py\nz = 3\n" + FENCE + "\n" };
+  });
+  const r = await resilientGenerate(base, m.fn, spinOpts({ expectedPaths: ["a.py", "big.py", "c.py"] }));
+  assert.equal(r.truncated, false);
+  assert.ok(!r.abandonedPaths || r.abandonedPaths.length === 0, "fecha antes de K rodadas → streak reseta, não abandona");
+  assert.match(r.full, /path=big\.py/);
+});
+
+test("resilientGenerate: spin que ESTAGNA (não cresce) antes de K abandona e salva — não desiste no stall", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const readmeOpen = FENCE + "forge-file path=README.md\n# Projeto\n" + "linha ".repeat(60); // ABERTO, com corpo
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + readmeOpen };
+    if (hasAnchor) return { text: "" }; // spin VAZIO: 2 rodadas sem crescer → stall ANTES de K
+    return { text: FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" };
+  });
+  const r = await resilientGenerate(base, m.fn, spinOpts({ expectedPaths: ["a.py", "README.md", "b.py"] }));
+  assert.equal(r.truncated, false, "o stall com arquivo travado + outros faltantes SALVA em vez de desistir");
+  assert.deepEqual(r.abandonedPaths, ["README.md"]);
+  assert.match(r.full, /path=b\.py/);
+});
+
+// Integridade (achado da revisão): um arquivo travado SEM corpo recuperável (só cabeçalho) NÃO é abandonado —
+// continua em `missing` e é re-emitido do ZERO pela clean-room (completo). Marcá-lo parcial gravaria um
+// arquivo completo como parcial. Sem este teste, um mutante "sempre abandona" (dropar o `bodied &&`) passaria.
+test("resilientGenerate: arquivo travado SEM corpo (só cabeçalho) NÃO é abandonado — clean-room o re-emite completo", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const readmeHeaderOnly = FENCE + "forge-file path=README.md\n"; // ABERTO, cabeçalho SEM corpo (recoverOpen → null)
+  const readmeFull = FENCE + "forge-file path=README.md\n# Doc completo\nconteudo\n" + FENCE + "\n";
+  const bClosed = FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n";
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + readmeHeaderOnly };
+    if (hasAnchor) return { text: "" }; // spin vazio → stall (o cabeçalho nunca ganha corpo)
+    return { text: readmeFull + bClosed }; // clean-room re-emite o README COMPLETO + b.py
+  });
+  const r = await resilientGenerate(base, m.fn, spinOpts({ expectedPaths: ["a.py", "README.md", "b.py"] }));
+  assert.ok(!r.abandonedPaths || r.abandonedPaths.length === 0, "sem corpo → fica em missing → re-emitido do zero, NÃO abandonado");
+  assert.match(r.full, /# Doc completo/, "clean-room re-emitiu o README COMPLETO");
+  assert.ok(!partialProposalKeys(r.truncated, r.completeness, r.full, r.abandonedPaths).has("readme.md"), "README completo NÃO é marcado parcial");
+});
+
+test("resilientGenerate: arquivo travado SEM \\n final — a injeção faz o próximo arquivo parsear após o salvamento", async () => {
+  const aClosed = FENCE + "forge-file path=a.py\nx = 1\n" + FENCE + "\n";
+  const readmeNoNL = FENCE + "forge-file path=README.md\n# Doc\nlinha sem quebra final"; // ABERTO, sem \n no fim
+  const m = messageAware((msgs) => {
+    const hasAnchor = msgs.some((x) => x.role === "assistant");
+    if (msgs.length === 1) return { text: aClosed + readmeNoNL };
+    if (hasAnchor) return { text: "Thus final." }; // spin SEM quebra de linha
+    return { text: FENCE + "forge-file path=b.py\ny = 2\n" + FENCE + "\n" };
+  });
+  const r = await resilientGenerate(base, m.fn, spinOpts({ expectedPaths: ["a.py", "README.md", "b.py"] }));
+  assert.equal(r.truncated, false);
+  assert.deepEqual(r.abandonedPaths, ["README.md"]);
+  assert.ok(parseFileBlocks(r.full).some((b) => b.path === "b.py"), "a injeção de \\n pôs a cerca do b.py em início de linha → parseado (sem ela seria engolido)");
+});
+
+test("resilientGenerate: chat (sem expectedPaths) com cerca aberta NUNCA abandona nem entra em clean-room", async () => {
+  const s = scripted([
+    { text: FENCE + "forge-file path=a.py\ndef f():" }, // aberto
+    { text: "\n    x = 1" }, // spin, não fecha
+    { text: "\n    y = 2" }, // spin, não fecha
+  ]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    maxContinuations: 2,
+    buildMissingFilesContinuation: (missing: string[]) => `NAO_USAR: ${missing.join(", ")}`,
+  });
+  assert.ok(!r.abandonedPaths || r.abandonedPaths.length === 0, "sem plano → missing sempre [] → nunca abandona");
+  assert.equal(r.truncated, true);
+  for (const c of s.captured.slice(1)) {
+    assert.ok(c.some((x) => x.role === "assistant"), "âncora preservada (openFence normal)");
+    assert.ok(!/NAO_USAR/.test(c.at(-1)?.content ?? ""), "clean-room nunca dispara sem expectedPaths");
+  }
+});
+
+test("resilientGenerate: salvamento precisa de orçamento — cap baixo trunca, cap alto completa (spin)", async () => {
+  const plan = ["f0.py", "f1.py", "f2.py", "f3.py", "f4.py", "f5.py", "f6.py"];
+  const block = (p: string) => FENCE + `forge-file path=${p}\nx = 1\n` + FENCE + "\n";
+  const f1Open = FENCE + "forge-file path=f1.py\n# corpo\n"; // f1 ABERTO (com corpo)
+  const run = (cap: number) => {
+    const m = messageAware((msgs) => {
+      const hasAnchor = msgs.some((x) => x.role === "assistant");
+      if (msgs.length === 1) return { text: block("f0.py") + f1Open }; // f0 fechado + f1 ABERTO (trava na #2)
+      if (hasAnchor) return { text: "Proceed.\n" }; // spin em f1
+      const last = msgs.at(-1)?.content ?? ""; // clean-room: emite o 1º faltante nomeado, um por rodada
+      const next = plan.find((p) => last.includes(p));
+      return { text: next ? block(next) : "" };
+    });
+    return resilientGenerate(base, m.fn, spinOpts({ maxContinuations: cap, expectedPaths: plan }));
+  };
+  const low = await run(6);
+  assert.equal(low.truncated, true, "cap=6: o orçamento estoura antes de salvar o plano inteiro");
+  const high = await run(12);
+  assert.equal(high.truncated, false, "cap=12: salva o plano inteiro após abandonar o travado");
+  for (const p of plan) assert.match(high.full, new RegExp(`path=${p.replace(".", "\\.")}`), `${p} presente`);
 });
 
 test("resilientGenerate: reenvia só a CAUDA (âncora), não o texto inteiro", async () => {
