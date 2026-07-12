@@ -429,9 +429,27 @@ export function renderContextReport(r: ContextReport): string {
     "",
     t("ctx.rag", { count: r.ragChunks }),
     t("ctx.session", { input: fmtK(r.sessionInputTokens), output: fmtK(r.sessionOutputTokens) }),
+    // FinOps (#12): custo estimado da sessão (só com preços) + teto de gasto local, se configurado.
+    ...(r.sessionCost !== undefined ? [t("ctx.cost", { cost: fmtCost(r.sessionCost), currency: r.currency ?? "" })] : []),
+    ...(r.spendBudget
+      ? [
+          t("ctx.budget", {
+            spent: fmtCost(r.sessionCost ?? 0),
+            budget: fmtCost(r.spendBudget),
+            currency: r.currency ?? "",
+            pct: Math.round(((r.sessionCost ?? 0) / r.spendBudget) * 100),
+          }),
+          bar(r.sessionCost ?? 0, r.spendBudget),
+        ]
+      : []),
     "",
     `_${t("ctx.footnote", { clearCmd: clearCmdLabel() })}_`,
   ].join("\n");
+}
+
+// Formata custo (moeda) — fração para valores <1, 2 casas acima. Espelha o Controller.fmtCost do host.
+function fmtCost(n: number): string {
+  return n >= 1 ? n.toFixed(2) : n.toFixed(4);
 }
 
 // Cartão markdown do /tokens — dados locais da webview (usage do stream/end + acumulado da sessão).

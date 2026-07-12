@@ -398,6 +398,11 @@ export interface ContextReport {
   ragChunks: number; // chunks indexados disponíveis para recuperação
   sessionInputTokens: number; // usage REAL acumulado da sessão
   sessionOutputTokens: number;
+  // FinOps (#12): custo estimado da sessão (ausente = sem preços configurados) + teto de gasto local (ausente
+  // = sem teto) + rótulo da moeda. Deterrente no cliente; o teto autoritativo (tokens/dia) é do gateway.
+  sessionCost?: number;
+  spendBudget?: number;
+  currency?: string;
 }
 
 // ---- Webview → Host da extensão ------------------------------------------------

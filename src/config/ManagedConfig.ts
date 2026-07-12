@@ -255,6 +255,7 @@ export class ManagedConfig {
       capture: (cap === "full" || cap === "metadata-only" ? cap : "masked") as CaptureMode,
       pricing: sanitizePricing(c.get<unknown>("observability.pricing", {})),
       currency: c.get<string>("observability.currency", "R$").trim() || "R$",
+      budget: Math.max(0, Number(c.get<number>("observability.budget", 0)) || 0),
     };
   }
 

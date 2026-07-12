@@ -10,6 +10,7 @@ import { buildAuthHeaders, ProviderRuntimeConfig } from "../api/types";
 import { ChatMessage } from "../api/types";
 import { probeServedContextWindow } from "../util/servedWindow";
 import { ManagedConfig } from "../config/ManagedConfig";
+import { budgetGateDecision, estimateCost } from "../api/pricing";
 import { LicenseClient } from "../license/LicenseClient";
 import { LicenseVerifier } from "../license/LicenseVerifier";
 import { SessionToken } from "../license/types";
@@ -185,6 +186,10 @@ export class Controller {
   private currentTask: Task | undefined;
   // Usage REAL acumulado da sessão (todas as gerações, incl. continuações) — /contexto e /tokens.
   private sessionUsage = { input: 0, output: 0 };
+  // FinOps (#12): custo estimado ACUMULADO da sessão (na moeda de `currency`) — alimenta o /contexto e o
+  // teto de gasto LOCAL (deterrente). Só acumula quando há tabela de preços configurada.
+  private sessionCost = { totalCost: 0, currency: "R$" };
+  private budgetWarned = false; // avisa UMA vez ao cruzar ~80% do teto (não a cada geração)
   // Grounding dbt (dados, Onda 1): índice dos artefatos (target/manifest.json [+ catalog.json]),
   // recarregado por mtime (um `dbt compile` do dev atualiza sem reindexação manual). null = sem
   // projeto dbt ou sem artefatos (fail-open: as camadas que o consomem simplesmente não opinam).
@@ -653,6 +658,12 @@ export class Controller {
       this.post({ type: "charter/error", section, message: hostT("charter.err.provider") });
       return;
     }
+    // FinOps (#12): a redação de seção do charter também gera/cobra — gateia junto. Desbloqueia o wizard
+    // com o erro inline (o toast do gate também explica).
+    if (!this.preGenerationGate()) {
+      this.post({ type: "charter/error", section, message: this.budgetBlockedMsg() });
+      return;
+    }
     // Valida o egress ANTES de abrir o trace (não registra uma geração que nunca sairá para a rede).
     try {
       this.egress.assertAllowed(runtime.baseUrl ?? (runtime.type === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com"));
@@ -894,6 +905,13 @@ export class Controller {
     if (this.resolveIdentity().emailRequired) {
       this.post({ type: "project/blueprintError", message: hostT("bp.err.email") });
       await this.postState();
+      return;
+    }
+    // FinOps (#12): o blueprint é uma geração que ACUMULA custo — gateia junto (senão o plano do projeto
+    // rodaria e cobraria mesmo com o teto atingido, e só a geração de código a seguir seria barrada). O
+    // toast do gate explica; fecha o modal para não travar em "gerando".
+    if (!this.preGenerationGate()) {
+      this.post({ type: "project/closed" });
       return;
     }
     const runtime = await this.runtimeProviderConfig();
@@ -1526,6 +1544,13 @@ export class Controller {
         this.currentTask?.abort();
         this.history = [];
         this.pendingAttachments = [];
+        // FinOps (#12): /limpar É "nova sessão" → zera também os contadores de sessão (tokens + custo) e o
+        // aviso de teto. Sem isto, o bloqueio do teto de gasto PERSISTIA após o /limpar — contradizendo a
+        // própria mensagem do bloqueio ("use /limpar para uma nova sessão"). Os três zeram juntos (o
+        // /contexto mostra tokens E custo da "Sessão:").
+        this.sessionUsage = { input: 0, output: 0 };
+        this.sessionCost = { totalCost: 0, currency: this.config.observability().currency };
+        this.budgetWarned = false;
         this.postAttachments();
         this.post({ type: "notice", level: "info", message: hostT("notice.context.cleared") });
         break;
@@ -1979,6 +2004,37 @@ export class Controller {
 
   // ---- geração ---------------------------------------------------------------
 
+  // FinOps (#12): teto de gasto LOCAL (deterrente) — avisa UMA vez em ~80% e BLOQUEIA a geração ao atingir.
+  // Só morde quando há preços configurados (sem preço o custo é 0 e o teto nunca dispara). O teto
+  // AUTORITATIVO (tokens/dia) é enforçado no gateway; este é o aviso/bloqueio imediato no cliente. Retorna
+  // false quando a geração deve ser barrada.
+  private preGenerationGate(): boolean {
+    const obs = this.config.observability();
+    const spent = this.sessionCost.totalCost;
+    const dec = budgetGateDecision(spent, obs.budget, this.budgetWarned);
+    if (dec.block) {
+      this.post({ type: "notice", level: "error", message: this.budgetBlockedMsg() });
+      return false;
+    }
+    if (dec.warn) {
+      this.budgetWarned = true;
+      this.post({ type: "notice", level: "warn", message: hostT("notice.budget.warn", { pct: Math.round((spent / obs.budget) * 100), spent: this.fmtCost(spent), budget: this.fmtCost(obs.budget), currency: obs.currency }) });
+    }
+    return true;
+  }
+
+  // Mensagem do bloqueio de teto — reusada pelo toast do gate E pelos canais de erro do modal de projeto /
+  // wizard de charter (que também gateiam). currency vem DIRETO do config (o sessionCost.currency tem init
+  // truthy "R$" que mataria o fallback e mostraria a moeda errada antes da 1ª geração precificada).
+  private budgetBlockedMsg(): string {
+    const obs = this.config.observability();
+    return hostT("notice.budget.blocked", { spent: this.fmtCost(this.sessionCost.totalCost), budget: this.fmtCost(obs.budget), currency: obs.currency });
+  }
+
+  private fmtCost(n: number): string {
+    return n >= 1 ? n.toFixed(2) : n.toFixed(4); // custo por sessão costuma ser fração; 4 casas quando <1
+  }
+
   async startTask(
     text: string,
     mode: "normal" | "tdd" | "project" = "normal",
@@ -2001,6 +2057,7 @@ export class Controller {
       this.post({ type: "notice", level: "error", message: hostT("notice.provider.none") });
       return;
     }
+    if (!this.preGenerationGate()) return; // FinOps: teto de gasto local atingido
 
     const selector = new SkillSelector({
       ...DEFAULT_SELECTOR_CONFIG,
@@ -2502,6 +2559,8 @@ export class Controller {
     const basePrompt = buildBasePrompt(this.workspaceName());
     const budget = deriveBudget(getModelMeta(runtime.type, runtime.modelId), runtime.maxTokens ?? 0, runtime.servedContextWindow ?? 0);
     const rag = this.rag.status();
+    const obs = this.config.observability();
+    const hasPricing = Object.keys(obs.pricing).length > 0; // custo só faz sentido com preços configurados
     this.post({
       type: "context/report",
       report: {
@@ -2517,6 +2576,11 @@ export class Controller {
         ragChunks: rag.chunks,
         sessionInputTokens: this.sessionUsage.input,
         sessionOutputTokens: this.sessionUsage.output,
+        // FinOps (#12): custo estimado da sessão + teto local SÓ com preços configurados — sem preços o custo
+        // é sempre 0 e o teto nunca dispara, então mostrar a linha de teto seria uma proteção inerte/enganosa.
+        sessionCost: hasPricing ? Number(this.sessionCost.totalCost.toFixed(6)) : undefined,
+        spendBudget: hasPricing && obs.budget > 0 ? obs.budget : undefined,
+        currency: obs.currency,
       },
     });
   }
@@ -2526,6 +2590,13 @@ export class Controller {
     if (e.type === "generation.end" && "usage" in e && e.usage) {
       this.sessionUsage.input += e.usage.inputTokens ?? 0;
       this.sessionUsage.output += e.usage.outputTokens ?? 0;
+      // FinOps: custo estimado desta geração (só quando o Admin configurou preços) → acumula na sessão.
+      const obs = this.config.observability();
+      const cost = estimateCost(e.model, e.usage, obs.pricing, obs.currency);
+      if (cost) {
+        this.sessionCost.totalCost += cost.totalCost;
+        this.sessionCost.currency = cost.currency;
+      }
     }
   }
 
@@ -3919,6 +3990,7 @@ export class Controller {
       this.post({ type: "notice", level: "error", message: hostT("notice.provider.none") });
       return;
     }
+    if (!this.preGenerationGate()) return; // FinOps: teto de gasto local atingido
 
     const diff = await this.gatherDiff();
     if (!diff) {

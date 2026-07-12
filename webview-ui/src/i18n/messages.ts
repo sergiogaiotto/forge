@@ -32,6 +32,8 @@ export type MessageKey =
   | "ctx.estimate"
   | "ctx.rag"
   | "ctx.session"
+  | "ctx.cost"
+  | "ctx.budget"
   | "ctx.footnote"
   // /tokens (renderTokensReport)
   | "tok.title"
@@ -379,6 +381,8 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "ctx.estimate": "Ocupação estimada do próximo envio:",
     "ctx.rag": "RAG: {count, plural, one{# chunk indexado} other{# chunks indexados}} (entram por consulta, conforme o orçamento)",
     "ctx.session": "Sessão: {input} tokens de entrada · {output} de saída",
+    "ctx.cost": "Custo estimado da sessão: **{cost} {currency}**",
+    "ctx.budget": "Teto de gasto (local): {spent} / {budget} {currency} · {pct}%",
     "ctx.footnote": "Estimativas heurísticas (o tokenizer real varia; TDD/Projeto têm prompt fixo um pouco maior). {clearCmd} zera o histórico.",
     "tok.title": "Uso de tokens",
     "tok.empty": "Ainda não houve geração nesta sessão — os números aparecem após a primeira resposta do modelo.",
@@ -703,6 +707,8 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "ctx.estimate": "Estimated occupancy of the next send:",
     "ctx.rag": "RAG: {count, plural, one{# indexed chunk} other{# indexed chunks}} (added per query, within the budget)",
     "ctx.session": "Session: {input} input tokens · {output} output",
+    "ctx.cost": "Estimated session cost: **{cost} {currency}**",
+    "ctx.budget": "Spend ceiling (local): {spent} / {budget} {currency} · {pct}%",
     "ctx.footnote": "Heuristic estimates (the real tokenizer varies; TDD/Project modes have a slightly larger fixed prompt). {clearCmd} clears the history.",
     "tok.title": "Token usage",
     "tok.empty": "No generation in this session yet — the numbers appear after the model's first response.",
@@ -1027,6 +1033,8 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "ctx.estimate": "Ocupación estimada del próximo envío:",
     "ctx.rag": "RAG: {count, plural, one{# chunk indexado} other{# chunks indexados}} (entran por consulta, según el presupuesto)",
     "ctx.session": "Sesión: {input} tokens de entrada · {output} de salida",
+    "ctx.cost": "Costo estimado de la sesión: **{cost} {currency}**",
+    "ctx.budget": "Techo de gasto (local): {spent} / {budget} {currency} · {pct}%",
     "ctx.footnote": "Estimaciones heurísticas (el tokenizer real varía; TDD/Proyecto tienen un prompt fijo algo mayor). {clearCmd} reinicia el historial.",
     "tok.title": "Uso de tokens",
     "tok.empty": "Aún no hubo generación en esta sesión — los números aparecen tras la primera respuesta del modelo.",

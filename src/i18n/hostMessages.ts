@@ -111,6 +111,8 @@ export type HostMessageKey =
   | "notice.email.required"
   | "notice.provider.configured"
   | "notice.provider.none"
+  | "notice.budget.warn"
+  | "notice.budget.blocked"
   | "notice.provider.beforeMaxOutput"
   | "notice.context.cleared"
   | "notice.context.provider"
@@ -530,6 +532,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.email.required": "Informe seu e-mail na configuração inicial antes de gerar código.",
     "notice.provider.configured": "Provedor configurado.",
     "notice.provider.none": "Nenhum provedor configurado.",
+    "notice.budget.warn": "FinOps: você já usou {pct}% do teto de gasto da sessão ({spent} / {budget} {currency}).",
+    "notice.budget.blocked": "FinOps: teto de gasto da sessão atingido ({spent} / {budget} {currency}). Ajuste `forge.observability.budget` ou use /limpar para uma nova sessão.",
     "notice.provider.beforeMaxOutput": "Configure um provedor antes de definir o máximo de tokens de saída.",
     "notice.context.cleared": "Contexto limpo: histórico e anexos zerados.",
     "notice.context.provider": "Configure um provedor para ver o orçamento de contexto.",
@@ -928,6 +932,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.email.required": "Enter your e-mail in the initial setup before generating code.",
     "notice.provider.configured": "Provider configured.",
     "notice.provider.none": "No provider configured.",
+    "notice.budget.warn": "FinOps: you've used {pct}% of the session spend ceiling ({spent} / {budget} {currency}).",
+    "notice.budget.blocked": "FinOps: session spend ceiling reached ({spent} / {budget} {currency}). Adjust `forge.observability.budget` or use /clear for a new session.",
     "notice.provider.beforeMaxOutput": "Configure a provider before setting the maximum output tokens.",
     "notice.context.cleared": "Context cleared: history and attachments reset.",
     "notice.context.provider": "Configure a provider to see the context budget.",
@@ -1326,6 +1332,8 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.email.required": "Indica tu e-mail en la configuración inicial antes de generar código.",
     "notice.provider.configured": "Proveedor configurado.",
     "notice.provider.none": "Ningún proveedor configurado.",
+    "notice.budget.warn": "FinOps: ya usaste {pct}% del techo de gasto de la sesión ({spent} / {budget} {currency}).",
+    "notice.budget.blocked": "FinOps: techo de gasto de la sesión alcanzado ({spent} / {budget} {currency}). Ajusta `forge.observability.budget` o usa /limpiar para una nueva sesión.",
     "notice.provider.beforeMaxOutput": "Configura un proveedor antes de definir el máximo de tokens de salida.",
     "notice.context.cleared": "Contexto limpio: historial y adjuntos reiniciados.",
     "notice.context.provider": "Configura un proveedor para ver el presupuesto de contexto.",

@@ -91,6 +91,10 @@ export interface ObsConfig {
   // FinOps: tabela de preços por modelo (configurável; vazia = sem custo emitido) + rótulo da moeda.
   pricing: PricingTable;
   currency: string;
+  // FinOps (#12): teto de gasto da SESSÃO no cliente (deterrente; na moeda de `currency`). 0 = sem teto.
+  // Só morde quando há `pricing` configurado (sem preço, o custo é 0 e o teto nunca dispara). A licença
+  // carrega o teto AUTORITATIVO (tokens/dia) enforçado no gateway; este é o aviso/bloqueio local.
+  budget: number;
 }
 
 // Destino plugável dos eventos de ingestão: LangfuseDirectSink (direto) ou GatewayRelaySink (governado),
