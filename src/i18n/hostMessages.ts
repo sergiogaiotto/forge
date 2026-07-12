@@ -72,6 +72,7 @@ export type HostMessageKey =
   | "notice.project.architecture"
   | "notice.project.dod"
   | "notice.project.security"
+  | "notice.project.a11y"
   | "notice.project.incomplete"
   | "notice.project.scaffold"
   | "notice.project.initCreated"
@@ -491,6 +492,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.project.architecture": "Arquitetura: {count} arquivo(s) violam a regra de camadas (a camada interna importa a externa) — corrija a DIREÇÃO do import (inverta a dependência / use uma port). Esses arquivos estão bloqueados no Aplicar.",
     "notice.project.dod": "Definição de pronto: o projeto está incompleto ({count} requisito(s) faltando) — Aplicar bloqueado até fechar. {errors}",
     "notice.project.security": "Segurança: {count} arquivo(s) com achado de ALTO risco do bandit (severidade+confiança altas) — Aplicar bloqueado. Corrija a vulnerabilidade apontada no cartão.",
+    "notice.project.a11y": "Acessibilidade: {count} aviso(s) de a11y no frontend gerado (advisory — NÃO bloqueia) — {issues}",
     "notice.project.incomplete": "Projeto: {done}/{total} arquivos gerados. Os que faltaram estão em vermelho — clique em \"Aprovar e gerar\" de novo para completar.",
     "notice.project.scaffold": "Scaffold determinístico: {count} arquivo(s) NOVOS materializados de skills ativadas — {files}. Herdaram o gate.",
     "notice.project.initCreated": "Estrutura de pacotes: criei {count} arquivo(s) __init__.py ausente(s) para os imports do projeto resolverem.",
@@ -886,6 +888,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.project.architecture": "Architecture: {count} file(s) violate the layer rule (an inner layer imports an outer one) — fix the DIRECTION of the import (invert the dependency / use a port). Those files are blocked in Apply.",
     "notice.project.dod": "Definition of done: the project is incomplete ({count} requirement(s) missing) — Apply blocked until resolved. {errors}",
     "notice.project.security": "Security: {count} file(s) with a HIGH-risk bandit finding (high severity+confidence) — Apply blocked. Fix the vulnerability shown on the card.",
+    "notice.project.a11y": "Accessibility: {count} a11y warning(s) in the generated frontend (advisory — does NOT block) — {issues}",
     "notice.project.incomplete": "Project: {done}/{total} files generated. The missing ones are in red — click \"Approve and generate\" again to complete.",
     "notice.project.scaffold": "Deterministic scaffold: {count} NEW file(s) materialized from enabled skills — {files}. They inherit the gate.",
     "notice.project.initCreated": "Package structure: created {count} missing __init__.py file(s) so the project imports resolve.",
@@ -1281,6 +1284,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.project.architecture": "Arquitectura: {count} archivo(s) violan la regla de capas (la capa interna importa la externa) — corrige la DIRECCIÓN del import (invierte la dependencia / usa un port). Esos archivos están bloqueados en Aplicar.",
     "notice.project.dod": "Definición de listo: el proyecto está incompleto ({count} requisito(s) faltantes) — Aplicar bloqueado hasta resolver. {errors}",
     "notice.project.security": "Seguridad: {count} archivo(s) con hallazgo de ALTO riesgo de bandit (severidad+confianza altas) — Aplicar bloqueado. Corrige la vulnerabilidad señalada en la tarjeta.",
+    "notice.project.a11y": "Accesibilidad: {count} aviso(s) de a11y en el frontend generado (advisory — NO bloquea) — {issues}",
     "notice.project.incomplete": "Proyecto: {done}/{total} archivos generados. Los que faltaron están en rojo — haz clic en \"Aprobar y generar\" de nuevo para completar.",
     "notice.project.scaffold": "Scaffold determinístico: {count} archivo(s) NUEVOS materializados de skills activadas — {files}. Heredaron el gate.",
     "notice.project.initCreated": "Estructura de paquetes: creé {count} archivo(s) __init__.py ausentes para que los imports del proyecto resuelvan.",

@@ -331,6 +331,9 @@ export interface ProjectGateSummary {
   // Achados de IMPORTS MORTOS (ruff F401), project-level, SEMPRE advisory (nunca bloqueia — não há modo
   // conservador). FORA do summarizeGate/auto-reparo. Preenchido pelo Controller. Ver util/ruffParse.ts. (F-18)
   deadImportAdvisories?: string[];
+  // Achados de ACESSIBILIDADE (a11y) sobre a saída de FRONTEND (html/jsx/tsx/vue/svelte), qualquer que seja
+  // a linguagem do projeto. SEMPRE advisory (nunca bloqueia). Preenchido pelo runner. Ver util/a11yLint.ts. (#06)
+  a11yAdvisories?: string[];
   projectErrors: string[]; // reprovou SEM atribuir a arquivo → bloqueia todos os .py (fallback)
   partial: boolean; // compilou (sintaxe ok) mas o mypy NÃO rodou → coerência cross-file NÃO verificada (NÃO é verde)
   summary: string;
