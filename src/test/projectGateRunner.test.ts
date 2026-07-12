@@ -138,3 +138,29 @@ test("reconcile: desligado (reconcileDependencies=false) é no-op", async () => 
   new ProjectGateRunner(deps).reconcile();
   assert.equal(posts.length, 0);
 });
+
+// --- #05: gate TS bloqueante — PROVA AO VIVO (a armadilha) --------------------------------------------
+// Roda o tsc REAL do workspace (node_modules/typescript do próprio repo) contra uma árvore materializada.
+// (1) um import RELATIVO fantasma BLOQUEIA (drift interno real, análogo do import-fantasma do mypy); (2) um
+// import BARE de terceiros (sem node_modules na árvore temp) NÃO falso-bloqueia. Sem esta prova, promover o
+// TS a bloqueante repetiria o falso-bloqueio do Go. tsc é determinístico; o código TS2307 é estável entre versões.
+
+test("run TS (ao vivo): import relativo fantasma (TS2307) BLOQUEIA o arquivo", async () => {
+  const { task, entries } = makeTask([{ path: "src/app.ts", content: "import { thing } from './missing';\nconsole.log(thing);\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd(); // o repo do forge tem typescript em node_modules → resolveGateTsc acha
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary, "TS devolve summary");
+  assert.ok(res.summary!.fileErrors.some((f) => /app\.ts$/.test(f.path)), "import relativo fantasma → TS2307 → BLOQUEIA");
+  assert.equal(entries.get("src/app.ts")!.gateOk, false, "o arquivo com módulo-fantasma não pode aplicar");
+});
+
+test("run TS (ao vivo): import BARE de terceiros NÃO falso-bloqueia (ruído filtrado)", async () => {
+  const { task, entries } = makeTask([{ path: "src/app.ts", content: "import 'express';\nexport const x: number = 1;\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal(res.summary!.fileErrors.some((f) => /app\.ts$/.test(f.path)), false, "TS2307 de import bare (terceiros) é filtrado → NÃO bloqueia");
+  assert.equal(entries.get("src/app.ts")!.gateOk, true);
+});

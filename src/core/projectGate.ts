@@ -160,6 +160,18 @@ export function isTscSyntaxError(code: string): boolean {
   return /^TS1\d{3}$/.test(code);
 }
 
+// #05: erros de CONTRATO cross-file promovidos a BLOQUEANTES no gate TS — o análogo do import-fantasma que
+// o mypy bloqueia no Python (o "OrderStatus fantasma que derruba o uvicorn", agora no frontend). SÓ TS2307
+// (Cannot find module) de import RELATIVO: parseTscErrors JÁ descartou o TS2307 de import BARE (dep de
+// terceiros ausente sem node_modules na árvore temp), então todo TS2307 que SOBREVIVE aqui é drift interno
+// REAL — um arquivo do projeto que não existe/foi renomeado. Os demais TS2xxx+ (TS2339 property-does-not-exist
+// etc.) seguem ADVISORY: sem node_modules há cascata de tipo de terceiros que falso-bloquearia (a lição do
+// falso-bloqueio do Go — só se promove a bloqueante o que é PROVADAMENTE local).
+const TS_CONTRACT_CODES = new Set(["TS2307"]);
+export function isTscContractError(code: string): boolean {
+  return TS_CONTRACT_CODES.has(code);
+}
+
 // Agrupa erros do tsc por arquivo no formato do gate (Map<path, string[]>).
 export function tscErrorsToMap(errors: TscError[]): Map<string, string[]> {
   const map = new Map<string, string[]>();

@@ -21,6 +21,7 @@ import type { Task } from "./Task";
 import {
   contractUnverified,
   GateCheckResult,
+  isTscContractError,
   isTscSyntaxError,
   mypyUnavailable,
   normGatePath,
@@ -478,11 +479,16 @@ export class ProjectGateRunner {
     }
     const errors = parseTscErrors(raw.output, root);
     const syntax = errors.filter((e) => isTscSyntaxError(e.code));
-    const types = errors.filter((e) => !isTscSyntaxError(e.code));
-    // Bloqueia SÓ em SINTAXE: sobrescreve o status para "ok" quando só há erro de tipo (advisory).
+    // #05: SINTAXE (TS1xxx) + CONTRATO (TS2307 de import relativo — módulo-fantasma) BLOQUEIAM; o resto dos
+    // erros de tipo segue ADVISORY (cascata de tipo sem node_modules). parseTscErrors já garante que o TS2307
+    // que chega aqui é de import RELATIVO (o BARE de terceiros foi filtrado) → drift interno real, seguro de
+    // bloquear (o análogo TS do import-fantasma que o mypy bloqueia no Python).
+    const contract = errors.filter((e) => isTscContractError(e.code));
+    const advisory = errors.filter((e) => !isTscSyntaxError(e.code) && !isTscContractError(e.code));
+    const blocking = [...syntax, ...contract];
     return {
-      checks: [{ result: { ...raw, label: "tsc (sintaxe)", status: syntax.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(syntax) }],
-      advisories: types.map((e) => `${e.path}:${e.line} — [${e.code}] ${e.message}`),
+      checks: [{ result: { ...raw, label: "tsc (sintaxe/contrato)", status: blocking.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(blocking) }],
+      advisories: advisory.map((e) => `${e.path}:${e.line} — [${e.code}] ${e.message}`),
     };
   }
 
