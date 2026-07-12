@@ -21,6 +21,7 @@ import type { Task } from "./Task";
 import {
   contractUnverified,
   GateCheckResult,
+  isBlockingTscContract,
   isTscSyntaxError,
   mypyUnavailable,
   normGatePath,
@@ -132,6 +133,15 @@ export class ProjectGateRunner {
       let pySyntaxError = false;
       let py: string | undefined; // interpretador do gate Python (só no ramo Python; usado no security scan)
 
+      // Universo conhecido do projeto (só usado pelo gate TS): propostas NÃO-célula (INCLUSIVE parciais, que
+      // NÃO são materializadas na árvore temp) + arquivos já APLICADOS em rodadas anteriores. Um import
+      // relativo a um desses vira TS2307 (o arquivo não está na árvore desta rodada) mas NÃO é drift — o
+      // isBlockingTscContract o rebaixa a advisory. Sem isto, o gate TS falso-bloquearia geração incremental.
+      const knownFiles = new Set<string>([
+        ...[...task.proposals.values()].filter((e) => !e.proposal.cell).map((e) => normGatePath(e.proposal.filePath)),
+        ...(this.deps.projectSession()?.files ?? []).filter((f) => f.status === "applied").map((f) => normGatePath(f.path)),
+      ]);
+
       if (language === "python") {
         py = await this.resolveGatePython();
         // Onda 1.5: garante o mypy no venv ANTES de checar — sem ele o gate só teria compileall (sintaxe) e
@@ -168,7 +178,7 @@ export class ProjectGateRunner {
         // TypeScript (P4): tsc --noEmit sobre a árvore. Decisão (A): SINTAXE (TS1xxx) bloqueia; TIPO (TS2xxx+)
         // é advisory — sem node_modules no temp o tsc é ruidoso (deps/tipos ausentes → cascata). tsc ausente
         // → consultivo. A ARQUITETURA (abaixo) roda igual, agora sobre imports TS.
-        const ts = await this.runTsChecks(root, timeoutMs, outputCap);
+        const ts = await this.runTsChecks(root, timeoutMs, outputCap, knownFiles);
         checks.push(...ts.checks);
         tscTypeAdvisories = ts.advisories;
       } else if (language === "go") {
@@ -461,7 +471,7 @@ export class ProjectGateRunner {
   // no temp o tsc é ruidoso (deps/tipos ausentes → cascata), então type-drift vira aviso, não bloqueio (decisão
   // (A)). tsc ausente/inconclusivo → check "skipped" (consultivo, como o mypy). O ruído de import BARE já é
   // filtrado em parseTscErrors; o de import RELATIVO (drift interno) é mantido.
-  private async runTsChecks(root: string, timeoutMs: number, outputCap: number): Promise<{ checks: GateCheckResult[]; advisories: string[] }> {
+  private async runTsChecks(root: string, timeoutMs: number, outputCap: number, knownFiles: Set<string>): Promise<{ checks: GateCheckResult[]; advisories: string[] }> {
     const tsc = await this.resolveGateTsc();
     if (!tsc) {
       return { checks: [{ result: { id: "gate:tsc", label: "tsc", status: "skipped", gate: true, output: "", reason: "tsc não encontrado (instale typescript no workspace) — gate consultivo" }, errors: new Map() }], advisories: [] };
@@ -478,11 +488,16 @@ export class ProjectGateRunner {
     }
     const errors = parseTscErrors(raw.output, root);
     const syntax = errors.filter((e) => isTscSyntaxError(e.code));
-    const types = errors.filter((e) => !isTscSyntaxError(e.code));
-    // Bloqueia SÓ em SINTAXE: sobrescreve o status para "ok" quando só há erro de tipo (advisory).
+    // #05: SINTAXE (TS1xxx) + CONTRATO (TS2307 de import relativo — módulo-fantasma) BLOQUEIAM; o resto dos
+    // erros de tipo segue ADVISORY (cascata de tipo sem node_modules). parseTscErrors já garante que o TS2307
+    // que chega aqui é de import RELATIVO (o BARE de terceiros foi filtrado) → drift interno real, seguro de
+    // bloquear (o análogo TS do import-fantasma que o mypy bloqueia no Python).
+    const contract = errors.filter((e) => isBlockingTscContract(e, knownFiles));
+    const advisory = errors.filter((e) => !isTscSyntaxError(e.code) && !isBlockingTscContract(e, knownFiles));
+    const blocking = [...syntax, ...contract];
     return {
-      checks: [{ result: { ...raw, label: "tsc (sintaxe)", status: syntax.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(syntax) }],
-      advisories: types.map((e) => `${e.path}:${e.line} — [${e.code}] ${e.message}`),
+      checks: [{ result: { ...raw, label: "tsc (sintaxe/contrato)", status: blocking.length > 0 ? "failed" : "ok" }, errors: tscErrorsToMap(blocking) }],
+      advisories: advisory.map((e) => `${e.path}:${e.line} — [${e.code}] ${e.message}`),
     };
   }
 

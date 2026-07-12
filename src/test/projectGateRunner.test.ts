@@ -138,3 +138,58 @@ test("reconcile: desligado (reconcileDependencies=false) é no-op", async () => 
   new ProjectGateRunner(deps).reconcile();
   assert.equal(posts.length, 0);
 });
+
+// --- #05: gate TS bloqueante — PROVA AO VIVO (a armadilha) --------------------------------------------
+// Roda o tsc REAL do workspace (node_modules/typescript do próprio repo) contra uma árvore materializada.
+// (1) um import RELATIVO fantasma BLOQUEIA (drift interno real, análogo do import-fantasma do mypy); (2) um
+// import BARE de terceiros (sem node_modules na árvore temp) NÃO falso-bloqueia. Sem esta prova, promover o
+// TS a bloqueante repetiria o falso-bloqueio do Go. tsc é determinístico; o código TS2307 é estável entre versões.
+
+test("run TS (ao vivo): import relativo fantasma (TS2307) BLOQUEIA o arquivo", async () => {
+  const { task, entries } = makeTask([{ path: "src/app.ts", content: "import { thing } from './missing';\nconsole.log(thing);\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd(); // o repo do forge tem typescript em node_modules → resolveGateTsc acha
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary, "TS devolve summary");
+  assert.ok(res.summary!.fileErrors.some((f) => /app\.ts$/.test(f.path)), "import relativo fantasma → TS2307 → BLOQUEIA");
+  assert.equal(entries.get("src/app.ts")!.gateOk, false, "o arquivo com módulo-fantasma não pode aplicar");
+});
+
+test("run TS (ao vivo): import BARE de terceiros NÃO falso-bloqueia (ruído filtrado)", async () => {
+  // Import de VALOR (não side-effect) — só ele emite TS2307, então o filtro bare é DE FATO exercitado (achado da revisão).
+  const { task, entries } = makeTask([{ path: "src/app.ts", content: "import express from 'express';\nexport const x = express;\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal(res.summary!.advisory, false, "o tsc RODOU de fato (não degradou a advisory)"); // guarda anti-vácuo
+  assert.equal(res.summary!.fileErrors.some((f) => /app\.ts$/.test(f.path)), false, "TS2307 de import bare (terceiros) é filtrado → NÃO bloqueia");
+  assert.equal(entries.get("src/app.ts")!.gateOk, true);
+});
+
+test("run TS (ao vivo): import de ASSET relativo (./App.css) NÃO falso-bloqueia — React SPA legítimo", async () => {
+  // Import de VALOR de asset — emite TS2307 relativo que a exclusão de asset DEVE manter advisory (achado da revisão).
+  const { task, entries } = makeTask([{ path: "src/App.tsx", content: "import styles from './App.css';\nexport const App = () => styles;\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal(res.summary!.advisory, false, "o tsc RODOU de fato");
+  assert.equal(res.summary!.fileErrors.some((f) => /App\.tsx$/.test(f.path)), false, "import de .css é asset → advisory, não bloqueia");
+  assert.equal(entries.get("src/App.tsx")!.gateOk, true);
+});
+
+test("run TS (ao vivo): import a arquivo PARCIAL conhecido NÃO falso-bloqueia (geração incremental)", async () => {
+  // main.ts importa ./lib, mas lib.ts é PARCIAL → não é materializado na árvore temp → tsc emite TS2307. Mas
+  // lib.ts É uma proposta conhecida → não é drift → advisory (o falso-bloqueio de correção que a revisão pegou).
+  const { task, entries } = makeTask([
+    { path: "src/main.ts", content: "import { helper } from './lib';\nexport const r = helper();\n" },
+    { path: "src/lib.ts", content: "export const helper = () => 1;\n", partial: true },
+  ]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal(res.summary!.fileErrors.some((f) => /main\.ts$/.test(f.path)), false, "import a arquivo parcial/aplicado conhecido não é drift → não bloqueia");
+  assert.equal(entries.get("src/main.ts")!.gateOk, true);
+});
