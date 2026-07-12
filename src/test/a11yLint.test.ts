@@ -11,6 +11,9 @@ test("a11y img-alt: <img> sem alt acusa; com alt (inclusive alt='') não", () =>
   assert.deepEqual(rules([{ path: "a.tsx", content: '<img src="x.png" alt="Logo" />' }]), []);
   assert.deepEqual(rules([{ path: "a.tsx", content: '<img src="x.png" alt="" />' }]), [], "alt vazio = decorativa, VÁLIDO");
   assert.deepEqual(rules([{ path: "a.tsx", content: "<img src={x} {...rest} />" }]), [], "spread → pode ter alt → não acusa");
+  assert.deepEqual(rules([{ path: "a.tsx", content: '<img title="the alt text" src="x">' }]), ["img-alt"], "a palavra 'alt' num VALOR não conta como atributo alt (achado da revisão)");
+  assert.deepEqual(rules([{ path: "a.tsx", content: '<img src="x" data-alt="y">' }]), ["img-alt"], "data-alt não é alt");
+  assert.deepEqual(rules([{ path: "a.tsx", content: '<img\n  src="x"\n  alt="ok"\n/>' }]), [], "tag multilinha com alt");
 });
 
 // --- html sem lang ---
@@ -47,6 +50,30 @@ test("a11y: só varre html/jsx/tsx/vue/svelte — .py/.ts/.md são ignorados", (
   assert.deepEqual(rules([{ path: "util.ts", content: "<button><svg/></button>" }]), [], ".ts não é frontend (lógica, não markup)");
   assert.deepEqual(rules([{ path: "README.md", content: "<img src='x'>" }]), []);
   assert.equal(one("Page.vue", '<template><img src="x" /></template>').length, 1, ".vue é frontend");
+});
+
+// --- robustez JSX + subtree name + label ancestral (8 achados da revisão adversarial) ---
+test("a11y img-alt: '>' de arrow/comparação nos atributos ANTES do alt não gera falso-positivo", () => {
+  assert.deepEqual(rules([{ path: "A.tsx", content: "<img src={a} onError={(e) => (e.currentTarget.src = fb)} alt={user.name} />" }]), [], "arrow => antes do alt");
+  assert.deepEqual(rules([{ path: "A.tsx", content: '<img src={count > 0 ? a : b} alt="Badge" />' }]), [], "comparação > antes do alt");
+  assert.deepEqual(rules([{ path: "A.tsx", content: '<img src="a>b" alt="ok" />' }]), [], "> dentro de valor entre aspas");
+  assert.deepEqual(rules([{ path: "A.tsx", content: "<img src={x} onError={(e) => f(e)} />" }]), ["img-alt"], "ainda acusa quando REALMENTE falta alt");
+});
+
+test("a11y input-label: arrow onChange antes do aria-label não gera falso-positivo", () => {
+  assert.deepEqual(rules([{ path: "F.tsx", content: '<input placeholder="Email" onChange={(e) => set(e.target.value)} aria-label="Email" />' }]), [], "arrow antes do aria-label");
+});
+
+test("a11y button-name: nome vindo do SUBTREE (img alt / aria-label filho) não é falso-positivo", () => {
+  assert.deepEqual(rules([{ path: "B.tsx", content: '<button><img src="close.svg" alt="Fechar" /></button>' }]), [], "nome vem do alt do <img> filho (W3C name computation)");
+  assert.deepEqual(rules([{ path: "B.tsx", content: '<button><svg aria-label="Fechar"></svg></button>' }]), [], "aria-label num filho");
+  assert.deepEqual(rules([{ path: "B.tsx", content: '<button><img src="x" alt="" /></button>' }]), ["button-name"], "alt VAZIO (decorativo) não dá nome → ainda acusa");
+  assert.deepEqual(rules([{ path: "B.tsx", content: "<button onClick={() => go()}><svg/></button>" }]), ["button-name"], "arrow nos attrs não desliga a detecção de só-ícone (FN)");
+});
+
+test("a11y input-label: <label> ENVOLVENTE com markup intermediário (>80 chars) não é falso-positivo", () => {
+  const wrapped = '<label>\n  Email address\n  <span class="required" title="This field is required">*</span>\n  <input type="email" placeholder="you@example.com" />\n</label>';
+  assert.deepEqual(rules([{ path: "F.tsx", content: wrapped }]), [], "label ancestral não-fechado, independe da distância");
 });
 
 // --- linha e cap ---

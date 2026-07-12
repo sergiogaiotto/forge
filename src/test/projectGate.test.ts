@@ -7,6 +7,7 @@ import {
   GateCheckResult,
   isBlockingTscContract,
   isTscSyntaxError,
+  relToRoot,
   mypyUnavailable,
   normGatePath,
   parseCompileallErrors,
@@ -331,6 +332,21 @@ test("parseGoBuildErrors: FILTRA o ruído de deps de terceiros ausentes (offline
   const e = parseGoBuildErrors(out);
   assert.equal(e.length, 1);
   assert.deepEqual(e[0], { path: "domain/order.go", line: 9, message: "undefined: RealDrift" });
+});
+
+// #10: relToRoot — normalizador único (era 3 cópias char-a-char: parse*Errors + runSecurityScan + runDeadImportScan).
+test("relToRoot: absoluto vira relativo à raiz; relativo é só normalizado; vazio → vazio", () => {
+  const root = "/tmp/forge-gate-x";
+  assert.equal(relToRoot(root, "/tmp/forge-gate-x/src/app.py"), "src/app.py", "absoluto POSIX → relativo");
+  assert.equal(relToRoot(root, "src/app.py"), "src/app.py", "já relativo → normaliza (sem re-basear)");
+  assert.equal(relToRoot(root, "./src\\app.py"), "src/app.py", "barras invertidas → normalizadas p/ frente");
+  assert.equal(relToRoot(root, ""), "", "vazio → vazio");
+});
+
+// path.relative de um caminho com drive `C:\` só é POSIX-correto no Windows (no Linux, `\` não é separador e
+// `C:\…` vira um nome relativo → `../C:/…`). win32-gated, como execSpawn.test.ts — o CI ubuntu pegou isto.
+test("relToRoot: drive Windows absoluto → relativo (win32)", { skip: process.platform !== "win32" }, () => {
+  assert.equal(relToRoot("C:\\ws\\gate", "C:\\ws\\gate\\src\\m.py"), "src/m.py");
 });
 
 // #05: isBlockingTscContract — só TS2307 de import RELATIVO a CÓDIGO bloqueia; asset relativo (css/svg/
