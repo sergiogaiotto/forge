@@ -2529,8 +2529,9 @@ export class Controller {
     }
   }
 
-  // Headers x-forge-* propagados ao gateway (RF-063/064). Apenas metadados — o
-  // gateway transforma em atributos do trace no Langfuse (userId = login).
+  // Headers x-forge-* propagados ao gateway (RF-063/064). Apenas metadados. A IDENTIDADE do trace (userId
+  // no Langfuse) é ATESTADA server-side a partir do subject da sessão (não destes headers, que o cliente
+  // controla e poderia forjar) — x-forge-email/x-forge-login viajam como dica, mas o gateway os ignora.
   private buildTraceHeaders(
     activatedSkills: string[],
     modelId: string,
@@ -2541,8 +2542,8 @@ export class Controller {
     const meta = this.context.globalState.get<{ org: string; subject: string }>(GS_LICENSE_META);
     const identity = this.resolveIdentity();
     return {
-      "x-forge-email": identity.email ?? "", // identidade principal (userId no Langfuse)
-      "x-forge-login": osLogin(), // metadado secundário
+      "x-forge-email": identity.email ?? "", // dica; o gateway atesta a identidade pela sessão (não confia nisto)
+      "x-forge-login": osLogin(), // metadado secundário (login do SO); não é usado como identidade
       "x-forge-session": this.sessionId,
       "x-forge-org": meta?.org ?? "",
       "x-forge-subject": meta?.subject ?? "",

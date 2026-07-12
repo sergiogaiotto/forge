@@ -9,7 +9,7 @@ import { cosine } from "../util/vector";
 import { Bm25Index } from "./Bm25Index";
 import { chunkFile } from "./chunker";
 import { EmbeddingClient } from "./EmbeddingClient";
-import { canReuse, FileMeta, parseSnapshot, serializeSnapshot, snapshotFileName, vectorsCompatible } from "./indexPersistence";
+import { canReuse, FileMeta, parseSnapshot, redactChunks, serializeSnapshot, snapshotFileName, vectorsCompatible } from "./indexPersistence";
 import { IndexedChunk, RagMode, RetrievalHit } from "./types";
 
 const MAX_CHUNKS = 4000; // teto de segurança de memória/custo de embeddings
@@ -252,8 +252,14 @@ export class CodebaseIndex {
       if (stat.size > cfg.maxFileSizeKb * 1024) return;
       const content = await fs.readFile(abs, "utf8");
       const chunks = chunkFile(rel, content) as IndexedChunk[]; // chunks NOVOS não têm vetor ainda
-      if (chunks.length) {
-        this.byFile.set(rel, chunks);
+      // SEGURANÇA (exfil RAG): redige segredos (texto E símbolo) NA ORIGEM. Todo consumidor lê de byFile
+      // — o embed (endpoint EXTERNO de embeddings, fora do gateway que redige) e o snapshot em disco
+      // (globalStorage, texto plano) contornavam a redação do prompt. Este único ponto fecha as DUAS vias.
+      // redact() é puro/determinístico e preserva símbolos/identificadores/hosts, então a qualidade de
+      // recuperação (cosseno/BM25) fica intacta — segredos são tokens opacos sem valor semântico p/ busca.
+      const redacted = redactChunks(chunks);
+      if (redacted.length) {
+        this.byFile.set(rel, redacted);
         this.fileMeta.set(rel, { mtimeMs: stat.mtimeMs, size: stat.size });
       }
     } catch {
