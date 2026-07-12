@@ -3907,6 +3907,13 @@ export class Controller {
     this.post({ type: "proposal/applied", proposalId });
     this.obs.record({ type: "proposal.applied", filePath: entry.proposal.filePath, forced: forcedOverride });
     if (forcedOverride) this.post({ type: "notice", level: "warn", message: hostT("notice.apply.forced", { path: entry.proposal.filePath }) });
+    // F-13: no apply POR-ARQUIVO de um projeto Python, semeia os __init__.py dos pacotes ANCESTRAIS deste
+    // arquivo — o "Aplicar tudo" já faz isso em lote (ensurePythonPackageInits), mas o apply incremental
+    // (clicar cartão a cartão) pulava. Silencioso, idempotente (existsSync) e gap-fill (nunca sobrescreve);
+    // syntheticInitDirs auto-filtra não-.py e dirs não-pacote, então é no-op fora do layout de pacotes. (CR-7/F-13)
+    if (this.projectSession?.language === "python") {
+      await this.ensurePythonPackageInits([entry.proposal.filePath]);
+    }
     const docUri = vscode.Uri.file(abs);
     await vscode.window.showTextDocument(docUri, { preview: false });
     return true;
