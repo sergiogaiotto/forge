@@ -6,6 +6,7 @@ export interface LicensePayload {
   issued_at: number; // segundos unix
   expiry: number; // segundos unix
   key_id: string; // ex.: "ed25519-2026-01"
+  budget?: number; // FinOps (#12): teto AUTORITATIVO de tokens/dia por subject. Ausente/0 = ilimitado.
 }
 
 export interface VerifyOk {

@@ -21,6 +21,7 @@ import { redact } from "./redaction.cjs";
 import { extractUsage } from "./usage.mjs";
 import { pruneExpired, admitSession, authorizeScope, renewedExpiry } from "./sessions.mjs";
 import { buildProxyTraceEvents } from "./proxyTrace.mjs";
+import { utcDay, overBudget, charge, settle, estimateRequestTokens, pruneOldDays, serializeLedger, parseLedger } from "./spend.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, ".env"));
@@ -35,6 +36,9 @@ const CFG = {
   upstreamTimeoutMs: parseInt(process.env.UPSTREAM_TIMEOUT_MS || "300000", 10),
   keyinfoPath: process.env.KEYINFO || path.join(__dirname, "..", "admin-cli", "keys", "keyinfo.json"),
   revocationsPath: process.env.REVOCATIONS || path.join(__dirname, "..", "admin-cli", "keys", "revocations.json"),
+  spendLedgerPath: process.env.SPEND_LEDGER || path.join(__dirname, "spend-ledger.json"),
+  spendFlushMs: parseInt(process.env.SPEND_FLUSH_MS || "30000", 10),
+  reserveMaxOutput: parseInt(process.env.RESERVE_MAX_OUTPUT || "4096", 10), // saída estimada p/ a reserva anti-corrida
   sessionTtlSec: parseInt(process.env.SESSION_TTL_SEC || "3600", 10),
   maxSessions: parseInt(process.env.MAX_SESSIONS || "10000", 10),
   rateLimitPerMin: parseInt(process.env.RATE_LIMIT_PER_MIN || "120", 10),
@@ -67,6 +71,16 @@ revocation = createRevocationChecker(CFG.revocationsPath, {
       : logLine("error", "revocations.json ILEGÍVEL no cold-start — revogação NÃO garantida até corrigir o arquivo", { error: e.message }),
 });
 const rateBuckets = new Map(); // key -> { tokens, updatedAt }
+// Ledger de gasto (tokens/dia por subject) — teto AUTORITATIVO do FinOps (#12). DURÁVEL: carregado no boot
+// e escrito periodicamente (o 1º write-path do gateway) para que o teto do dia sobreviva a restart — senão
+// reiniciar zeraria o gasto e o teto seria burlável.
+let spendLedger = new Map();
+let spendPersistOk = true; // última persistência do ledger deu certo? Exposto no /health p/ alarmar durabilidade off.
+try {
+  if (fs.existsSync(CFG.spendLedgerPath)) spendLedger = parseLedger(fs.readFileSync(CFG.spendLedgerPath, "utf8"));
+} catch (e) {
+  logLine("warn", "spend-ledger ilegível no boot — começando vazio (o teto do dia pode subestimar)", { error: e.message });
+}
 const traceQueue = [];
 let droppedTraces = 0;
 let shuttingDown = false;
@@ -230,7 +244,8 @@ async function handleActivate(req, res, reqId) {
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAt = Math.min(v.payload.expiry, Math.floor(Date.now() / 1000) + CFG.sessionTtlSec);
   // licenseExpiry fica na sessão para o /renew NÃO estender a sessão além da expiração assinada da licença.
-  sessions.set(token, { subject: v.payload.subject, org: v.payload.org, scope, licenseExpiry: v.payload.expiry, expiresAt });
+  // budget (tokens/dia) é o teto autoritativo do FinOps — carimbado da licença ASSINADA (não spoofável).
+  sessions.set(token, { subject: v.payload.subject, org: v.payload.org, scope, licenseExpiry: v.payload.expiry, budget: v.payload.budget || 0, expiresAt });
   logLine("info", "licença ativada", { reqId, subject: v.payload.subject, org: v.payload.org });
   send(res, 200, { token, expiresAt, subject: v.payload.subject, org: v.payload.org });
 }
@@ -325,6 +340,19 @@ async function handleProxy(req, res, reqId) {
     logLine("info", "proxy recusado — escopo insuficiente", { reqId, missing: scopeChk.missing });
     return send(res, 403, { error: "scope", missing: scopeChk.missing });
   }
+  // Teto AUTORITATIVO de tokens/dia (FinOps #12): se o subject JÁ estourou o orçamento ASSINADO na licença,
+  // barra ANTES de chamar o upstream (402). budget 0/ausente = ilimitado (grandfather).
+  const day = utcDay(Date.now());
+  if (overBudget(spendLedger, session.subject, day, session.budget)) {
+    logLine("info", "proxy recusado — orçamento de tokens/dia excedido", { reqId, subject: session.subject, budget: session.budget });
+    return send(res, 402, { error: "budget exceeded", scope: "daily-tokens", budget: session.budget });
+  }
+  // RESERVA SÍNCRONA (mesmo tick do overBudget, SEM await entre eles) — fecha a corrida check-then-charge:
+  // requisições CONCORRENTES do mesmo subject veem a reserva e são barradas, limitando o estouro a ~uma
+  // requisição em voo em vez do burst inteiro. Reconciliada ao custo REAL no finally.
+  const reserve = session.budget > 0 ? estimateRequestTokens(bodyText, CFG.reserveMaxOutput) : 0;
+  if (reserve > 0) charge(spendLedger, session.subject, day, reserve);
+
   const ctx = {
     // IDENTIDADE ATESTADA pela sessão (não o header x-forge-email, do cliente e spoofável): o userId do
     // trace deriva de session.subject via attestedUserId (hash em masked; e-mail cru só em 'full'). RF-063
@@ -340,38 +368,65 @@ async function handleProxy(req, res, reqId) {
   const startTime = Date.now();
   let completionStartTime = 0;
   let output = "";
-  let upstream;
   try {
-    upstream = await fetch(`${CFG.upstreamBaseUrl.replace(/\/+$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(CFG.upstreamAuthHeader ? parseHeader(CFG.upstreamAuthHeader) : {}) },
-      body: bodyText,
-      signal: AbortSignal.timeout(CFG.upstreamTimeoutMs),
-    });
-  } catch (err) {
-    logLine("error", "upstream inacessível", { reqId, error: err.message });
-    return send(res, 502, { error: "upstream unavailable", detail: err.message });
-  }
-  res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") || "text/event-stream" });
-  const reader = upstream.body?.getReader();
-  const decoder = new TextDecoder();
-  if (reader) {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!completionStartTime) completionStartTime = Date.now();
-      output += decoder.decode(value, { stream: true });
-      res.write(value);
+    let upstream;
+    try {
+      upstream = await fetch(`${CFG.upstreamBaseUrl.replace(/\/+$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(CFG.upstreamAuthHeader ? parseHeader(CFG.upstreamAuthHeader) : {}) },
+        body: bodyText,
+        signal: AbortSignal.timeout(CFG.upstreamTimeoutMs),
+      });
+    } catch (err) {
+      logLine("error", "upstream inacessível", { reqId, error: err.message });
+      return send(res, 502, { error: "upstream unavailable", detail: err.message }); // o finally reconcilia a reserva
+    }
+    res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") || "text/event-stream" });
+    const reader = upstream.body?.getReader();
+    const decoder = new TextDecoder();
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!completionStartTime) completionStartTime = Date.now();
+        output += decoder.decode(value, { stream: true });
+        res.write(value);
+      }
+    }
+    res.end();
+    enqueueTrace(ctx, { input: bodyText, output, usage: extractUsage(output), startTime, completionStartTime, endTime: Date.now() });
+    logLine("info", "geração proxiada", { reqId, org: ctx.org, model: ctx.model, ms: Date.now() - startTime });
+  } finally {
+    // Reconcilia a reserva ao gasto REAL — SEMPRE roda (sucesso, 502 ou erro de stream), garantindo que a
+    // reserva nunca fique presa inflando o teto. O extractUsage foi corrigido (não inverte input↔output).
+    if (session.budget > 0) {
+      const u = extractUsage(output);
+      settle(spendLedger, session.subject, day, reserve, (u.inputTokens || 0) + (u.outputTokens || 0));
     }
   }
-  res.end();
-  enqueueTrace(ctx, { input: bodyText, output, usage: extractUsage(output), startTime, completionStartTime, endTime: Date.now() });
-  logLine("info", "geração proxiada", { reqId, org: ctx.org, model: ctx.model, ms: Date.now() - startTime });
 }
 
 function parseHeader(h) {
   const i = h.indexOf(":");
   return i > 0 ? { [h.slice(0, i).trim()]: h.slice(i + 1).trim() } : {};
+}
+
+// Persiste o ledger de gasto em disco (durável): poda dias antigos e grava só o dia corrente. Fail-open —
+// uma falha de escrita não derruba o gateway (mas o teto do dia pode subestimar após um restart; o /health
+// expõe spendPersistOk p/ alarmar). Escrita ATÔMICA (tmp + rename): um crash no meio nunca deixa o arquivo
+// truncado — senão o parseLedger no boot cairia em vazio e ZERARIA o teto do dia (fail-open no lugar errado).
+function persistSpendLedger() {
+  try {
+    const day = utcDay(Date.now());
+    pruneOldDays(spendLedger, day);
+    const tmp = CFG.spendLedgerPath + ".tmp";
+    fs.writeFileSync(tmp, serializeLedger(spendLedger, day));
+    fs.renameSync(tmp, CFG.spendLedgerPath);
+    spendPersistOk = true;
+  } catch (err) {
+    spendPersistOk = false;
+    logLine("warn", "falha ao persistir o spend-ledger (fail-open — durabilidade OFF até corrigir)", { error: err.message });
+  }
 }
 
 // ---- servidor ---------------------------------------------------------------
@@ -382,7 +437,7 @@ async function router(req, res) {
     if (req.method === "GET" && req.url === "/health") {
       return send(res, 200, {
         ok: true, version: VERSION, uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
-        sessions: sessions.size, traceQueue: traceQueue.length, droppedTraces, langfuse: CFG.langfuse.enabled,
+        sessions: sessions.size, traceQueue: traceQueue.length, droppedTraces, langfuse: CFG.langfuse.enabled, spendSubjects: spendLedger.size, spendPersistOk,
       });
     }
     if (req.method === "POST" && req.url === "/license/activate") return handleActivate(req, res, reqId);
@@ -409,6 +464,7 @@ const server = CFG.tls.key && CFG.tls.cert
 
 const sweepTimer = setInterval(() => pruneExpired(sessions, Math.floor(Date.now() / 1000)), 60000);
 const flushTimer = setInterval(() => void flushTraces(), CFG.langfuse.flushIntervalMs);
+const spendTimer = setInterval(persistSpendLedger, CFG.spendFlushMs);
 
 // Falha ao abrir o socket (porta em uso, permissão) é reportada e encerra limpo — sem isto, um
 // EADDRINUSE vira exceção NÃO-tratada com stack trace crua (e o operador não sabe que é a porta).
@@ -433,6 +489,9 @@ async function shutdown(signal) {
   logLine("info", "encerrando", { signal });
   clearInterval(sweepTimer);
   clearInterval(flushTimer);
+  clearInterval(spendTimer);
+  persistSpendLedger(); // best-effort em saída graciosa (POSIX); a DURABILIDADE é garantida pelo timer de
+  // flush, não por este handler — no Windows um kill pode não rodá-lo (a durabilidade não depende disto).
   server.close();
   for (let i = 0; i < 5 && traceQueue.length > 0; i++) await flushTraces();
   logLine("info", "encerrado", { tracesPendentes: traceQueue.length, descartados: droppedTraces });

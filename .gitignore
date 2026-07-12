@@ -7,6 +7,7 @@ out/
 .claude/
 admin-cli/keys/
 gateway/.env
+gateway/spend-ledger.json*
 *.log
 .DS_Store
 Thumbs.db

@@ -160,6 +160,13 @@ export function issue({ args, keysDir, io }) {
   }
 
   const scope = String(args.scope || "codegen,skills").split(",").map((s) => s.trim()).filter(Boolean);
+  // FinOps (#12): teto AUTORITATIVO de tokens/dia por subject, ASSINADO na licença. 0/ausente = ilimitado.
+  const budgetRaw = String(args.budget ?? "0");
+  if (!/^\d+$/.test(budgetRaw)) {
+    io.err(`✗ --budget inválido: '${args.budget}' (use um inteiro de tokens/dia; 0 = ilimitado).`);
+    return 2;
+  }
+  const budget = parseInt(budgetRaw, 10);
   const payload = {
     subject: args.subject && args.subject !== "true" ? String(args.subject) : "dev@claro.com",
     org: args.org && args.org !== "true" ? String(args.org) : "claro",
@@ -167,6 +174,8 @@ export function issue({ args, keysDir, io }) {
     issued_at: now,
     expiry,
     key_id: args["key-id"] && args["key-id"] !== "true" ? String(args["key-id"]) : keyId,
+    // budget só entra no payload quando > 0 — mantém as licenças "ilimitadas" byte-idênticas às antigas.
+    ...(budget > 0 ? { budget } : {}),
   };
 
   const payloadB64 = b64url(JSON.stringify(payload));
@@ -188,6 +197,7 @@ export function issue({ args, keysDir, io }) {
   io.out(key);
   io.out("");
   io.out(`  subject: ${payload.subject} | org: ${payload.org} | scope: ${scope.join("+")}`);
+  io.out(`  budget:  ${budget > 0 ? `${budget} tokens/dia` : "ilimitado"}`);
   io.out(`  key_id:  ${payload.key_id}`);
   io.out(`  expira em: ${new Date(expiry * 1000).toISOString().slice(0, 10)}`);
   if (args.out && args.out !== "true") io.out(`  gravada em: ${path.resolve(String(args.out))}`);
@@ -400,6 +410,7 @@ export function helpText(bin) {
     "  --subject <email>      Titular da licença.",
     "  --org <org>            Organização (default: claro).",
     "  --scope <a,b>          Escopos separados por vírgula (default: codegen,skills).",
+    "  --budget <n>           Teto de tokens/dia por subject (FinOps, autoritativo). 0 = ilimitado (default).",
     "  --days <n>             Validade em dias (default: 365).",
     "  --expires-at <data>    Validade até YYYY-MM-DD (sobrepõe --days).",
     "  --key-id <id>          key_id no payload (default: o de keyinfo.json).",
