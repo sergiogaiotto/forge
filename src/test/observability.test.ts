@@ -43,23 +43,26 @@ test("permission.decision: aprovação de ESCRITA vira WARNING no trace (salta a
 
 test("mask: full passa cru, masked redige PII/segredos, metadata-only some", () => {
   assert.equal(mask("contato a@b.com", "full"), "contato a@b.com");
-  const m = mask("email a@b.com chave sk-abcdefghijklmnopqr", "masked")!;
-  assert.ok(!m.includes("a@b.com") && !m.includes("sk-abcdefghijklmnopqr"));
-  assert.match(m, /‹redacted›/);
+  const m = mask("email a@b.com chave sk-proj-AbCdEfGhIjKlMnOpQr", "masked")!;
+  assert.ok(!m.includes("a@b.com") && !m.includes("sk-proj-AbCdEfGhIjKlMnOpQr"));
+  assert.match(m, /«oculto»/); // placeholder da fonte unificada (#8) — antes era ‹redacted› do MASK_PATTERNS próprio
   assert.equal(mask("qualquer", "metadata-only"), undefined);
 });
 
-test("mask cobre chaves com hífen, Langfuse secret, Bearer e JWT", () => {
+test("mask cobre chaves com hífen, Langfuse secret, Bearer e JWT (fonte unificada #8)", () => {
+  // Formatos REAIS que a fonte unificada cobre. Bearer exige DÍGITO e JWT exige 3 partes (o antigo MASK_PATTERNS
+  // pegava também `Bearer md5sum`/`eyJ…` de 2 partes — mas eram FP-prone e não-formatos-de-segredo; a troca é
+  // estritamente melhor para segredos REAIS, ganhando github_pat_/Stripe/AWS-KV/PEM/connstring).
   const secrets = [
-    "sk-ant-api03-AbCdEfGhIjKlMnOpQr",
+    "sk-ant-api03-AbCdEfGhIjKlMnOpQr", // Anthropic — gap tapado na fonte unificada (hífens quebram o sk- contíguo)
     "sk-proj-AbCdEfGhIjKlMnOpQr",
     "sk-lf-1234abcd-5678efgh- effff",
-    "Authorization: Bearer abc.def-ghi_jkl",
-    "token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload",
+    "Authorization: Bearer abc123.def-ghi_jkl", // com dígito
+    "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpM", // JWT 3 partes
   ];
   for (const s of secrets) {
     const out = mask(s, "masked")!;
-    assert.match(out, /‹redacted›/, `deveria redigir: ${s}`);
+    assert.match(out, /«oculto»/, `deveria redigir: ${s}`);
   }
   // os prefixos sensíveis não permanecem crus
   assert.ok(!mask("sk-ant-api03-AbCdEfGhIjKlMnOpQr", "masked")!.includes("api03"));
@@ -139,6 +142,39 @@ test("buildIngestion: generation.end vira generation-create com usage e máscara
   assert.equal((ev.body as any).traceId, "TR");
   assert.deepEqual((ev.body as any).usage, { input: 10, output: 20, unit: "TOKENS" });
   assert.ok(!String((ev.body as any).input).includes("a@b.com"));
+});
+
+// #8 (completa a unificação da obs): o caminho REMOTO (buildIngestion generation.end, 'masked'=default) tinha um
+// MASK_PATTERNS PRÓPRIO que só pegava sk-/pk-/Bearer/JWT/email/dígitos — github_pat_/Stripe/AWS-KV/connection-string
+// VAZAVAM crus no trace. Não havia teste sobre a redação do input/output do buildIngestion (por isso o leak passou).
+// Fixture montada por PARTES (S) para não tripar o secret-scanning do commit deste teste.
+test("buildIngestion: generation.end em 'masked' redige os segredos que o MASK_PATTERNS próprio deixava vazar (#8)", () => {
+  const S = (...p: string[]): string => p.join("");
+  const opts = { traceId: "TR", id: () => "i", nowIso: NOW, capture: "masked" as const, environment: "test" };
+  const cases = [
+    { s: S("github", "_pat_11ABCDE0Y0aBcDeFgHiJkL_1a2b3c4d5e6f7g8h9i0j"), leak: S("github", "_pat_11ABCDE0Y0aBcDeFgHiJkL") },
+    { s: S("sk", "_live_", "51H8zXyAbCdEfGhIjKlMnOpQr"), leak: S("51H8zXyAbCdEfGhIjKlMnOpQr") }, // Stripe
+    { s: "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIexampleKEY0abc123", leak: "wJalrXUtnFEMIexampleKEY0abc123" },
+    { s: "DATABASE_URL=postgresql://admin:s3cr3tP4ss@db:5432/prod", leak: "s3cr3tP4ss" }, // connection string
+  ];
+  for (const { s, leak } of cases) {
+    const [ev] = buildIngestion(
+      { type: "generation.end", taskId: "t1", durationMs: 1, model: "m", input: `use ${s} no cliente`, output: `e de novo ${s}`, proposals: 0 },
+      opts
+    );
+    const b = ev.body as any;
+    assert.ok(!String(b.input).includes(leak), `input deveria redigir ${leak.slice(0, 12)}…`);
+    assert.ok(!String(b.output).includes(leak), `output deveria redigir ${leak.slice(0, 12)}…`);
+  }
+});
+
+test("buildIngestion: generation.end em 'full' (opt-in do admin) leva input/output crus ao remoto", () => {
+  const [ev] = buildIngestion(
+    { type: "generation.end", taskId: "t1", durationMs: 1, model: "m", input: "conteúdo cru p/ debug sk-proj-x", output: "saída crua", proposals: 0 },
+    { traceId: "TR", id: () => "i", nowIso: NOW, capture: "full", environment: "test" }
+  );
+  assert.match(String((ev.body as any).input), /conteúdo cru p\/ debug sk-proj-x/);
+  assert.equal((ev.body as any).output, "saída crua");
 });
 
 test("buildIngestion: eventos de workflow viram event-create no mesmo trace", () => {

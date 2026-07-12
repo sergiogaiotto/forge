@@ -1,27 +1,20 @@
 import { createHash } from "node:crypto";
 import { estimateCost, PricingTable } from "../api/pricing";
+import { redactSecrets } from "../util/redact";
 import { CaptureMode, IngestionEvent, ObsEvent } from "./types";
 
-// Mascaramento defensivo: redige segredos/PII no payload capturado. As classes incluem hífen para
-// pegar chaves modernas (sk-ant-, sk-proj-, sk-lf-) e há padrões para Bearer/JWT — segredos colados
-// pelo dev (ex.: .env) não devem vazar no input/output.
-const MASK_PATTERNS = [
-  /sk-[A-Za-z0-9-]{16,}/g, // secret OpenAI/Anthropic/Langfuse (com hífen)
-  /pk-lf-[A-Za-z0-9-]{8,}/g, // public Langfuse (redação defensiva)
-  /\bBearer\s+[A-Za-z0-9._-]+/gi, // Authorization: Bearer ...
-  /\beyJ[A-Za-z0-9._-]{20,}/g, // JWT
-  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, // e-mail
-  /\b\d{11,16}\b/g, // cartão/documento
-];
-
+// Mascaramento defensivo do conteúdo capturado (input/output/systemPrompt) antes de ir ao sink do Langfuse.
+// A redação usa a FONTE ÚNICA compartilhada com o gateway e o cliente (gateway/redaction.cjs via redactSecrets):
+// antes esta camada tinha um MASK_PATTERNS PRÓPRIO que só pegava sk-/pk-/Bearer/JWT/email/dígitos — divergia da
+// unificada do #8, então github_pat_/sk_live_(Stripe)/AKIA/AWS_SECRET_ACCESS_KEY=/connection-string/PEM
+// VAZAVAM no trace remoto (masked) e no bundle de diagnóstico. Agora obs↔gateway↔cliente redigem idêntico. (#8)
 export function mask(value: unknown, capture: CaptureMode): string | undefined {
   if (capture === "metadata-only") return undefined;
   if (value === undefined || value === null) return undefined; // campo ausente (ex.: systemPrompt opcional)
-  let s = typeof value === "string" ? value : JSON.stringify(value);
+  const s = typeof value === "string" ? value : JSON.stringify(value);
   if (typeof s !== "string") return undefined; // JSON.stringify pode devolver undefined (função/símbolo)
-  if (capture === "full") return cap(s);
-  for (const re of MASK_PATTERNS) s = s.replace(re, "‹redacted›");
-  return cap(s);
+  if (capture === "full") return cap(s); // 'full' = opt-in explícito do admin: conteúdo cru (redação é só do remoto masked; o log LOCAL força redactSecrets à parte)
+  return cap(redactSecrets(s));
 }
 
 // Identidade (userId) honra a captura: cru só em 'full'; fora disso vira um hash estável (preserva
@@ -72,12 +65,12 @@ export function buildIngestion(e: ObsEvent, o: BuildOpts): IngestionEvent[] {
               skills: e.skills,
               sessionId: e.sessionId,
               org: e.org,
-              // P3 + PRIVACIDADE: o systemPrompt agrega perfil/RAG/anexos — onde vivem segredos (.env, chaves
-              // de nuvem, connection strings) que o mask() por-padrão NÃO cobre bem. Para o sink REMOTO
-              // (governado/compartilhado) o prompt só vai em capture 'full' (opt-in explícito do admin, cru);
-              // em 'masked'/'metadata-only' é OMITIDO. O prompt REDIGIDO para diagnóstico fica no log LOCAL
-              // (obs/diagnostics.ts, redactSecrets+mask), no disco do dev. Os tokens/params seguem (não são
-              // conteúdo sensível) e bastam para a análise de trace.
+              // P3 + PRIVACIDADE: o systemPrompt agrega perfil/RAG/anexos — superfície ALTA (mesmo redigido pode
+              // conter contexto sensível de negócio). Conservadorismo: para o sink REMOTO (governado/compartilhado)
+              // o prompt só vai em capture 'full' (opt-in explícito do admin, cru); em 'masked'/'metadata-only' é
+              // OMITIDO — não é falta de redação (mask() já redige via a fonte unificada #8), é escolha de privacidade.
+              // O prompt REDIGIDO fica só no log LOCAL (obs/diagnostics.ts), no disco do dev. Tokens/params seguem
+              // (não são conteúdo sensível) e bastam para a análise de trace.
               systemPrompt: o.capture === "full" ? mask(e.systemPrompt, o.capture) : undefined,
               systemPromptTokens: e.systemPromptTokens,
               reasoningEffort: e.reasoningEffort,

@@ -65,8 +65,8 @@ test("toDiagnosticRecord: generation.end MASCARA segredos no input/output", () =
   const r = toDiagnosticRecord(e, TS, "masked");
   assert.equal(r.durationMs, 1200);
   assert.equal(r.proposals, 2);
-  assert.doesNotMatch(String(r.input), /sk-ant-abc123def456ghi789/); // segredo redigido
-  assert.match(String(r.input), /‹redacted›/);
+  assert.doesNotMatch(String(r.input), /sk-ant-abc123def456ghi789/); // segredo redigido (Anthropic — fonte unificada #8)
+  assert.match(String(r.input), /«oculto»/); // placeholder da fonte unificada
   assert.doesNotMatch(String(r.output), /foo@bar\.com/); // PII redigida
 });
 

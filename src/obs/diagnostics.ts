@@ -13,17 +13,17 @@ export interface DiagnosticRecord {
 }
 
 // Mapeia um ObsEvent para um registro estruturado e REDIGIDO (uma linha NDJSON). Campos de conteúdo livre
-// (input/output da geração) passam por mask() — segredos/PII colados no prompt não vazam. Reusa a mesma
-// redação do sink do Langfuse (langfuseMap), então o bundle herda as garantias do RNF-001. Puro.
+// (systemPrompt/input/output) são envoltos em redactSecrets ANTES do mask() — o bundle LOCAL é SEMPRE redigido,
+// inclusive em capture 'full' (onde o mask() sozinho passaria cru; 'full' redige só no destino remoto). mask()
+// já delega à fonte unificada (#8), então o wrap externo é a garantia de que o disco do dev nunca recebe cru. Puro.
 export function toDiagnosticRecord(e: ObsEvent, nowIso: string, capture: CaptureMode): DiagnosticRecord {
   const base: DiagnosticRecord = { ts: nowIso, type: e.type };
   switch (e.type) {
     case "generation.start":
       // P3: o prompt de sistema montado + os params efetivos — a evidência direta de "que prompt/params
-      // produziram esta geração". O prompt agrega perfil/RAG/anexos, então é REDIGIDO em duas camadas antes
-      // de ir ao log local: redactSecrets (key-based: API_KEY=/PASSWORD=/Bearer…) + mask (padrões + cap). É
-      // best-effort (defesa em profundidade), e o log é LOCAL/redigido — distinto do egress remoto, que só
-      // recebe o prompt em capture 'full'.
+      // produziram esta geração". O prompt agrega perfil/RAG/anexos, então é REDIGIDO antes de ir ao log local:
+      // redactSecrets (fonte unificada #8: PEM/connstring/KV/Bearer/JWT/AWS/tokens-de-provedor/PII) e depois
+      // mask (mesma fonte + cap). O redactSecrets EXTERNO garante redação mesmo em 'full' (log local ≠ egress remoto).
       return {
         ...base,
         taskId: e.taskId,
@@ -43,7 +43,8 @@ export function toDiagnosticRecord(e: ObsEvent, nowIso: string, capture: Capture
     case "phase.timing":
       return { ...base, taskId: e.taskId, phase: e.phase, durationMs: e.durationMs };
     case "generation.end":
-      return { ...base, taskId: e.taskId, model: e.model, durationMs: e.durationMs, proposals: e.proposals, usage: e.usage, error: e.error, input: mask(e.input, capture), output: mask(e.output, capture) };
+      // input/output envoltos em redactSecrets (como o systemPrompt): o bundle LOCAL é redigido mesmo em 'full'.
+      return { ...base, taskId: e.taskId, model: e.model, durationMs: e.durationMs, proposals: e.proposals, usage: e.usage, error: e.error, input: mask(redactSecrets(e.input), capture), output: mask(redactSecrets(e.output), capture) };
     case "skill.activated":
       return { ...base, skill: e.skill };
     case "proposal.created":
