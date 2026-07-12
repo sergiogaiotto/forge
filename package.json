@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "%ext.description%",
-  "version": "2.10.0",
+  "version": "2.10.1",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
