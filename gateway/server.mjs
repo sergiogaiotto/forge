@@ -18,6 +18,9 @@ import { fileURLToPath } from "node:url";
 import { createRevocationChecker } from "./revocations.mjs";
 import { processRelayBatch } from "./obsRelay.mjs";
 import { redact } from "./redaction.cjs";
+import { extractUsage } from "./usage.mjs";
+import { pruneExpired, admitSession, authorizeScope, renewedExpiry } from "./sessions.mjs";
+import { buildProxyTraceEvents } from "./proxyTrace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, ".env"));
@@ -159,24 +162,15 @@ function enqueueTrace(ctx, record) {
   const lf = CFG.langfuse;
   if (!lf.enabled || !lf.secretKey) return;
   if (Math.random() > lf.sampleRate) return; // amostragem (RF-066)
-  const traceId = crypto.randomUUID();
-  const genId = crypto.randomUUID();
-  const ts = new Date().toISOString();
-  const events = [
-    { id: crypto.randomUUID(), type: "trace-create", timestamp: ts, body: { id: traceId, name: "forge.generation", userId: ctx.email || ctx.login || ctx.subjectHash, environment: lf.environment, metadata: ctx } },
-    {
-      id: crypto.randomUUID(),
-      type: "generation-create",
-      timestamp: ts,
-      body: {
-        id: genId, traceId, name: "generation", model: ctx.modelId,
-        input: mask(record.input), output: mask(record.output), usage: record.usage,
-        startTime: new Date(record.startTime).toISOString(),
-        completionStartTime: record.completionStartTime ? new Date(record.completionStartTime).toISOString() : undefined,
-        endTime: new Date(record.endTime).toISOString(), metadata: ctx,
-      },
-    },
-  ];
+  // Builder PURO/testável: identidade ATESTADA pela sessão (não o header spoofável), metadata sem PII crua,
+  // usage no shape server-side (ver gateway/proxyTrace.mjs). Ids/tempo injetados.
+  const events = buildProxyTraceEvents(ctx, record, {
+    capture: lf.capture,
+    environment: lf.environment,
+    mask,
+    newId: () => crypto.randomUUID(),
+    nowIso: new Date().toISOString(),
+  });
   for (const e of events) {
     if (traceQueue.length >= lf.queueMax) {
       traceQueue.shift(); // descarte controlado — buffer com teto
@@ -215,10 +209,28 @@ async function handleActivate(req, res, reqId) {
     logLine("info", "licença recusada", { reqId, reason: v.reason });
     return send(res, 403, { error: "license rejected", reason: v.reason });
   }
-  if (sessions.size >= CFG.maxSessions) sweepSessions(true);
+  // Rate-limit da ATIVAÇÃO por subject (licença): sem isto um portador válido pode marretar /activate e
+  // inflar a tabela de sessões. Chave por subject limita cada licença, independente de IP.
+  if (rateLimited("activate:" + v.payload.subject)) return send(res, 429, { error: "rate limited" });
+  // Escopo AUTORITATIVO no servidor (ADR-3/RNF-002): a licença precisa de "codegen" para o proxy de
+  // geração. Escopo vazio/ausente = licença legada → grandfather (não trava). "skills" é gateado por
+  // requisição no proxy (depende do x-forge-skills). A licença carrega o escopo ASSINADO (não spoofável).
+  const scope = Array.isArray(v.payload.scope) ? v.payload.scope : [];
+  const scopeChk = authorizeScope(scope, false);
+  if (!scopeChk.ok) {
+    logLine("info", "ativação recusada — escopo insuficiente", { reqId, subject: v.payload.subject, missing: scopeChk.missing });
+    return send(res, 403, { error: "license rejected", reason: "scope", missing: scopeChk.missing });
+  }
+  // Teto de sessões SEM mass-logout: expira as vencidas; se ainda cheio de sessões VIVAS, RECUSA a
+  // ativação (503) em vez de deslogar terceiros (o antigo sweepSessions(true) varria todo mundo — DoS).
+  if (!admitSession(sessions, CFG.maxSessions, Math.floor(Date.now() / 1000))) {
+    logLine("warn", "capacidade de sessões esgotada — ativação recusada", { reqId });
+    return send(res, 503, { error: "capacity" });
+  }
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAt = Math.min(v.payload.expiry, Math.floor(Date.now() / 1000) + CFG.sessionTtlSec);
-  sessions.set(token, { subject: v.payload.subject, org: v.payload.org, expiresAt });
+  // licenseExpiry fica na sessão para o /renew NÃO estender a sessão além da expiração assinada da licença.
+  sessions.set(token, { subject: v.payload.subject, org: v.payload.org, scope, licenseExpiry: v.payload.expiry, expiresAt });
   logLine("info", "licença ativada", { reqId, subject: v.payload.subject, org: v.payload.org });
   send(res, 200, { token, expiresAt, subject: v.payload.subject, org: v.payload.org });
 }
@@ -227,6 +239,9 @@ async function handleRenew(req, res, reqId) {
   const { token } = JSON.parse((await readBody(req)) || "{}");
   const s = sessions.get(token);
   if (!s) return send(res, 403, { error: "unknown token" });
+  // Rate-limit da RENOVAÇÃO por subject: sem isto, um portador válido renova em loop para PINAR a tabela
+  // de sessões (mantê-la cheia além do TTL) — o teto de capacidade viraria um 503 permanente para todos.
+  if (rateLimited("renew:" + s.subject)) return send(res, 429, { error: "rate limited" });
   // Revogação enforçada na renovação: um subject revogado NÃO estende a sessão (o gap era exatamente
   // renovar indefinidamente uma sessão em memória). Mata a sessão para não vazar em requests seguintes.
   if (revocation.isRevoked(s.subject)) {
@@ -234,7 +249,15 @@ async function handleRenew(req, res, reqId) {
     logLine("info", "renovação recusada — subject revogado", { reqId, subject: s.subject });
     return send(res, 403, { error: "revoked" });
   }
-  s.expiresAt = Math.floor(Date.now() / 1000) + CFG.sessionTtlSec;
+  // A renovação NÃO estende a sessão além da EXPIRAÇÃO da licença: sem o teto, uma licença VENCIDA seguiria
+  // viva indefinidamente via renew (a revogação mordia, a expiração não).
+  const renewed = renewedExpiry(s.licenseExpiry, Math.floor(Date.now() / 1000), CFG.sessionTtlSec);
+  if (renewed === null) {
+    sessions.delete(token);
+    logLine("info", "renovação recusada — licença expirada", { reqId, subject: s.subject });
+    return send(res, 403, { error: "expired" });
+  }
+  s.expiresAt = renewed;
   send(res, 200, { token, expiresAt: s.expiresAt, subject: s.subject, org: s.org });
 }
 
@@ -292,15 +315,26 @@ async function handleProxy(req, res, reqId) {
   if (rateLimited(token)) return send(res, 429, { error: "rate limited" });
 
   const bodyText = await readBody(req);
+  const skills = (req.headers["x-forge-skills"] || "").split(",").filter(Boolean);
+  // Escopo "skills" no proxy é BEST-EFFORT, não autoritativo: o gateway só proxia o corpo opaco e não
+  // observa o uso real de skills — o sinal é o header x-forge-skills, que um cliente PATCHED pode omitir.
+  // Barra o cliente honesto (defesa em profundidade). O controle load-bearing é "codegen", exigido na
+  // ativação contra o payload ASSINADO (não spoofável). Escopo vazio/ausente na sessão = legado → grandfather.
+  const scopeChk = authorizeScope(session.scope, skills.length > 0);
+  if (!scopeChk.ok) {
+    logLine("info", "proxy recusado — escopo insuficiente", { reqId, missing: scopeChk.missing });
+    return send(res, 403, { error: "scope", missing: scopeChk.missing });
+  }
   const ctx = {
-    sessionId: req.headers["x-forge-session"] || "",
-    email: req.headers["x-forge-email"] || session.subject || "", // RF-063: identidade principal (userId)
-    login: req.headers["x-forge-login"] || "", // metadado secundário (login do SO)
+    // IDENTIDADE ATESTADA pela sessão (não o header x-forge-email, do cliente e spoofável): o userId do
+    // trace deriva de session.subject via attestedUserId (hash em masked; e-mail cru só em 'full'). RF-063
+    // é honrado em 'full' (opt-in do Admin), e a captura padrão 'masked' é LGPD-safe (pseudônimo estável).
+    subject: session.subject,
     org: session.org,
-    subjectHash: crypto.createHash("sha256").update(session.subject).digest("hex").slice(0, 16),
+    sessionId: req.headers["x-forge-session"] || "",
     provider: req.headers["x-forge-provider"] || "openai-compatible",
-    modelId: req.headers["x-forge-model"] || "",
-    activatedSkills: (req.headers["x-forge-skills"] || "").split(",").filter(Boolean),
+    model: req.headers["x-forge-model"] || "",
+    skills,
   };
 
   const startTime = Date.now();
@@ -332,21 +366,12 @@ async function handleProxy(req, res, reqId) {
   }
   res.end();
   enqueueTrace(ctx, { input: bodyText, output, usage: extractUsage(output), startTime, completionStartTime, endTime: Date.now() });
-  logLine("info", "geração proxiada", { reqId, org: ctx.org, model: ctx.modelId, ms: Date.now() - startTime });
+  logLine("info", "geração proxiada", { reqId, org: ctx.org, model: ctx.model, ms: Date.now() - startTime });
 }
 
 function parseHeader(h) {
   const i = h.indexOf(":");
   return i > 0 ? { [h.slice(0, i).trim()]: h.slice(i + 1).trim() } : {};
-}
-function extractUsage(sse) {
-  const m = /"completion_tokens"\s*:\s*(\d+)[\s\S]*?"prompt_tokens"\s*:\s*(\d+)/.exec(sse) || /"prompt_tokens"\s*:\s*(\d+)[\s\S]*?"completion_tokens"\s*:\s*(\d+)/.exec(sse);
-  return m ? { inputTokens: parseInt(m[2] || m[1], 10), outputTokens: parseInt(m[1] || m[2], 10) } : { inputTokens: 0, outputTokens: 0 };
-}
-
-function sweepSessions(force = false) {
-  const now = Math.floor(Date.now() / 1000);
-  for (const [token, s] of sessions) if (force || s.expiresAt <= now) sessions.delete(token);
 }
 
 // ---- servidor ---------------------------------------------------------------
@@ -382,7 +407,7 @@ const server = CFG.tls.key && CFG.tls.cert
   ? https.createServer({ key: fs.readFileSync(CFG.tls.key), cert: fs.readFileSync(CFG.tls.cert) }, router)
   : http.createServer(router);
 
-const sweepTimer = setInterval(() => sweepSessions(false), 60000);
+const sweepTimer = setInterval(() => pruneExpired(sessions, Math.floor(Date.now() / 1000)), 60000);
 const flushTimer = setInterval(() => void flushTraces(), CFG.langfuse.flushIntervalMs);
 
 // Falha ao abrir o socket (porta em uso, permissão) é reportada e encerra limpo — sem isto, um

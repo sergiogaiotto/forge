@@ -3,6 +3,42 @@
 All notable changes to FORGE are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [Unreleased]
+
+**Endurecimento do gateway + exfil do RAG.** Batch de segurança sobre a fronteira de confiança do gateway
+de referência e a via de embeddings do RAG. Cada correção passou por revisão adversarial multi-agente
+(6 revisores atacando o código real + verificação independente por achado), que confirmou e fechou 3
+defeitos antes do merge — incluindo um **HIGH de exfiltração descoberto na própria revisão** (o `symbol`
+do chunk ficava fora da redação). 1019 testes (eram 996).
+
+### Security
+- **Redação do RAG na origem — texto E símbolo** (`CodebaseIndex`/`indexPersistence`): os chunks passam
+  a ser redigidos (`redactChunks`) antes de sair pela via de embeddings (endpoint **externo**, fora do
+  gateway que redige) e pelo snapshot em disco (globalStorage, texto plano) — duas vias que contornavam a
+  redação do prompt. A revisão pegou que redigir só o `text` deixava o `symbol` (a linha-fronteira, ex.:
+  `INSERT … 'credencial'`) vazar; agora ambos. `SNAPSHOT_VERSION` 2→3 invalida snapshots com texto cru.
+- **Identidade do trace atestada + LGPD** (`server.mjs`/`proxyTrace.mjs`): o `userId` do trace de proxy
+  deriva do `subject` **assinado** da sessão (não do header `x-forge-email`, que o cliente controla e
+  poderia forjar), mascarado por captura via `attestedUserId` — pseudônimo estável `u_…` em `masked`
+  (default), e-mail cru só em `full` (opt-in do Admin). Metadata do trace deixou de despejar e-mail/login
+  crus. Fecha o vazamento de e-mail + o spoof + a divergência de hash proxy↔relay. **Mudança visível na
+  atualização:** em `masked`, o `userId` passa de e-mail cru para o pseudônimo `u_…` (agrupamento por
+  usuário preservado; RF-063 honrado em `full`).
+- **Escopo de licença autoritativo** (`server.mjs`/`sessions.mjs`): o gateway (a autoridade — ADR-3/
+  RNF-002) exige o escopo `codegen` na ativação contra o payload assinado; `skills` é gateado por
+  requisição (best-effort — dirigido pelo header `x-forge-skills`, barra o cliente honesto). Antes o
+  escopo era emitido na licença mas nunca enforçado.
+- **DoS de sessão** (`server.mjs`/`sessions.mjs`): a ativação não faz mais *force-sweep* de TODAS as
+  sessões ao bater o teto (deslogava todo mundo) — expira só as vencidas e, se ainda cheio de sessões
+  **vivas**, recusa com 503. `/activate` e `/renew` ganham rate-limit por subject; `/renew` passa a ter
+  teto na expiração da licença (uma licença vencida não segue viva via renew).
+
+### Fixed
+- **Contagem de tokens invertida no gateway** (`usage.mjs`): `extractUsage` invertia input↔output na
+  ordem PADRÃO do OpenAI (prompt antes de completion). Reescrito *order-independent* (lê cada campo pelo
+  próprio regex). O shape server-side `{inputTokens,outputTokens}` é mantido de propósito (distinto do
+  `{input,output,unit}`+custo do relay do cliente) para não fazer dupla contagem no Langfuse.
+
 ## [2.10.0] — 2026-07-10
 
 **FORGE trilíngue + workspace governado.** Fecha os dois itens restantes da gap analysis corporativa:

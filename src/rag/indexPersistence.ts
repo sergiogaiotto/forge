@@ -5,13 +5,29 @@
 // re-indexados/re-embedados; o resto reusa os vetores persistidos. PURO/testável (I/O fica no
 // CodebaseIndex).
 import { createHash } from "node:crypto";
+import { redactSecrets } from "../util/redact";
 import { IndexedChunk } from "./types";
 
-export const SNAPSHOT_VERSION = 2;
+// v3: os chunks passam a ser REDIGIDOS na origem (CodebaseIndex.indexOneFile) antes de embed/persist —
+// um snapshot v2 pode conter texto CRU (com segredos), então é invalidado e reconstruído redigido.
+export const SNAPSHOT_VERSION = 3;
 
 export interface FileMeta {
   mtimeMs: number;
   size: number;
+}
+
+// Redige segredos NA ORIGEM em cada chunk — texto E símbolo. O `symbol` é a linha-fronteira do chunk
+// (chunker.symbolFor), que pode ser um `INSERT/CREATE ... 'credencial'`, um `export const KEY = "sk-..."`
+// ou um heading de markdown com segredo inline: precisa da MESMA redação que o texto, senão vaza pelas
+// DUAS vias que contornam a redação do prompt — o embed (endpoint EXTERNO) e o snapshot em disco (texto
+// plano). Puro/determinístico (redact() preserva identificadores/hosts → recuperação intacta).
+export function redactChunks(chunks: IndexedChunk[]): IndexedChunk[] {
+  return chunks.map((c) => ({
+    ...c,
+    symbol: c.symbol ? redactSecrets(c.symbol) : c.symbol,
+    text: redactSecrets(c.text),
+  }));
 }
 
 export interface PersistedFile extends FileMeta {
