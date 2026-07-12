@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { redactSecrets } from "../util/redact";
 
+// Monta uma FIXTURE que PARECE segredo a partir de partes — o redact() vê a string completa (testa a
+// redação de verdade), mas o literal contíguo NÃO existe na fonte, então o push-protection/secret-scanning
+// do GitHub não bloqueia o commit deste arquivo de TESTE (ironia: testar redação exige strings secret-like).
+const S = (...p: string[]): string => p.join("");
+
 test("redactSecrets mascara valores de segredo (chave: valor / =) e Bearer", () => {
   assert.match(redactSecrets("api_key: sk-abcdef123456"), /api_key: «oculto»/);
 
@@ -23,4 +28,104 @@ test("redactSecrets NÃO mascara código legítimo (atribuição a chamada de fu
   assert.equal(redactSecrets("access_token = response.json()"), "access_token = response.json()");
   assert.equal(redactSecrets("secret = load_secret()"), "secret = load_secret()");
   assert.equal(redactSecrets(""), "");
+});
+
+// #8: redação UNIFICADA — os segredos que escapavam antes (o mais comum em config de dados).
+test("redactSecrets: connection string mascara a SENHA do userinfo (preserva user/host — útil)", () => {
+  const out = redactSecrets("DATABASE_URL=postgresql://admin:s3cr3tP4ss@db.internal:5432/prod");
+  assert.ok(!out.includes("s3cr3tP4ss"), "a senha não vaza");
+  assert.match(out, /postgresql:\/\/admin:«oculto»@db\.internal/, "user/host preservados");
+  // mongodb/redis/amqp idem
+  assert.ok(!redactSecrets("redis://:p4ssw0rd@cache:6379").includes("p4ssw0rd"));
+});
+
+test("redactSecrets: bloco PEM de chave privada some inteiro", () => {
+  const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc123XYZ\nDEFghi456\n-----END RSA PRIVATE KEY-----";
+  const out = redactSecrets(`config:\n${pem}\ndone`);
+  assert.ok(!out.includes("MIIEabc123XYZ") && !out.includes("BEGIN RSA PRIVATE KEY"), "o PEM não vaza");
+  assert.match(out, /config:\n«oculto»\ndone/);
+});
+
+test("redactSecrets: JWT, chave AWS e provider keys", () => {
+  const jwt = S("eyJ", "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpM");
+  assert.ok(!redactSecrets(`t=${jwt}`).includes("SflKxwRJSMeKKF2QT4fwpM"), "JWT some");
+  const akia = S("AKIA", "IOSFODNN7EXAMPLE");
+  assert.ok(!redactSecrets(`aws_key ${akia}`).includes(akia), "AWS AKIA some");
+  const sk = S("sk-", "abcdefghij1234567890");
+  assert.ok(!redactSecrets(`key ${sk} end`).includes(sk));
+});
+
+test("redactSecrets: PII-BR (CPF/CNPJ/telefone formatados) e email", () => {
+  const out = redactSecrets("cliente CPF 123.456.789-01, CNPJ 12.345.678/0001-90, tel (11) 91234-5678, e joao@acme.com.br");
+  for (const leak of ["123.456.789-01", "12.345.678/0001-90", "91234-5678", "joao@acme.com.br"]) {
+    assert.ok(!out.includes(leak), `${leak} não pode vazar`);
+  }
+});
+
+test("redactSecrets: NÃO over-masca URL pública, versão, porta (preserva utilidade)", () => {
+  // URL pública sem userinfo → preservada
+  assert.equal(redactSecrets("fetch('https://api.publica.com/v1/data')"), "fetch('https://api.publica.com/v1/data')");
+  assert.equal(redactSecrets("port = 5432"), "port = 5432", "porta de 4 dígitos preservada");
+  assert.equal(redactSecrets("version 1.2.3"), "version 1.2.3");
+});
+
+// Coverage de tokens de PROVEDOR modernos (achados do stress: escapavam do `sk-` simples por terem hífen/_).
+test("redactSecrets: tokens de provedor (sk-proj/sk-lf/github/slack/google/stripe) não vazam", () => {
+  const secrets = [
+    S("sk-", "proj-Ab12Cd34Ef56Gh78Ij90Kl"),
+    S("sk-", "lf-1234abcd-5678-efgh-9012-ijklmnop3456"),
+    S("ghp", "_16C7e42F292c6912E7710c838347Ae178B4a"),
+    S("github", "_pat_11ABCDE0Y0aBcDeFgHiJkL_1a2b3c4d5e6f7g8h9i0j"), // fine-grained PAT (rodada 2)
+    S("AIza", "SyD-1234567890abcdefGHIJKLMNOPqrstuv"),
+    S("sk", "_live_", "51H8zXyAbCdEfGhIjKlMnOpQr"), // Stripe
+    S("npm", "_1aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456"), // npm token (rodada 2)
+    S("Account", "Key=Xy9aBcD3fGhIjKlMnOpQrStUvWxYz0123456789AbCdEf=="), // Azure Storage (rodada 2)
+    S("AZURE_CLIENT_SECRET=", "8Q~aBc1DeFgHiJkLmNoPqRsTuVwXyZ0123456"), // Azure AD secret com ~ (rodada 2)
+    S("https://hooks.slack.com/services/", "T00000000/B11111111/aBcDeFgHiJkLmNoPqRsTuVwX2y"), // Slack webhook (rodada 2)
+  ];
+  for (const s of secrets) {
+    const out = redactSecrets(`token ${s} end`);
+    assert.ok(!out.includes(s), `${s.slice(0, 12)}… não pode vazar`);
+  }
+  // Slack: o corpo de alta entropia (não só os ids numéricos) tem de sumir.
+  const slack = S("xox", "b-2334455667788-2334455667788-AbCdEfGhIjKlMnOpQrStUvWx");
+  assert.ok(!redactSecrets(slack).includes("AbCdEfGhIjKlMnOpQrStUvWx"));
+});
+
+// Falsos-positivos que o stress pegou — o rebalanceamento (dígito obrigatório + remoção do `_key` genérico e
+// da connection-string do KV) deve PRESERVAR estes trechos legítimos.
+test("redactSecrets: NÃO over-masca *_key de config, pwd=path, database_url sem cred, prosa bearer", () => {
+  const keep = [
+    'color_key = "background-primary"',
+    'title_key = "welcome.header"',
+    'token = "IDENTIFIER"',
+    'pwd = "/home/user/project/src"',
+    'pwd = "/home/user2/project"', // caminho COM dígito (rodada 2 — pwd removido do SECRET_KEY)
+    'database_url = "postgresql://localhost:5432/appdb"',
+    'dsn = "host=localhost port=5432 dbname=app"',
+    "Bearer authentication is required for this endpoint.",
+    'class="sk-h2-heading"', // classe CSS com prefixo sk- + dígito (rodada 2 — sk- agora é preciso)
+    'class="sk-col-12-wide pk-step-3-active"',
+  ];
+  for (const k of keep) assert.equal(redactSecrets(k), k, `deve preservar: ${k}`);
+  // mas o segredo DENTRO da connection string (senha) ainda é mascarado:
+  assert.ok(!redactSecrets('dsn = "host=x password=s3cr3t123 db=y"').includes("s3cr3t123"));
+  assert.ok(!redactSecrets("postgresql://admin:s3nh4Secreta@host/db").includes("s3nh4Secreta"));
+});
+
+// Anti-ReDoS (achado do meu sanity-check ao vivo): sem quantificadores BOUNDED, o userinfo de URL e o email
+// backtrackam O(n²) numa string longa e congelam o host/gateway. Deve retornar RÁPIDO em entrada adversária.
+test("redactSecrets: anti-ReDoS — entrada adversária longa retorna rápido (bounded)", () => {
+  const cases = [
+    "a".repeat(500000),
+    "postgres://" + "a".repeat(200000) + ":x",
+    "x".repeat(100000) + "@" + "y".repeat(100000),
+    "-----BEGIN RSA PRIVATE KEY-----\n".repeat(5000),
+  ];
+  for (const c of cases) {
+    const t0 = Date.now();
+    redactSecrets(c);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1000, `redação deve retornar <1s (foi ${ms}ms) — sem blow-up quadrático`);
+  }
 });

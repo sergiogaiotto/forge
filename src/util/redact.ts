@@ -1,18 +1,13 @@
-// Redação best-effort de segredos em texto exibido ao dev (ex.: preview de chunks do RAG no
-// visualizador). NÃO é uma fronteira de segurança — é defesa em profundidade para que um segredo que
-// por acaso tenha sido indexado não apareça literalmente na UI. Puro/testável.
+// Redação de segredos/PII em texto de EGRESSO (auto-read → gateway, bundle de diagnóstico, contexto Langfuse)
+// e no preview de chunks do RAG. NÃO é fronteira de segurança — é defesa em profundidade para que um segredo
+// que por acaso vaze no conteúdo não saia literal. Os PADRÕES vivem numa ÚNICA fonte compartilhada com o
+// GATEWAY (gateway/redaction.mjs) — antes divergiam (o cliente só pegava KV+Bearer; o gateway só sk-/pk-/
+// email/dígitos), então connection string / PEM / JWT / AWS escapavam de um lado ou do outro. (#8)
 //
-// Só mascara VALORES que parecem segredo: uma string entre aspas OU um token longo (>=8 chars sem
-// espaços/parênteses). Assim `token = compute()` / `secret = load()` (código legítimo) NÃO é tocado —
-// preserva a utilidade do preview — mas `api_key: "sk-…"` / `password=hunter2secret123` some.
-const SECRET_KEY = "(?:api[_-]?key|secret|client[_-]?secret|token|password|passwd|pwd|access[_-]?key|private[_-]?key|authorization)";
-// valor = string entre aspas OU token de 8+ chars que CONTÉM um dígito (chaves/API tokens têm; um
-// identificador de código como `response.json`/`load_secret` não — e assim é preservado).
-const SECRET_VALUE = "(['\"][^'\"\\n]{3,}['\"]|(?=[A-Za-z0-9._+/=-]*[0-9])[A-Za-z0-9._+/=-]{8,})";
-const KV = new RegExp(`(${SECRET_KEY}\\s*[:=]\\s*)${SECRET_VALUE}`, "gi");
-const BEARER = /(bearer\s+)([A-Za-z0-9._~+/=-]{8,})/gi;
+// O esbuild bundla o .mjs no dist da extensão; o gateway o importa nativo. Mantido o nome `redactSecrets`
+// (todos os chamadores dependem dele). Puro/testável.
+import { redact } from "../../gateway/redaction.cjs";
 
 export function redactSecrets(text: string): string {
-  if (!text) return text;
-  return text.replace(KV, "$1«oculto»").replace(BEARER, "$1«oculto»");
+  return redact(text);
 }

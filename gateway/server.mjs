@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRevocationChecker } from "./revocations.mjs";
 import { processRelayBatch } from "./obsRelay.mjs";
+import { redact } from "./redaction.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, ".env"));
@@ -66,13 +67,6 @@ const rateBuckets = new Map(); // key -> { tokens, updatedAt }
 const traceQueue = [];
 let droppedTraces = 0;
 let shuttingDown = false;
-
-const MASK_PATTERNS = [
-  /sk-[a-zA-Z0-9]{16,}/g,
-  /pk-lf-[a-zA-Z0-9-]{8,}/g,
-  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-  /\b\d{11,16}\b/g,
-];
 
 // ---- infra ------------------------------------------------------------------
 function loadDotEnv(p) {
@@ -158,9 +152,8 @@ function rateLimited(key) {
 function mask(value) {
   if (CFG.langfuse.capture === "metadata-only") return undefined;
   if (CFG.langfuse.capture === "full") return value;
-  let s = typeof value === "string" ? value : JSON.stringify(value);
-  for (const re of MASK_PATTERNS) s = s.replace(re, "‹redacted›");
-  return s;
+  const s = typeof value === "string" ? value : JSON.stringify(value);
+  return redact(s); // fonte ÚNICA compartilhada com o cliente (gateway/redaction.mjs) — antes MASK_PATTERNS divergia. (#8)
 }
 function enqueueTrace(ctx, record) {
   const lf = CFG.langfuse;
