@@ -65,7 +65,7 @@ export function syntheticInitDirs(relPaths: string[], language: ProjectLanguage 
 
 // Relativiza um caminho da SAÍDA da ferramenta contra a raiz temp e normaliza. As ferramentas rodam com
 // cwd=raiz e argumento `.`, então emitem caminhos relativos; o ramo absoluto é defensivo.
-function relToRoot(root: string, p: string): string {
+export function relToRoot(root: string, p: string): string {
   const raw = (p ?? "").trim();
   if (raw && (path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw))) {
     return normGatePath(path.relative(root, raw));
