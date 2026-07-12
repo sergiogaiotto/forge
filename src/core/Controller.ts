@@ -3727,21 +3727,30 @@ export class Controller {
       return;
     }
     const prev = await vscode.env.clipboard.readText();
-    let sel = prev;
+    // SENTINELA: escrevemos um valor ÚNICO no clipboard ANTES de copiar a seleção. O copySelection só o
+    // substitui se HOUVER seleção — assim distinguimos "seleção que por acaso == o clipboard anterior" (o dev
+    // já tinha copiado o mesmo texto, ou a seleção sumiu ao abrir o menu) de "nenhuma seleção". Comparar com
+    // `prev` (como antes) dava um falso-negativo SILENCIOSO nesse caso → "corrija" ia sem o contexto do
+    // terminal. Se o clipboard continuar == sentinela, não houve seleção. (achado do QA: attach silencioso)
+    const sentinel = `__forge_terminal_sel_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+    let sel = sentinel;
     try {
       terminal.show(true); // torna o terminal ativo VISÍVEL sem roubar o foco do chat
+      await vscode.env.clipboard.writeText(sentinel);
       await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
       // A escrita no clipboard pode ser assíncrona ALÉM do await do comando (renderer/pty) — relê por um
-      // curto período até o valor mudar, evitando um falso-negativo intermitente por corrida.
-      for (let i = 0; i < 8 && sel === prev; i++) {
+      // curto período até sair da sentinela, evitando um falso-negativo intermitente por corrida.
+      for (let i = 0; i < 8 && sel === sentinel; i++) {
         await new Promise((r) => setTimeout(r, 25));
         sel = await vscode.env.clipboard.readText();
       }
     } finally {
       await vscode.env.clipboard.writeText(prev); // restaura o clipboard do usuário haja o que houver
     }
-    if (!sel || sel === prev) {
-      this.post({ type: "notice", level: "warn", message: hostT("notice.attach.selectTerminal") });
+    if (!sel || sel === sentinel) {
+      // Nenhuma seleção detectada. Sinal FORTE (error, não warn) para o dev NÃO enviar "corrija" achando que
+      // o contexto do terminal foi anexado quando não foi.
+      this.post({ type: "notice", level: "error", message: hostT("notice.attach.selectTerminal") });
       return;
     }
     this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
