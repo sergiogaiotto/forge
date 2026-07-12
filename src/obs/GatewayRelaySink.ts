@@ -1,3 +1,4 @@
+import { safeFetch } from "../net/safeFetch";
 import { IngestionEvent, ObsSink } from "./types";
 
 // `warn` injetável (default console) para manter o sink testável em Node puro, sem arrastar o logger
@@ -56,13 +57,13 @@ export class GatewayRelaySink implements ObsSink {
     }
 
     const batch = this.queue.splice(0, BATCH_MAX);
-    const doFetch = this.deps.fetch ?? fetch;
     try {
-      const res = await doFetch(url, {
+      const res = await safeFetch(url, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({ batch }),
         signal: AbortSignal.timeout(10000),
+        fetchImpl: this.deps.fetch,
       });
       // 401/403 = sessão inválida/revogada: NÃO re-enfileira (evita loop batendo num gateway que recusa).
       if (res.status === 401 || res.status === 403) {

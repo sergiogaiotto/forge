@@ -1,4 +1,5 @@
 import { EgressEnforcer } from "../net/EgressEnforcer";
+import { safeFetch } from "../net/safeFetch";
 import { log } from "../util/logger";
 import { LicenseVerifier } from "./LicenseVerifier";
 import { SessionToken, VerifyErr } from "./types";
@@ -86,7 +87,7 @@ export class LicenseClient {
 
   private async gatewayFetch(url: string, body: unknown): Promise<Response> {
     this.egress.assertAllowed(url);
-    return fetch(url, {
+    return safeFetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

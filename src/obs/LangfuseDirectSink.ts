@@ -1,3 +1,4 @@
+import { safeFetch } from "../net/safeFetch";
 import { log } from "../util/logger";
 import { IngestionEvent, ObsConfig, ObsSink } from "./types";
 
@@ -45,7 +46,7 @@ export class LangfuseDirectSink implements ObsSink {
     const batch = this.queue.splice(0, BATCH_MAX);
     try {
       const auth = "Basic " + Buffer.from(`${cfg.publicKey}:${secret}`).toString("base64");
-      const res = await fetch(url, {
+      const res = await safeFetch(url, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: auth },
         body: JSON.stringify({ batch }),

@@ -1,4 +1,5 @@
 import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
+import { safeFetch } from "../net/safeFetch";
 import { sseLines } from "../util/http";
 import { McpServerEntry } from "./types";
 
@@ -20,7 +21,7 @@ export class StreamableHttpClient implements McpTransportClient {
 
   async request(method: string, params: unknown): Promise<JsonRpcResult> {
     const body = { jsonrpc: "2.0", id: ++this.id, method, params };
-    const res = await fetch(this.url, {
+    const res = await safeFetch(this.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",

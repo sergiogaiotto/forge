@@ -1,4 +1,5 @@
 import { EgressEnforcer } from "../net/EgressEnforcer";
+import { safeFetch } from "../net/safeFetch";
 import { combineSignals } from "../util/http";
 
 // Cliente de embeddings via endpoint OpenAI-compatible in-network (ex.: HubGPU
@@ -41,7 +42,7 @@ export class EmbeddingClient {
       const batch = texts.slice(i, i + this.batchSize);
       const body: Record<string, unknown> = { model: this.model, input: batch };
       if (this.dimensions > 0) body.dimensions = this.dimensions; // densidade do vetor (MRL)
-      const res = await fetch(url, {
+      const res = await safeFetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
