@@ -8,7 +8,15 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Produto Windows-first: os bugs mais caros (shim .cmd/.bat sob CVE-2024-27980, && do PowerShell,
+    # paths do tesseract) SÓ aparecem no Windows, e os testes win32-gated (ex.: RCE do shim em
+    # execSpawn.test.ts) eram PULADOS num CI só-ubuntu → regressão passava verde e quebrava no host.
+    # A matriz roda o pipeline nos dois SO; fail-fast:false para ver as duas falhas, não a primeira.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +41,10 @@ jobs:
       - name: Empacotar .vsix
         run: npm run package
 
+      # Empacota nos dois SO (smoke test do vsce), mas publica só o artefato do ubuntu: o upload-artifact@v4
+      # recusa dois uploads com o mesmo nome, e o .vsix é agnóstico de plataforma — um só basta.
       - name: Publicar artefato .vsix
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: forge-vsix
