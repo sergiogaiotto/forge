@@ -6,9 +6,12 @@ const f = (content: string, path = "a.ts") => scanSast([{ path, content }]);
 const rules = (content: string, path = "a.ts") => f(content, path).map((x) => `${x.severity}:${x.rule}`);
 const S = (...p: string[]) => p.join(""); // monta segredo por concatenação (evita a push-protection do GitHub)
 
-test("code-exec BLOQUEIA: eval() e new Function()", () => {
+test("code-exec: eval() global BLOQUEIA; new Function() é ADVISORY", () => {
   assert.deepEqual(rules("const r = eval(userInput);"), ["blocking:code-exec"]);
-  assert.deepEqual(rules("const g = new Function('a', 'return a');"), ["blocking:code-exec"]);
+  // new Function tem base-rate legítimo alto em código gerado (template/E2E/codegen); a medição ao vivo
+  // (259 arquivos) achou 100% das ocorrências legítimas → advisory (surfaça sem travar o Aplicar).
+  assert.deepEqual(rules("const g = new Function('a', 'return a');"), ["advisory:code-exec"]);
+  assert.deepEqual(rules("const fn = new Function(`return (${body});`);"), ["advisory:code-exec"], "new Function com template dinâmico ainda é advisory");
 });
 
 test("REGRESSÃO (FP): comentário/string com 'eval' e RegExp.exec NÃO acusam (codeOnly)", () => {
@@ -51,6 +54,41 @@ test("REGRESSÃO (revisão): TEXTO de template com 'eval()' NÃO acusa; mas ${ev
   assert.equal(f("const p = `nunca chame eval(userInput) diretamente`;").length, 0, "texto de template neutralizado");
   assert.equal(f("throw new Error(`eval() não é permitido`);").length, 0, "mensagem de erro em template");
   assert.deepEqual(rules("const y = `${eval(expr)}`;"), ["blocking:code-exec"], "interpolação ${…} É código → acusa");
+});
+
+test("REGRESSÃO (corpus gerado): método/função DEFINIDO com nome `eval` NÃO acusa (interpretador/AST)", () => {
+  // FP dominante do corpus GERADO: todo interpretador / AST / engine de expressão define um método eval().
+  // O lookbehind barra `.eval` mas não uma definição em posição de membro — o filtro isEvalDefinition resolve.
+  assert.equal(f("class Literal {\n  eval(env: Environment): RuntimeValue { return this.value; }\n}").length, 0, "método com tipo de retorno");
+  assert.equal(f("interface Expr {\n  eval(env: Environment): RuntimeValue;\n}").length, 0, "assinatura de interface");
+  assert.equal(f("class N {\n  eval() {\n    return 1;\n  }\n}").length, 0, "método sem params nem tipo");
+  assert.equal(f("function eval(x) {\n  return x;\n}").length, 0, "declaração de função homônima");
+  assert.equal(f("const o = {\n  eval(env) {\n    return env;\n  }\n};").length, 0, "método shorthand em objeto");
+  assert.equal(f("class M {\n  eval(\n    source: string,\n    facts: FactBag,\n  ): RuntimeValue {\n    return run(source);\n  }\n}").length, 0, "definição multi-linha com tipo de retorno");
+  assert.equal(f("class G {\n  get eval() { return this._e; }\n}").length, 0, "getter chamado eval");
+  assert.equal(f("class A {\n  async eval(x: string): Promise<void> {}\n}").length, 0, "método async com tipo de retorno");
+  assert.equal(f("type T = { eval(x: number): void };").length, 0, "membro de tipo/interface inline");
+  assert.equal(f("abstract class B {\n  abstract eval(x: string): number;\n}").length, 0, "método abstrato (assinatura)");
+});
+
+test("REGRESSÃO (corpus gerado): CHAMADA de eval AINDA acusa após o filtro de definição", () => {
+  // O filtro de definição não pode abrir buraco: eval de verdade (statement, atribuição, condição, interpolação)
+  // continua bloqueando. Só definição (seguida de `{`/`:` após os params) é poupada.
+  assert.deepEqual(rules("eval(userInput);"), ["blocking:code-exec"], "statement");
+  assert.deepEqual(rules("const r = eval(expr);"), ["blocking:code-exec"], "atribuição");
+  assert.deepEqual(rules("if (eval(cond)) return;"), ["blocking:code-exec"], "condição — ) após ) não é definição");
+  assert.deepEqual(rules("return eval(x) ? a : b;"), ["blocking:code-exec"], "consequente antes do ? ainda acusa");
+  assert.deepEqual(rules("const y = `${eval(expr)}`;"), ["blocking:code-exec"], "interpolação");
+  // O `:` NÃO deve virar escape: ternário e `case` são posição de EXPRESSÃO (chamada), não tipo-de-retorno.
+  assert.deepEqual(rules("const r = trusted ? eval(expr) : safeParse(expr);"), ["blocking:code-exec"], "eval no consequente de ternário (seguido de `:`) ainda acusa");
+  assert.deepEqual(rules("switch (op) {\n  case eval(userInput):\n    return;\n}"), ["blocking:code-exec"], "eval em `case` (seguido de `:`) ainda acusa");
+});
+
+test("REGRESSÃO (revisão adversarial): assinatura de `eval` maior que o bound do matchParen NÃO vira FP bloqueante", () => {
+  // Se a lista de params estoura o bound do matchParen (assinatura gigante e tipada — comum em codegen de
+  // interpretador), o filtro erra para o lado SEGURO (definição/não-bloqueia), nunca para bloquear.
+  const bigParams = Array.from({ length: 120 }, (_, i) => `arg${i}: SomeVeryLongTypeName${i}`).join(", ");
+  assert.equal(f(`class M {\n  eval(${bigParams}): RuntimeValue {\n    return 1;\n  }\n}`).length, 0, "definição com assinatura > bound não bloqueia (fail-safe)");
 });
 
 test("REGRESSÃO (revisão): chamadas de MEMBRO homônimas NÃO acusam (api.eval, page.$eval, db.exec, re.exec)", () => {

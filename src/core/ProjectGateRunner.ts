@@ -244,16 +244,19 @@ export class ProjectGateRunner {
       // bandit é Python-only (usa o `py` resolvido). Para TYPESCRIPT/JS, um SAST PURO-TS (scanSast, sem dep/tool
       // externo) traz a VISIBILIDADE de segurança que faltava — TS não tinha NENHUMA cobertura (como o a11y era o
       // único domínio sem motor). Produz o mesmo shape {blocking, advisories} e reusa todo o downstream.
-      // ADVISORY-FIRST (mode "advisory" sempre): as classes bloqueantes de um pattern-scan (eval/exec) só atingem
-      // a barra de FP-quase-zero sobre código GERADO após validação contra um corpus de output real — a revisão
-      // adversarial mostrou FPs (texto de template com "eval()", page.$eval, db.exec) que a validação no código
-      // do próprio repo não cobria. É a mesma trajetória do a11y/ruff (advisory → promover com empíria). Promover
-      // a bloqueante é follow-up. off silencia.
+      // PROMOVIDO A BLOQUEANTE (paridade com o bandit): o SAST-TS agora honra o MESMO `securityMode` do
+      // config (conservative/advisory/off) que o bandit — em "conservative" (default), code-exec (eval/new
+      // Function globais) e shell-exec (exec/execSync com comando dinâmico) FECHAM o Aplicar; em "advisory"
+      // só surface. A promoção seguiu a lição-mãe (validar o BLOQUEANTE contra a DISTRIBUIÇÃO real de código
+      // GERADO): medição ao vivo do scanSast sobre um corpus de 259 arquivos TS/JS gerados por LLM (30
+      // arquétipos) → ZERO falso-positivo bloqueante na track NATURAL (18 apps realistas). A track adversarial
+      // expôs 1 FP sistemático (método DEFINIDO com nome `eval` num interpretador/AST) — corrigido em
+      // sastScan.isEvalDefinition. É a mesma trajetória do a11y/ruff (advisory → promover com empíria). off silencia.
       const security =
         language === "python" && securityMode !== "off"
           ? await this.runSecurityScan(py!, root, securityMode)
           : language === "typescript" && securityMode !== "off"
-            ? splitSast(scanSast(props.map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified }))), "advisory")
+            ? splitSast(scanSast(props.map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified }))), securityMode)
             : null;
       const securityErrors = security?.blocking ?? [];
       const securityAdvisories = security?.advisories ?? [];

@@ -1,9 +1,11 @@
 // SAST PURO-TS para a saída TypeScript/JavaScript gerada — a PARIDADE de segurança que faltava fora do
 // Python (o bandit é Python-only; TS não tinha NENHUMA cobertura de segurança no gate). Heurístico e PURO
-// (sem parser/AST, sem deps), no molde do a11yLint. Espelha as classes que o bandit BLOQUEIA (execução de
-// código / injeção de shell — B102/B307/B602/B605/B609) e mantém segredo-hardcoded + XSS como ADVISORY
-// (como o bandit trata B105/B106). O bloqueio exige a MESMA precisão do bandit: só padrões de altíssima
-// confiança, e SEMPRE após validar contra output real (a lição repetida de a11yLint/ruff/redação).
+// (sem parser/AST, sem deps), no molde do a11yLint. BLOQUEIA (modo conservador, paridade com o bandit) as
+// classes de execução-de-código/injeção-de-shell de altíssima precisão: eval() global (B307) e exec/execSync
+// de child_process com comando DINÂMICO (B602/B605). ADVISORY: new Function() (base-rate legítimo alto em
+// código gerado — template/E2E/codegen), shell:true, XSS e segredo-hardcoded (como o bandit trata B105/B106).
+// A fronteira blocking↔advisory foi calibrada por MEDIÇÃO AO VIVO sobre 259 arquivos GERADOS por LLM (0 FP
+// bloqueante na distribuição natural) — a lição-mãe: validar o BLOQUEANTE contra output real, não à mão.
 //
 // Anti-FP: varre a versão SEM COMENTÁRIOS E SEM STRINGS '...'/"..." (a fonte dominante de falso-positivo de
 // um pattern-scan — um `// evite eval()` ou `"use eval"` NÃO deve acusar). Preserva posições (blank in-place).
@@ -126,6 +128,35 @@ function firstArg(code: string, open: number, max = 600): string {
   return code.slice(open + 1, end);
 }
 
+// Um `eval(...)` casado é uma DEFINIÇÃO de método/função com o nome `eval` (NÃO uma chamada ao eval global)
+// quando, DEPOIS de fechada a lista de parâmetros, vem `{` (corpo) ou `:` (anotação de tipo de retorno TS,
+// inclusive assinatura de interface `eval(x): T;`). O lookbehind (?<![.\w$]) já barra `.eval`/`$eval`, mas NÃO
+// uma definição em posição de membro (`  eval(env): RuntimeValue { … }`) — que é exatamente o que TODO
+// interpretador / AST / engine de expressão define (FP dominante do corpus GERADO).
+//
+// O `:` é AMBÍGUO: além do tipo-de-retorno (definição), aparece em posição de EXPRESSÃO no ternário
+// (`cond ? eval(x) : y`) e no `case eval(x):` — onde o eval é uma CHAMADA real que DEVE bloquear. Desambigua
+// pelo que PRECEDE o eval: um `?` (consequente de ternário) ou a keyword `case` ⇒ chamada, não definição.
+// Se `matchParen` não conseguir casar o `)` (assinatura gigante > bound, ou código malformado), erra para o
+// lado SEGURO (é definição / NÃO bloqueia) — o contrato-mãe é 0 FALSO-POSITIVO bloqueante; um FN raro é ok.
+function isEvalDefinition(code: string, evalStart: number, open: number): boolean {
+  const close = matchParen(code, open, 2000);
+  if (close < 0) return true; // não casou o ) (assinatura enorme/malformada) → assume definição (não bloqueia)
+  let i = close + 1;
+  while (i < code.length && /\s/.test(code[i])) i++;
+  const nx = code[i];
+  if (nx === "{") return true; // corpo de método/função
+  if (nx !== ":") return false; // nem corpo nem `:` → é uma CHAMADA (statement/atribuição/condição/interpolação)
+  // nx === ":" — desambigua tipo-de-retorno (definição) de ternário/`case` (chamada) pelo contexto ANTERIOR.
+  let j = evalStart - 1;
+  while (j >= 0 && /\s/.test(code[j])) j--;
+  if (code[j] === "?") return false; // ternário: `cond ? eval(x) : y` → chamada
+  let w = j;
+  while (w >= 0 && /[A-Za-z]/.test(code[w])) w--;
+  if (code.slice(w + 1, j + 1) === "case") return false; // switch: `case eval(x):` → chamada
+  return true; // tipo de retorno de método/interface → definição
+}
+
 // Comando DINÂMICO = concatenação (`+`) ou template (`${`) — comando montado com input (injeção). Um literal
 // estático (execSync("ls -la")) NÃO é dinâmico. `shell: true` habilita a interpretação por shell.
 function hasDynamicCmd(argRegion: string): boolean {
@@ -149,15 +180,33 @@ export function scanSast(files: { path: string; content: string }[]): SastFindin
     // da revisão). Checado no RAW porque o codeOnly apaga o path (que é string).
     const importsChildProc = /(?:from\s*|require\(\s*)['"](?:node:)?child_process['"]/.test(raw);
 
-    // 1) EXECUÇÃO DE CÓDIGO (B102/B307): eval(...) e new Function(...). Comentários/strings/texto-de-template
-    //    já foram neutralizados. O lookbehind (?<![.\w$]) EXCLUI chamadas de MEMBRO/método homônimas —
-    //    api.eval(), page.$eval() (Puppeteer/Playwright), math.eval() — que NÃO são o eval global (achado da
-    //    revisão). `\beval` não casaria "retrieval("; o lookbehind cobre "$eval"/".eval".
-    for (const re of [/(?<![.\w$])eval\s*\(/g, /(?<![.\w$])new\s+Function\s*\(/g]) {
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(code))) {
-        add({ path: file.path, line: lineOf(code, m.index), rule: "code-exec", severity: "blocking", message: "execução dinâmica de código (eval/new Function) — evite; use um dispatch explícito" });
-      }
+    // 1) EXECUÇÃO DE CÓDIGO. Dois sinks, com severidade DIFERENTE — a distinção veio da medição ao vivo sobre
+    //    259 arquivos GERADOS por LLM (a lição-mãe: validar o BLOQUEANTE contra a distribuição real):
+    //
+    //    eval(...) global (B307) → BLOQUEIA. Base-rate legítimo quase-zero; 0 FP no corpus após o filtro de
+    //      definição. O lookbehind (?<![.\w$]) EXCLUI chamadas de MEMBRO homônimas — api.eval(), page.$eval()
+    //      (Puppeteer/Playwright), math.eval() (`\beval` não casaria "retrieval("; o lookbehind cobre "$eval"/
+    //      ".eval"). E isEvalDefinition EXCLUI a DEFINIÇÃO de um método com nome eval (interpretador/AST:
+    //      `eval(env): T { }`) — que casa o lookbehind (posição de membro, sem `.` antes) mas NÃO é o eval
+    //      global (FP dominante do corpus: todo interpretador/engine de expressão define um eval()).
+    //
+    //    new Function(...) → ADVISORY. NÃO é chamada de membro (sempre um sink real de construção dinâmica),
+    //      MAS tem base-rate legítimo ALTO em código gerado: compiladores de template, re-hidratação de helper
+    //      em page.evaluate (E2E Playwright/Puppeteer), codegen de hot-path. Na medição, 100% das ocorrências
+    //      de new Function (2/2, ambas em helpers E2E) eram legítimas e a adjudicação adversarial (3 lentes ×2)
+    //      as classificou como falso-positivo por maioria. Bloquear teria FP-rate alto; advisory SURFAÇA sem
+    //      travar o Aplicar. Mesma trajetória do shell:true (smell com usos legítimos → advisory). Sem análogo
+    //      no bandit (não há "new Function" em Python). Promover a bloqueante fica p/ empíria futura.
+    const evalRe = /(?<![.\w$])eval\s*\(/g;
+    let em: RegExpExecArray | null;
+    while ((em = evalRe.exec(code))) {
+      if (isEvalDefinition(code, em.index, em.index + em[0].length - 1)) continue; // método/função DEFINIDO com nome eval
+      add({ path: file.path, line: lineOf(code, em.index), rule: "code-exec", severity: "blocking", message: "execução dinâmica de código com eval() — evite; use um dispatch explícito ou um parser/avaliador seguro" });
+    }
+    const fnRe = /(?<![.\w$])new\s+Function\s*\(/g;
+    let fm: RegExpExecArray | null;
+    while ((fm = fnRe.exec(code))) {
+      add({ path: file.path, line: lineOf(code, fm.index), rule: "code-exec", severity: "advisory", message: "new Function() — construção dinâmica de código; prefira um dispatch explícito. Se a entrada for não-confiável, é injeção de código (RCE)" });
     }
 
     // 2) INJEÇÃO DE SHELL (BLOQUEIA — B602/B605/B609). O perigo é o SHELL, não a concatenação em si:
