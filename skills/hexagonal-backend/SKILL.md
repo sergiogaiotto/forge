@@ -1,15 +1,15 @@
 ---
-name: python-hexagonal-backend
+name: hexagonal-backend
 description: >-
-  Playbook for generating a Python backend or API with hexagonal architecture
-  (ports and adapters). Use whenever the user asks for a Python backend, a REST
-  API, a FastAPI or Flask service, a microservice, a web service, a worker, or a
-  use-case / domain layer, or mentions hexagonal, ports and adapters, clean
-  architecture, or dependency inversion. Covers the layer layout the architecture
-  gate enforces (a pure domain that never imports adapters or frameworks), ports
-  as Protocol/ABC interfaces, adapters that implement them, dependency injection
-  at a composition root, keeping FastAPI and the ORM at the edge, and shipping a
-  runnable, tested, documented service.
+  Hexagonal (ports and adapters) architecture for a Python web backend built on
+  FastAPI or Flask. Use when the request mentions hexagonal, ports and adapters,
+  clean architecture, dependency inversion, a domain layer, use cases, or a
+  microservice — em português: arquitetura hexagonal, portas e adaptadores,
+  injeção de dependência, casos de uso, domínio, microsserviço. Teaches the layer
+  layout the architecture gate enforces: a pure domain that never imports adapters
+  or frameworks, ports as Protocol or ABC interfaces, adapters implementing them,
+  dependency wiring at a composition root, and keeping FastAPI and the ORM at the
+  edge.
 license: Apache-2.0
 metadata:
   author: claro-data-platform
@@ -34,30 +34,31 @@ built around **use cases and a domain**. It does **not** apply to data pipelines
 throwaway script. If the request is a small script with no domain, don't over-architect
 it.
 
-## The dependency rule (what the gate enforces)
+## Project layout (flat — the project ROOT is the import root)
 
-**Dependencies point INWARD.** The domain is the pure center; everything else depends
-on it, never the reverse. The FORGE architecture gate materializes exactly this rule:
-a file under `domain/` (or `entities/`) that imports a module under `adapters/`,
-`infrastructure/`, `repositories/`, or `controllers/` **blocks the Apply**. Generate
-the structure so that never happens.
+Put the packages at the **project root**, as siblings of `tests/` and the manifest —
+**not** under a `src/` directory. FORGE materializes and runs the project with the
+working directory = project root: `from domain.models import Order` must resolve from
+root, `pytest` collects `tests/` from root, and `uvicorn main:app` boots `main.py` at
+root. A `src/` layout would need an editable install or a `pythonpath` config the
+generated project won't have — its tests would fail to import and the app wouldn't boot,
+even though every static gate stays green (the "installs but doesn't run" trap).
 
 ```
-src/
-  domain/            # INNER — pure. Entities, value objects, and PORTS (interfaces).
-    models.py        #   dataclasses with invariants (no framework imports)
-    ports.py         #   Protocol / ABC interfaces the domain DEPENDS ON
-    errors.py        #   domain exceptions
-  application/       # use cases: orchestrate domain through ports. Depends on domain only.
-    create_order.py
-  adapters/          # OUTER — implement the ports + inbound web. Depends INWARD.
-    repository.py    #   e.g. SqlOrderRepository(OrderRepository)
-    api.py           #   FastAPI router: HTTP → use case (framework lives HERE)
-  main.py            # composition root: build concrete adapters, inject into use cases
-requirements.txt     # every third-party package actually imported
+domain/            # INNER — pure. Entities, value objects, and PORTS (interfaces).
+  models.py        #   dataclasses with invariants (no framework imports)
+  ports.py         #   Protocol / ABC interfaces the domain DEPENDS ON
+  errors.py        #   domain exceptions
+application/       # use cases: orchestrate the domain through ports. Domain-only deps.
+  create_order.py
+adapters/          # OUTER — implement the ports + inbound web. Depends INWARD.
+  repository.py    #   e.g. SqlOrderRepository(OrderRepository)
+  api.py           #   FastAPI router: HTTP → use case (framework lives HERE)
+main.py            # composition root: build concrete adapters, inject into use cases
+requirements.txt   # every third-party package actually imported
 tests/
   test_create_order.py   # a use case tested with a FAKE adapter (no DB needed)
-README.md            # a "## How to run" section (install + run)
+README.md          # a "## How to run" section (install + run)
 ```
 
 ## Rules (apply all that fit)
@@ -70,7 +71,7 @@ the core.
 
 ```python
 # domain/models.py  ✅ pure: stdlib only, invariant enforced on construction
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Order:
@@ -95,6 +96,7 @@ port lives in the domain because the domain owns the contract.
 
 ```python
 # domain/ports.py  ✅ the interface the domain depends on
+from __future__ import annotations
 from typing import Protocol
 from domain.models import Order
 
@@ -105,14 +107,16 @@ class OrderRepository(Protocol):
 
 ### 3. Adapters implement ports and depend on the domain (never the reverse)
 A concrete repository lives under `adapters/`, imports the domain, and satisfies the
-port. The arrow points inward: `adapters` → `domain`, so no gate violation.
+port. Inheriting the `Protocol` documents intent and lets mypy verify conformance. The
+arrow points inward: `adapters` → `domain`, so no gate violation.
 
 ```python
 # adapters/repository.py  ✅ imports domain, implements the port
+from __future__ import annotations
 from domain.models import Order
 from domain.ports import OrderRepository
 
-class InMemoryOrderRepository:            # satisfies OrderRepository structurally
+class InMemoryOrderRepository(OrderRepository):
     def __init__(self) -> None:
         self._store: dict[str, Order] = {}
     def get(self, order_id: str) -> Order | None:
@@ -189,7 +193,8 @@ app = build_app()
 ### 7. Ship it runnable, tested, and documented
 The ports make the domain testable without a database: test a use case with a **fake
 adapter**. Also emit a dependency manifest and a README with how to run — the DoD gate
-blocks a project missing any of these.
+blocks a project missing any of these. Target Python 3.10+ (for the `X | None` syntax);
+the `from __future__ import annotations` above also keeps the annotations valid on 3.9.
 
 ```python
 # tests/test_create_order.py  ✅ no DB, no FastAPI — the fake satisfies the port
@@ -212,6 +217,8 @@ def test_create_order_persists_and_returns() -> None:
 ## Common errors to avoid
 - `domain/` importing FastAPI, SQLAlchemy, `requests`, or anything under `adapters/` —
   the architecture gate blocks that file (dependencies must point inward).
+- A **`src/` layout with top-level imports** — the tests won't import and `uvicorn
+  main:app` won't boot from the project root, even though the static gates pass.
 - **Anemic domain**: entities are dumb data bags and all rules live in the service or the
   route. Put invariants and behavior on the entity.
 - **Fat controller**: business logic inside the FastAPI route handler. The handler should
@@ -222,4 +229,3 @@ def test_create_order_persists_and_returns() -> None:
   tested or swapped. Depend on a `Protocol` / `ABC`, not a concrete adapter.
 - Missing `requirements.txt`, no test, or a README with no "how to run" — the DoD gate
   blocks the Apply.
-</content>
