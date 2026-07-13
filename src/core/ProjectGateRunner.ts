@@ -402,13 +402,23 @@ export class ProjectGateRunner {
   // o execFile sem shell não o invoca de forma confiável no Windows — a mesma armadilha do gate TS). NUNCA
   // bloqueia; fail-open. Sem suíte (*.test/*.spec) / sem node_modules / sem runner suportado → advisory.
   //
-  // SEGURANÇA DO JUNCTION: provado ao vivo que `fs.rm(root, {recursive})` do Node NÃO segue o junction (só o
-  // deslinka), mas removemos o link EXPLICITAMENTE antes do rm (defesa em profundidade) — jamais apagar o
-  // node_modules do workspace.
+  // SEGURANÇA DO JUNCTION: (1) cleanup — provado ao vivo que `fs.rm(root, {recursive})` do Node NÃO segue o
+  // junction (só o deslinka), e removemos o link EXPLICITAMENTE antes do rm (defesa em profundidade). (2) o
+  // junction expõe o node_modules do workspace, GRAVÁVEL, ao código de teste em execução: como qualquer smoke
+  // (pytest/go test também EXECUTAM código gerado), um teste malicioso/bugado pode danificar o ambiente do
+  // dev — aqui um `fs.rm('node_modules/x')` RELATIVO ao cwd atravessaria o junction. Risco advisory ACEITO,
+  // como o precedente do venv no smokePython; mitigado por (a) gate em forge.test.enabled (o dev controla),
+  // (b) recusa quando o projeto GERADO traz o próprio node_modules (abaixo). Não copiamos node_modules inteiro.
   private async smokeTypescript(taskId: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<void> {
     const isTest = (p: string) => /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(p) || /(?:^|\/)__tests__\/.+\.[cm]?[jt]sx?$/i.test(p);
     const testProps = props.filter((e) => isTest(normGatePath(e.proposal.filePath)));
     if (testProps.length === 0) return; // sem suíte gerada — nada a rodar
+    // Projeto gerado que traz o PRÓPRIO node_modules: materializá-lo desabilitaria o junction (existsSync
+    // true) e daria um veredito de ambiente espúrio; pular é honesto (e evita o guard de junction falhar).
+    if (props.some((e) => /(?:^|\/)node_modules\//i.test(normGatePath(e.proposal.filePath)))) {
+      this.deps.post({ type: "stream/notice", taskId, level: "info", message: hostT("smoke.noRunner") });
+      return;
+    }
     const ws = this.deps.workspaceRoot();
     if (!ws || !existsSync(path.join(ws, "node_modules"))) {
       this.deps.post({ type: "stream/notice", taskId, level: "info", message: hostT("smoke.noRunner") });
@@ -430,14 +440,19 @@ export class ProjectGateRunner {
       junction = path.join(root, "node_modules");
       // Junction (Windows) / symlink (POSIX) do node_modules do workspace → resolve o runner + as deps.
       if (!existsSync(junction)) await fs.symlink(path.join(ws, "node_modules"), junction, "junction");
-      const timeoutMs = this.deps.config.run().timeoutSeconds * 1000;
+      // Piso de 1s no timeout: forge.run.timeoutSeconds=0 daria timeout 0 = SEM timeout no execFile, e um teste
+      // gerado que trava (servidor/while(true)) penduraria o Aplicar (runProjectSmoke é awaited). Como o RunService.
+      const timeoutMs = Math.max(1000, this.deps.config.run().timeoutSeconds * 1000);
       // CI/NO_COLOR: saída determinística e sem ANSI (o classificador casa texto); FORCE_COLOR=0 reforça.
       const env = { ...process.env, CI: "true", NO_COLOR: "1", FORCE_COLOR: "0" };
+      // outputCap AMPLO: o resumo (`Tests …`) mora no FIM (no jest, no stderr) e classifyCheck corta pela
+      // CABEÇA — truncar o resumo faria uma FALHA parecer AMBIENTE (achado HIGH da revisão). 200k cobre suítes
+      // reais; maxBuffer (16MB) captura tudo, isto só limita o guardado.
       const result = await runFileCheck(
         { id: "smoke:node", label: `${runner} (smoke)`, gate: false },
         "node",
         [resolved.entry, ...resolved.args],
-        { cwd: root, timeoutMs, outputCap: 16_000, env }
+        { cwd: root, timeoutMs, outputCap: 200_000, env }
       );
       const verdict = summarizeSmoke(result, "typescript");
       this.deps.post({ type: "stream/notice", taskId, level: verdict.level, message: verdict.message });
@@ -464,7 +479,7 @@ export class ProjectGateRunner {
     try {
       root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-smoke-"));
       await this.writeProjectTree(root, props);
-      const timeoutMs = this.deps.config.run().timeoutSeconds * 1000;
+      const timeoutMs = Math.max(1000, this.deps.config.run().timeoutSeconds * 1000); // piso: 0 = SEM timeout (pendura o Aplicar)
       // -p no:cacheprovider: não escreve .pytest_cache na árvore temp (que é descartada mesmo).
       const result = await runFileCheck(
         { id: "smoke:pytest", label: "pytest (smoke)", gate: false },
@@ -503,7 +518,7 @@ export class ProjectGateRunner {
       if (!existsSync(path.join(root, "go.mod"))) {
         await fs.writeFile(path.join(root, "go.mod"), "module forgesmoke\n\ngo 1.21\n", "utf8");
       }
-      const timeoutMs = this.deps.config.run().timeoutSeconds * 1000;
+      const timeoutMs = Math.max(1000, this.deps.config.run().timeoutSeconds * 1000); // piso: 0 = SEM timeout (pendura o Aplicar)
       const env = { ...process.env, GOPROXY: "off", GOFLAGS: "-mod=mod", GOWORK: "off", GOTOOLCHAIN: "local", GO111MODULE: "on", CGO_ENABLED: "0" };
       const result = await runFileCheck(
         { id: "smoke:gotest", label: "go test (smoke)", gate: false },

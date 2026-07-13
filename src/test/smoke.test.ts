@@ -214,3 +214,22 @@ test("summarizeSmoke ts: sem runner (skipped) → mensagem de runner indisponív
   assert.equal(v.ran, false);
   assert.match(v.message, /runner|vitest\/jest/i);
 });
+
+// REGRESSÃO (revisão adversarial, MEDIUM): exit 0 mas ZERO testes (passWithNoTests no config do projeto
+// gerado) NÃO é "passou" — espelha o ranReal do Go. Sem isto, "os testes PASSARAM" com nada rodado.
+test("summarizeSmoke ts: exit 0 com 'No test files found' (passWithNoTests) → nenhum teste, NÃO 'passou'", () => {
+  const v = summarizeSmoke(res("ok", "No test files found, exiting with code 0"), "typescript");
+  assert.equal(v.ran, false, "0 testes não é 'passou'");
+  assert.match(v.message, /nenhum teste/i);
+});
+
+// REGRESSÃO (revisão adversarial, HIGH): uma FALHA real cujo CORPO contém "SyntaxError"/"Cannot find module"
+// NÃO pode virar AMBIENTE (info) — a contagem de falha na linha `Tests` decide ANTES. (O outputCap amplo
+// preserva o resumo; aqui provamos que, com o resumo presente, a falha ganha do token de ambiente no corpo.)
+test("summarizeSmoke ts: FALHA com 'SyntaxError'/'Cannot find module' no corpo + resumo presente → FALHARAM (warn), NÃO ambiente", () => {
+  const out = " FAIL  src/parse.test.ts > rejeita malformado\nSyntaxError: Unexpected token }\n  ● Cannot find module 'x' (mensagem de erro asserida)\n\n Test Files  1 failed (1)\n      Tests  2 failed (2)\n";
+  const v = summarizeSmoke(res("failed", out), "typescript");
+  assert.equal(v.level, "warn", "a contagem 'Tests 2 failed' decide antes do token de ambiente no corpo");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /2 teste/);
+});

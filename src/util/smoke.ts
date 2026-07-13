@@ -115,12 +115,19 @@ function summarizeGoSmoke(result: ValidatorResult, out: string): SmokeVerdict {
 //           none(1) "No tests found" · AMBIENTE(1) "Test suite failed to run" + "Tests:       0 total"
 // CRUCIAL: exit != 0 cobre FALHA, NENHUM-TESTE e AMBIENTE (ts-jest quebra por versão o tempo todo) — então o
 // veredito vem do TEXTO, ancorado na linha `Tests` (NÃO `Test Suites`, que conta suítes: um `Test Suites: 1
-// failed` de erro de transform NÃO é teste falhando). Direção sempre correta mesmo se o resumo truncar:
-// exit 0 ⇒ passou; caso contrário, sem contagem de falha ⇒ notPassed (warn). O ts-jest frágil vira AMBIENTE.
+// failed` de erro de transform NÃO é teste falhando). O resumo (`Tests …`) mora no FIM da saída (no jest, no
+// stderr — concatenado por último) → o chamador passa um outputCap AMPLO (200k) para o resumo NÃO truncar,
+// senão uma FALHA cujo corpo contém "SyntaxError"/"Cannot find module" seria confundida com AMBIENTE (revisão
+// adversarial). Ordem de decisão à prova de truncamento: contagem de falha → AMBIENTE só sem contagem alguma.
 function summarizeNodeSmoke(result: ValidatorResult, out: string): SmokeVerdict {
-  // exit 0: vitest/jest só saem 0 quando testes RODARAM e passaram (sem --passWithNoTests, que não passamos).
+  // exit 0: vitest/jest só saem 0 quando testes RODARAM e passaram — EXCETO passWithNoTests (config do projeto
+  // gerado), que sai 0 com ZERO testes. Sem contagem de passed E com "no tests" → nada rodou (como o Go). O
+  // exigir evidência positiva espelha o summarizeGoSmoke (`ranReal`), fechando o mesmo buraco de falso-verde.
   if (result.status === "ok") {
-    const m = out.match(/Tests[:\s]+(\d+)\s+passed/i);
+    if (/No tests?(?: files?)? found/i.test(out) && !/\d+\s+passed/i.test(out)) {
+      return { ran: false, level: "info", message: hostT("smoke.none") };
+    }
+    const m = out.match(/^[ \t]*Tests[:\s]+(\d+)\s+passed/im);
     return { ran: true, level: "info", message: m ? hostT("smoke.node.passed", { count: m[1] }) : hostT("smoke.node.passedAll") };
   }
   // exit != 0: lê a linha `Tests` (resumo dos TESTES, não das suítes). `\d+ failed` com N>0 = testes falharam.
@@ -133,9 +140,12 @@ function summarizeNodeSmoke(result: ValidatorResult, out: string): SmokeVerdict 
   if (/No tests?(?: files?)? found/i.test(out)) {
     return { ran: false, level: "info", message: hostT("smoke.none") };
   }
-  // AMBIENTE (não é "teste falhou"): a suíte não pôde carregar/transformar/resolver. O caso dominante é o
-  // ts-jest incompatível ("Test suite failed to run" + "Tests: 0 total"); também transform/import de vitest.
-  if (/Test suite failed to run|Tests:\s+0\s+total|Cannot find (?:module|package)|Failed to (?:load|resolve|parse)|SyntaxError|TransformError|ERR_MODULE_NOT_FOUND/i.test(out)) {
+  // AMBIENTE (não é "teste falhou"): a suíte não pôde carregar/resolver — só se alcança aqui quando NÃO houve
+  // contagem de falha na linha `Tests` (o cap amplo garante que o resumo de uma falha REAL não trunque, então
+  // uma falha real já retornou acima). Os tokens são de nível-de-CARGA (suite-failed / módulo ausente /
+  // transform); deliberadamente SEM `SyntaxError`/`TransformError` crus, que dominam o CORPO de tracebacks de
+  // teste que falha — incluí-los inverteria warn→info se o resumo truncasse (achado HIGH da revisão adversarial).
+  if (/Test suite failed to run|Tests:\s+0\s+total|Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|Failed to (?:load|resolve|parse)|Transform failed/i.test(out)) {
     return { ran: false, level: "info", message: hostT("smoke.buildIssue") };
   }
   return { ran: true, level: "warn", message: hostT("smoke.notPassed") };
