@@ -3528,10 +3528,10 @@ export class Controller {
       return;
     }
     const proposal = await task.registerManualProposal(rel, content);
-    // O reducer da webview anexa a proposta ao último balão do assistente (ignora o taskId; postamos o da
-    // task só para satisfazer o tipo). A cerca comum ```lang PERMANECE visível no balão — o strip do
-    // reducer (stripFileBlockOfPath) só remove blocos forge-file, nunca cercas comuns; isso é intencional:
-    // o dev mantém o código à vista, agora com um cartão "Aplicar" ao lado.
+    // O reducer da webview casa a proposta pelo balão de id = taskId (o balão que contém a cerca); se esse
+    // task não transmitiu balão, cai no último balão do assistente (fallback). A cerca comum ```lang
+    // PERMANECE visível no balão — o strip do reducer (stripFileBlockOfPath) só remove blocos forge-file,
+    // nunca cercas comuns; isso é intencional: o dev mantém o código à vista, com um cartão "Aplicar" ao lado.
     this.post({ type: "stream/proposal", taskId: task.taskId, proposal });
   }
 

@@ -454,3 +454,65 @@ test("project/planStep narra a etapa atual do planejamento (antes do blueprint c
   // planStep sem projeto ativo é ignorado (no-op seguro)
   assert.equal(apply(initialState, { type: "project/planStep", label: "x" }).project, null);
 });
+
+// ---- R1: deltas do stream roteiam pelo taskId, não pela posição ("último balão do assistente") ----
+// stream/start cria o balão com id = taskId e stream/end o finaliza pelo mesmo id, mas os deltas
+// (skill/reasoning/text/proposal) roteavam pela POSIÇÃO — então um card local intercalado (/tokens,
+// /resumir…) ou um segundo stream concorrente sequestrava os deltas para o balão errado. Estes testes
+// introduzem justamente esse "balão competidor no fim" — falham no código antigo, passam com o taskId-keying.
+
+test("R1 stream/text roteia pelo taskId: card local intercalado NÃO sequestra o delta", () => {
+  let s = apply(initialState, { type: "stream/start", taskId: "t1" });
+  s = reducer(s, { kind: "pushLocal", text: "### Paleta" }); // card local vira o "último balão do assistente"
+  s = apply(s, { type: "stream/text", taskId: "t1", delta: "resposta do modelo" });
+  const bubble = s.messages.find((m) => m.id === "t1");
+  const local = s.messages.find((m) => m.id.startsWith("local_")); // localSeq é contador de módulo — nunca hardcodar o N
+  assert.equal(bubble?.text, "resposta do modelo", "o delta pousa no balão do stream (id === taskId)");
+  assert.equal(local?.text, "### Paleta", "o card local fica intacto — não recebe o delta");
+});
+
+test("R1 stream/text com dois streams concorrentes pousa no taskId certo, não no último balão", () => {
+  const s = apply(
+    initialState,
+    { type: "stream/start", taskId: "t1" },
+    { type: "stream/start", taskId: "t2" }, // t2 é o último balão
+    { type: "stream/text", taskId: "t1", delta: "para o t1" }
+  );
+  const b1 = s.messages.find((m) => m.id === "t1");
+  const b2 = s.messages.find((m) => m.id === "t2");
+  assert.equal(b1?.text, "para o t1", "o delta roteia para o balão do taskId, não para o último");
+  assert.equal(b2?.text, "", "o balão mais recente (t2) fica intacto");
+});
+
+test("R1 skill/reasoning/proposal também roteiam pelo taskId — card local intercalado fica vazio", () => {
+  let s = apply(initialState, { type: "stream/start", taskId: "t1" });
+  s = reducer(s, { kind: "pushLocal", text: "### Ajuda" });
+  s = apply(
+    s,
+    { type: "stream/skill", taskId: "t1", skill: "sql" },
+    { type: "stream/reasoning", taskId: "t1", delta: "pensando" },
+    { type: "stream/proposal", taskId: "t1", proposal: PROPOSAL }
+  );
+  const bubble = s.messages.find((m) => m.id === "t1");
+  const local = s.messages.find((m) => m.id.startsWith("local_"));
+  assert.deepEqual(bubble?.skills, ["sql"]);
+  assert.equal(bubble?.reasoning, "pensando");
+  assert.equal(bubble?.proposals.length, 1);
+  assert.equal(bubble?.proposals[0].proposal.id, "p1");
+  // o card local não recebeu NENHUM dos três deltas (skill/reasoning/proposal compartilhavam o mesmo bug)
+  assert.deepEqual(local?.skills, []);
+  assert.equal(local?.reasoning, "");
+  assert.equal(local?.proposals.length, 0);
+  assert.equal(local?.text, "### Ajuda");
+});
+
+test("R1 stream/proposal fora-de-banda sem balão do taskId cai no último balão (fallback, não some)", () => {
+  // Propostas FORA-DE-BANDA ("Salvar como arquivo") são postadas com currentTask.taskId — normalmente o
+  // balão que contém a cerca. Se esse task nunca transmitiu balão, o fallback anexa a proposta ao último
+  // balão do assistente em vez de descartá-la em silêncio (o Markdown já mostra "proposta criada" otimista).
+  let s = apply(initialState, { type: "stream/start", taskId: "t1" });
+  s = apply(s, { type: "stream/proposal", taskId: "sem_balao", proposal: PROPOSAL });
+  const bubble = s.messages.find((m) => m.id === "t1");
+  assert.equal(bubble?.proposals.length, 1, "a proposta cai no último balão (fallback) e não é perdida");
+  assert.equal(bubble?.proposals[0].proposal.id, "p1");
+});
