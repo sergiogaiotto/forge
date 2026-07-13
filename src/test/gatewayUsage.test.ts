@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-expect-error — módulo .mjs puro do gateway (sem tipos), importado só para teste.
-import { extractUsage } from "../../gateway/usage.mjs";
+import { extractUsage, withIncludeUsage } from "../../gateway/usage.mjs";
 
 // O bug corrigido: extractUsage INVERTIA input↔output na ordem PADRÃO do OpenAI (prompt_tokens antes de
 // completion_tokens). Testa AS DUAS ordens — um teste só com completion-first passaria contra o código
@@ -46,4 +46,22 @@ test("usage cumulativo em múltiplos chunks → usa a ÚLTIMA (total) ocorrênci
   const u = extractUsage(sse);
   assert.equal(u.inputTokens, 50);
   assert.equal(u.outputTokens, 25, "pega o total do último chunk, não o parcial");
+});
+
+// withIncludeUsage: força include_usage em streaming (fecha o bypass do teto FinOps — achado do survey).
+test("withIncludeUsage: injeta stream_options.include_usage=true em request de streaming", () => {
+  const out = JSON.parse(withIncludeUsage('{"stream":true,"messages":[]}'));
+  assert.equal(out.stream_options.include_usage, true);
+});
+
+test("withIncludeUsage: SOBREPÕE include_usage=false do cliente (adversário não desliga)", () => {
+  const out = JSON.parse(withIncludeUsage('{"stream":true,"stream_options":{"include_usage":false},"model":"x"}'));
+  assert.equal(out.stream_options.include_usage, true, "força true mesmo se o cliente pediu false");
+  assert.equal(out.model, "x", "preserva o resto do corpo");
+});
+
+test("withIncludeUsage: não-streaming e corpo malformado passam inalterados", () => {
+  assert.equal(withIncludeUsage('{"stream":false,"messages":[]}'), '{"stream":false,"messages":[]}', "não-streaming: sem mudança (usage sempre presente)");
+  assert.equal(withIncludeUsage('{"messages":[]}'), '{"messages":[]}', "sem stream: sem mudança");
+  assert.equal(withIncludeUsage("{ malformado"), "{ malformado", "malformado → repassa cru (não quebra o proxy)");
 });

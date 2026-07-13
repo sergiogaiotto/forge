@@ -52,6 +52,16 @@ export function estimateRequestTokens(bodyText, defaultMaxOut) {
   return inputEst + maxOut;
 }
 
+// Estimativa CONSERVADORA de tokens REALMENTE consumidos quando o upstream NÃO ecoou o bloco `usage` (apesar
+// do include_usage injetado — upstream que o ignora). Input do corpo enviado, output do texto recebido, ~len/4
+// cada. É o FALLBACK que impede o settle de estornar a reserva a zero quando não há usage — o chamador só o usa
+// se houve OUTPUT (geração real); output vazio (502/sem geração) segue estornando (actual=0). PURO.
+export function estimateActualTokens(bodyText, outputText) {
+  const inp = typeof bodyText === "string" ? Math.ceil(bodyText.length / 4) : 0;
+  const out = typeof outputText === "string" ? Math.ceil(outputText.length / 4) : 0;
+  return inp + out;
+}
+
 // Reconcilia uma RESERVA: troca `reserve` (estimado, cobrado no admit) pelo `actual` (real, pós-stream).
 // Aplica o delta ao total do dia com piso 0. Se o dia virou durante o stream (rollover no meio), a reserva
 // se perdeu — cobra só o actual no dia corrente.
