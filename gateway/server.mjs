@@ -18,10 +18,10 @@ import { fileURLToPath } from "node:url";
 import { createRevocationChecker } from "./revocations.mjs";
 import { processRelayBatch } from "./obsRelay.mjs";
 import { redact } from "./redaction.cjs";
-import { extractUsage } from "./usage.mjs";
+import { extractUsage, withIncludeUsage } from "./usage.mjs";
 import { pruneExpired, admitSession, authorizeScope, renewedExpiry } from "./sessions.mjs";
 import { buildProxyTraceEvents } from "./proxyTrace.mjs";
-import { utcDay, overBudget, charge, settle, estimateRequestTokens, pruneOldDays, serializeLedger, parseLedger } from "./spend.mjs";
+import { utcDay, overBudget, charge, settle, estimateRequestTokens, estimateActualTokens, pruneOldDays, serializeLedger, parseLedger } from "./spend.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, ".env"));
@@ -368,19 +368,23 @@ async function handleProxy(req, res, reqId) {
   const startTime = Date.now();
   let completionStartTime = 0;
   let output = "";
+  let upstreamOk = false; // o upstream respondeu 2xx (geração REAL)? gate do fallback de estimativa no settle
   try {
     let upstream;
     try {
       upstream = await fetch(`${CFG.upstreamBaseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(CFG.upstreamAuthHeader ? parseHeader(CFG.upstreamAuthHeader) : {}) },
-        body: bodyText,
+        // Injeta stream_options.include_usage=true (streaming) para o SSE trazer o bloco `usage` — sem isto o
+        // settle do FinOps estornaria a reserva a zero e o teto seria burlável (achado do survey).
+        body: withIncludeUsage(bodyText),
         signal: AbortSignal.timeout(CFG.upstreamTimeoutMs),
       });
     } catch (err) {
       logLine("error", "upstream inacessível", { reqId, error: err.message });
       return send(res, 502, { error: "upstream unavailable", detail: err.message }); // o finally reconcilia a reserva
     }
+    upstreamOk = upstream.ok; // 2xx = geração real; um corpo de erro (4xx/5xx) NÃO deve virar cobrança estimada
     res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") || "text/event-stream" });
     const reader = upstream.body?.getReader();
     const decoder = new TextDecoder();
@@ -401,7 +405,14 @@ async function handleProxy(req, res, reqId) {
     // reserva nunca fique presa inflando o teto. O extractUsage foi corrigido (não inverte input↔output).
     if (session.budget > 0) {
       const u = extractUsage(output);
-      settle(spendLedger, session.subject, day, reserve, (u.inputTokens || 0) + (u.outputTokens || 0));
+      const reported = (u.inputTokens || 0) + (u.outputTokens || 0);
+      // FALLBACK anti-bypass: se o upstream NÃO ecoou usage (apesar do include_usage) MAS houve geração REAL
+      // (2xx com output), cobra uma estimativa por bytes em vez de estornar a reserva a ZERO — senão o teto
+      // seria burlável. Gate em upstreamOk: um corpo de ERRO (4xx/5xx) ou 502/output-vazio segue estornando
+      // (actual=0) — senão uma requisição REJEITADA cobraria ~len/4 do corpo (até ~500K p/ um corpo de 2MB),
+      // podendo estourar o teto e causar um 402 espúrio (achado da revisão adversarial).
+      const actual = reported > 0 ? reported : upstreamOk && output.length > 0 ? estimateActualTokens(bodyText, output) : 0;
+      settle(spendLedger, session.subject, day, reserve, actual);
     }
   }
 }
@@ -440,14 +451,21 @@ async function router(req, res) {
         sessions: sessions.size, traceQueue: traceQueue.length, droppedTraces, langfuse: CFG.langfuse.enabled, spendSubjects: spendLedger.size, spendPersistOk,
       });
     }
-    if (req.method === "POST" && req.url === "/license/activate") return handleActivate(req, res, reqId);
-    if (req.method === "POST" && req.url === "/license/renew") return handleRenew(req, res, reqId);
-    if (req.method === "POST" && req.url === "/obs/ingest") return handleObsIngest(req, res, reqId);
-    if (req.method === "POST" && (req.url === "/v1/chat/completions" || req.url === "/chat/completions")) return handleProxy(req, res, reqId);
+    // AWAIT os handlers (não `return handleX(...)` cru): sem o await, a rejeição de um handler ASYNC escapa
+    // este try/catch SÍNCRONO e vira unhandledRejection — no Node >=15 isso DERRUBA o processo. Um POST
+    // NÃO-AUTENTICADO a /license/activate com corpo malformado (`{` → JSON.parse lança) ou >2MB (readBody
+    // lança) matava licença E proxy para TODOS. Com o await, o erro é capturado aqui → 400/500, sem crash.
+    if (req.method === "POST" && req.url === "/license/activate") return await handleActivate(req, res, reqId);
+    if (req.method === "POST" && req.url === "/license/renew") return await handleRenew(req, res, reqId);
+    if (req.method === "POST" && req.url === "/obs/ingest") return await handleObsIngest(req, res, reqId);
+    if (req.method === "POST" && (req.url === "/v1/chat/completions" || req.url === "/chat/completions")) return await handleProxy(req, res, reqId);
     send(res, 404, { error: "not found" });
   } catch (err) {
-    logLine("error", "erro de requisição", { reqId, error: err.message });
-    if (!res.headersSent) send(res, 500, { error: err.message });
+    // Corpo malformado / JSON inválido é erro do CLIENTE (400), não do servidor (500) — e não vaza detalhe
+    // interno. Um SyntaxError do JSON.parse do corpo cai aqui; qualquer outro erro segue 500.
+    const isBadBody = err instanceof SyntaxError || /payload muito grande/i.test(err.message || "");
+    logLine(isBadBody ? "info" : "error", isBadBody ? "corpo de requisição inválido" : "erro de requisição", { reqId, error: err.message });
+    if (!res.headersSent) send(res, isBadBody ? 400 : 500, { error: isBadBody ? "invalid request body" : "internal error" });
   }
 }
 
@@ -461,6 +479,18 @@ if (problems.some((p) => p.includes("keyinfo ausente"))) {
 const server = CFG.tls.key && CFG.tls.cert
   ? https.createServer({ key: fs.readFileSync(CFG.tls.key), cert: fs.readFileSync(CFG.tls.cert) }, router)
   : http.createServer(router);
+
+// Rede de SEGURANÇA (defesa em profundidade): um erro NÃO-tratado — uma rejeição de promise que escapou, um
+// throw async fora do try do router — NUNCA deve derrubar o gateway. Um crash é DoS para TODOS (licença E
+// proxy), e toda a governança (revogação, teto FinOps, sessões) é irrelevante se um curl mata o processo. O
+// `await` no router já cobre o caminho conhecido; estes handlers LOGAM e SEGUEM (não `process.exit`) qualquer
+// via async remanescente. A alternativa (encerrar) é justamente o DoS que estamos fechando.
+process.on("unhandledRejection", (reason) => {
+  logLine("error", "unhandledRejection (ignorada — gateway segue no ar)", { error: String((reason && reason.message) || reason).slice(0, 300) });
+});
+process.on("uncaughtException", (err) => {
+  logLine("error", "uncaughtException (ignorada — gateway segue no ar)", { error: String((err && err.message) || err).slice(0, 300) });
+});
 
 const sweepTimer = setInterval(() => pruneExpired(sessions, Math.floor(Date.now() / 1000)), 60000);
 const flushTimer = setInterval(() => void flushTraces(), CFG.langfuse.flushIntervalMs);

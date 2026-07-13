@@ -25,3 +25,23 @@ export function extractUsage(sse) {
     outputTokens: completion ? parseInt(completion, 10) : 0,
   };
 }
+
+// FORÇA `stream_options.include_usage: true` no corpo de um request de STREAMING antes de proxiar ao upstream
+// — sem isto o SSE do OpenAI-compatible NÃO emite o bloco `usage`, e extractUsage devolve {0,0}: o settle do
+// FinOps (#12) estornaria a reserva a ZERO e o teto de tokens/dia AUTORITATIVO seria 100% burlável por um
+// cliente que apenas OMITE include_usage. O gateway o injeta (sobrepondo qualquer valor do cliente), então a
+// contabilização deixa de ser controlada pelo cliente. Só streaming (não-streaming sempre traz `usage`).
+// Corpo malformado → repassa cru (o await no router cobre o erro; não quebrar o proxy). PURO/testável.
+export function withIncludeUsage(bodyText) {
+  try {
+    const o = JSON.parse(bodyText);
+    if (!o || typeof o !== "object" || o.stream !== true) return bodyText; // não-streaming / inválido → sem mudança
+    const so = o.stream_options && typeof o.stream_options === "object" ? o.stream_options : {};
+    if (so.include_usage === true) return bodyText; // já correto → NÃO re-serializa (evita a perda de precisão do
+    // round-trip JSON em inteiros > 2^53, ex.: um `seed` grande — só afeta o caminho de injeção, já raro).
+    o.stream_options = { ...so, include_usage: true }; // FORÇA true (sobrepõe include_usage:false/ausente do cliente)
+    return JSON.stringify(o);
+  } catch {
+    return bodyText; // corpo não-JSON → repassa como veio
+  }
+}
