@@ -300,14 +300,24 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
           { id: msg.taskId, role: "assistant", text: "", reasoning: "", skills: [], proposals: [], streaming: true },
         ],
       };
+    // Deltas do stream: casam o balão pelo `taskId` (simetria com stream/start, que cria o balão com
+    // id = taskId, e stream/end, que o finaliza pelo mesmo id) — NÃO pela posição. Casar por posição
+    // ("último balão do assistente") sequestra os deltas quando um card local se intercala (/tokens,
+    // /resumir…) ou dois streams rodam concorrentes (ex.: reviewChanges + chat), despejando texto/skill/
+    // raciocínio no balão errado.
     case "stream/skill":
-      return updateLastAssistant(state, (m) => (m.skills.includes(msg.skill) ? m : { ...m, skills: [...m.skills, msg.skill] }));
+      return updateAssistantById(state, msg.taskId, (m) => (m.skills.includes(msg.skill) ? m : { ...m, skills: [...m.skills, msg.skill] }));
     case "stream/reasoning":
-      return updateLastAssistant(state, (m) => ({ ...m, reasoning: m.reasoning + msg.delta }));
+      return updateAssistantById(state, msg.taskId, (m) => ({ ...m, reasoning: m.reasoning + msg.delta }));
     case "stream/text":
-      return updateLastAssistant(state, (m) => ({ ...m, text: m.text + msg.delta }));
+      return updateAssistantById(state, msg.taskId, (m) => ({ ...m, text: m.text + msg.delta }));
     case "stream/proposal":
-      return updateLastAssistant(state, (m) => ({
+      // Proposta pode vir DENTRO do stream (Task.run — o balão do taskId existe) ou FORA dele (botão
+      // "Salvar como arquivo"/materializeSkillTemplates postam com currentTask.taskId). Casa pelo taskId
+      // (anexa a proposta ao balão que contém a cerca ```lang, e acerta sob streams concorrentes); se
+      // nenhum balão casar (proposta fora-de-banda cujo task nunca transmitiu balão), cai no último balão
+      // para a proposta nunca sumir em silêncio — o Markdown já confirma "proposta criada" otimista.
+      return updateAssistantByIdOrLast(state, msg.taskId, (m) => ({
         ...m,
         text: stripFileBlockOfPath(m.text, msg.proposal.filePath),
         proposals: [...m.proposals, { proposal: msg.proposal, status: "pending" }],
@@ -565,7 +575,20 @@ function pushLocalMessage(state: UIState, text: string): UIState {
   };
 }
 
-function updateLastAssistant(state: UIState, fn: (m: MessageVM) => MessageVM): UIState {
+// Aplica fn ao balão do assistente cujo id === taskId. O balão é criado por stream/start (id = taskId) e
+// finalizado por stream/end pelo mesmo id; casar os deltas pelo taskId (e não pela posição) impede que um
+// card local intercalado ou um segundo stream concorrente receba os deltas errados. Sem casamento (task
+// abortado/limpo, ou nenhum balão): no-op seguro (map devolve o array intacto).
+function updateAssistantById(state: UIState, taskId: string, fn: (m: MessageVM) => MessageVM): UIState {
+  return { ...state, messages: state.messages.map((m) => (m.id === taskId ? fn(m) : m)) };
+}
+
+// Como updateAssistantById, mas com FALLBACK ao último balão do assistente quando nenhum casa o taskId.
+// Só o stream/proposal usa o fallback: propostas FORA-DE-BANDA ("Salvar como arquivo") são postadas com
+// currentTask.taskId — normalmente o balão que contém a cerca, mas se esse task nunca transmitiu um balão
+// o fallback garante que a proposta apareça (no último balão) em vez de sumir sob uma confirmação otimista.
+function updateAssistantByIdOrLast(state: UIState, taskId: string, fn: (m: MessageVM) => MessageVM): UIState {
+  if (state.messages.some((m) => m.id === taskId)) return updateAssistantById(state, taskId, fn);
   const target = lastAssistant(state.messages);
   if (!target) return state;
   return { ...state, messages: state.messages.map((m) => (m.id === target.id ? fn(m) : m)) };

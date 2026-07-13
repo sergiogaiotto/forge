@@ -94,8 +94,8 @@ export class Task {
   }
 
   // taskId desta task — o host o usa para correlacionar propostas sintetizadas FORA do stream (ex.: o
-  // botão "Salvar como arquivo" do CodeBox). O reducer da webview ignora o taskId ao anexar a proposta
-  // (usa o último balão do assistente), mas o tipo da mensagem stream/proposal o exige.
+  // botão "Salvar como arquivo" do CodeBox). O reducer da webview casa a proposta pelo balão de id = taskId
+  // (normalmente o que contém a cerca); se esse task não transmitiu balão, cai no último balão (fallback).
   get taskId(): string {
     return this.deps.taskId;
   }
