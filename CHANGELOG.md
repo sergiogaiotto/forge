@@ -43,6 +43,14 @@ escrita não-atômica que um crash corromperia, zerando o teto do dia (fechada c
   texto de template com `eval()` (prompt de LLM/erro/doc), `page.$eval`, `db.exec(sql+id)` e `re.exec` geravam
   falso-positivo; o `codeOnly` passou a apagar texto de template (mantendo `${…}`), e a detecção ganhou precisão
   de membro/receiver e import real. 0 achado espúrio no código não-teste do repo.
+- **DoD (Definição de Pronto) multi-linguagem — BLOQUEANTE para TS/Go/Java** (`dodCheck`): a "definição de
+  pronto" (manifesto de dependências + ao menos um teste + README com seção de "como rodar") era só Python.
+  Agora despacha por linguagem — TS (`package.json`, `*.test|spec.ts(x)`, `__tests__/`), Go (`go.mod`,
+  `*_test.go`), Java (`pom.xml`/`build.gradle`, `*Test.java`/`src/test/`) — e **bloqueia** um projeto COMPLETO
+  que não instala / não tem teste / não documenta como rodar (a mesma barra do Python; presença-based, não
+  pattern-scan; config-gated e forçável). O manifesto de OUTRA linguagem não satisfaz (um `package.json` num
+  projeto Go não conta). Precisão Java: `FooTest.java` exige **T maiúsculo** (JUnit é PascalCase) para não
+  contar `Contest.java` como teste.
 
 ### Security
 - **Redação do RAG na origem — texto E símbolo** (`CodebaseIndex`/`indexPersistence`): os chunks passam

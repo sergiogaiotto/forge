@@ -36,28 +36,58 @@ function baseOf(path: string): string {
   return norm(path).split("/").pop() ?? "";
 }
 
-// Manifesto de dependências Python: qualquer um destes SATISFAZ (basta existir — checagem por PATH). Cobre
-// requirements.txt e variantes (requirements-dev.txt), a pasta requirements/*.txt, e os manifestos de
-// empacotamento/ambiente.
-function isManifest(path: string): boolean {
+// Manifesto de dependências por LINGUAGEM: qualquer um SATISFAZ (basta existir — checagem por PATH).
+// Python: requirements*.txt + requirements/*.txt + pyproject/setup/Pipfile/environment. TS: package.json.
+// Go: go.mod. Java: pom.xml / build.gradle(.kts) / settings.gradle(.kts).
+function isManifest(path: string, language: ProjectLanguage): boolean {
   const p = norm(path);
-  return (
-    /(^|\/)requirements[^/]*\.txt$/.test(p) ||
-    /(^|\/)requirements\/[^/]+\.txt$/.test(p) ||
-    /(^|\/)(pyproject\.toml|setup\.py|setup\.cfg|pipfile|environment\.ya?ml)$/.test(p)
-  );
+  switch (language) {
+    case "python":
+      return (
+        /(^|\/)requirements[^/]*\.txt$/.test(p) ||
+        /(^|\/)requirements\/[^/]+\.txt$/.test(p) ||
+        /(^|\/)(pyproject\.toml|setup\.py|setup\.cfg|pipfile|environment\.ya?ml)$/.test(p)
+      );
+    case "typescript":
+      return /(^|\/)package\.json$/.test(p);
+    case "go":
+      return /(^|\/)go\.mod$/.test(p);
+    case "java":
+      return /(^|\/)(pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?)$/.test(p);
+    default:
+      return false;
+  }
 }
 
-// Arquivo de TESTE segundo a descoberta padrão do pytest (test_*.py / *_test.py em qualquer lugar), OU um
-// .py sob um diretório tests/ | test/ (exceto __init__.py — pacote vazio não é teste). Só checamos a
-// PRESENÇA de um arquivo de teste; se ele PASSA é papel do smoke test advisory (P4), não deste gate.
-function isTestFile(path: string): boolean {
+// Arquivo de TESTE pela convenção padrão de cada linguagem (só checamos a PRESENÇA; se PASSA é papel do
+// smoke test advisory, não deste gate). Python: test_*.py / *_test.py / sob tests|test/ (exceto __init__.py).
+// TS: *.test|spec.(ts|tsx|js|jsx) ou sob __tests__|tests|test/. Go: *_test.go. Java: *Test.java/*Tests.java
+// ou sob um dir test/.
+function isTestFile(path: string, language: ProjectLanguage): boolean {
   const p = norm(path);
-  if (!p.endsWith(".py")) return false;
   const base = baseOf(p);
-  if (/^test_.+\.py$/.test(base) || /.+_test\.py$/.test(base)) return true;
   const dirs = p.split("/").slice(0, -1);
-  return dirs.some((d) => d === "tests" || d === "test") && base !== "__init__.py";
+  switch (language) {
+    case "python":
+      if (!p.endsWith(".py")) return false;
+      if (/^test_.+\.py$/.test(base) || /.+_test\.py$/.test(base)) return true;
+      return dirs.some((d) => d === "tests" || d === "test") && base !== "__init__.py";
+    case "typescript":
+      if (/\.(test|spec)\.[cm]?[jt]sx?$/.test(base)) return true;
+      return dirs.some((d) => d === "__tests__" || d === "tests" || d === "test") && /\.[cm]?[jt]sx?$/.test(base);
+    case "go":
+      return /_test\.go$/.test(base);
+    case "java": {
+      // FooTest.java / FooTests.java (JUnit; classes são PascalCase → T MAIÚSCULO, para não casar
+      // "Contest.java", uma palavra terminando em "test"). Usa o basename com case ORIGINAL (norm/baseOf
+      // minusculizam). OU sob um dir test/ (layout Maven/Gradle) — o caminho lowercased serve.
+      const rawBase = (path ?? "").replace(/\\/g, "/").split("/").pop() ?? "";
+      if (/[A-Za-z0-9]Tests?\.java$/.test(rawBase)) return true;
+      return dirs.some((d) => d === "test" || d === "tests") && base.endsWith(".java");
+    }
+    default:
+      return false;
+  }
 }
 
 // README (para efeito de PRESENÇA): qualquer README* comum. Não confunde caixa nem extensão.
@@ -89,27 +119,34 @@ function hasMarkdownRunSection(content: string): boolean {
   return false;
 }
 
+// Exemplos por LINGUAGEM para as mensagens acionáveis (só o texto do exemplo muda; a lógica é a mesma).
+const DOD_HINTS: Partial<Record<ProjectLanguage, { manifest: string; test: string }>> = {
+  python: { manifest: "requirements.txt / pyproject.toml", test: "test_*.py ou tests/" },
+  typescript: { manifest: "package.json", test: "*.test.ts / *.spec.ts" },
+  go: { manifest: "go.mod", test: "*_test.go" },
+  java: { manifest: "pom.xml / build.gradle", test: "*Test.java ou src/test/" },
+};
+
 // Avalia a definição de pronto sobre o CONJUNTO de arquivos do projeto. Retorna um achado por requisito
-// ausente; vazio = pronto. PURO. Só Python por ora (os matchers são à moda Python); outras linguagens
-// retornam [] (não bloqueiam) até o DoD ser estendido junto com o gate multi-linguagem. O chamador só deve
+// ausente; vazio = pronto. PURO. Cobre python/typescript/go/java (os matchers de manifesto/teste despacham
+// por linguagem; readme-run é agnóstico); outras linguagens não têm DoD (não bloqueiam). O chamador só deve
 // avaliar quando o conjunto está COMPLETO (todo o blueprint gerado) — ver evaluateDodGate.
 export function checkDefinitionOfDone(files: DodFile[], language: ProjectLanguage): DodFinding[] {
-  if (language !== "python") return [];
+  const hints = DOD_HINTS[language];
+  if (!hints) return [];
   const findings: DodFinding[] = [];
 
-  if (!files.some((f) => isManifest(f.path))) {
+  if (!files.some((f) => isManifest(f.path, language))) {
     findings.push({
       requirement: "manifest",
-      message:
-        "Sem manifesto de dependências (requirements.txt / pyproject.toml): ninguém consegue instalar o projeto. Gere um manifesto declarando as dependências.",
+      message: `Sem manifesto de dependências (${hints.manifest}): ninguém consegue instalar o projeto. Gere um manifesto declarando as dependências.`,
     });
   }
 
-  if (!files.some((f) => isTestFile(f.path))) {
+  if (!files.some((f) => isTestFile(f.path, language))) {
     findings.push({
       requirement: "tests",
-      message:
-        "Nenhum teste gerado (test_*.py ou tests/): nada prova que o projeto de fato roda. Gere ao menos um teste do caminho principal.",
+      message: `Nenhum teste gerado (${hints.test}): nada prova que o projeto de fato roda. Gere ao menos um teste do caminho principal.`,
     });
   }
 
