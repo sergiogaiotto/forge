@@ -81,6 +81,7 @@ export type HostMessageKey =
   | "notice.regate.running"
   | "notice.deps.reconciled"
   | "notice.smoke.noVenv"
+  | "notice.smoke.noGo"
   // Aplicar
   | "notice.applyAll"
   | "notice.applyAll.applied"
@@ -209,6 +210,8 @@ export type HostMessageKey =
   | "smoke.noPytest"
   | "smoke.importFailed"
   | "smoke.notPassed"
+  | "smoke.noGo"
+  | "smoke.buildIssue"
   // Diálogos nativos
   | "dialog.ragReindexed"
   | "dialog.role.placeholder"
@@ -505,6 +508,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.regate.running": "Re-rodando a verificação sobre as propostas existentes…",
     "notice.deps.reconciled": "Reconciliação de dependências: adicionei ao {path} {count} pacote(s) usado(s) no código mas não declarado(s): {packages}. Revise antes de aplicar.",
     "notice.smoke.noVenv": "Smoke test dos testes gerados pulado: sem venv do workspace. Rode Preparar ambiente para validar que o projeto de fato roda.",
+    "notice.smoke.noGo": "Smoke test dos testes gerados pulado: `go` indisponível. Instale o Go para validar que o projeto de fato roda.",
     "notice.applyAll": "Aplicar tudo: {parts}.",
     "notice.applyAll.applied": "{count} aplicado(s)",
     "notice.applyAll.blocked": "{count} bloqueado(s) pelo quality gate",
@@ -617,12 +621,14 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "smoke.timeout": "Smoke test dos testes gerados: tempo esgotado (inconclusivo — não bloqueia).",
     "smoke.noPython": "Smoke test pulado: Python indisponível para rodar a suíte gerada.",
     "smoke.passed": "Smoke test: {count} teste(s) gerado(s) PASSARAM no venv do workspace — o projeto de fato roda, não só compila.",
-    "smoke.passedAll": "Smoke test: os teste(s) gerado(s) PASSARAM no venv do workspace — o projeto de fato roda, não só compila.",
+    "smoke.passedAll": "Smoke test: os teste(s) gerado(s) PASSARAM — o projeto de fato roda, não só compila.",
     "smoke.failed": "Smoke test: {count} teste(s) gerado(s) FALHARAM no venv do workspace — revise antes de aplicar. (Advisory: o gate não bloqueia o Aplicar por isto.)",
     "smoke.none": "Smoke test: nenhum teste foi coletado na suíte gerada.",
     "smoke.noPytest": "Smoke test pulado: pytest não está instalado no venv. Rode Preparar ambiente para validar que os testes gerados passam.",
     "smoke.importFailed": "Smoke test pulado: não consegui importar todos os módulos (dependências de terceiros ausentes, ou o projeto precisa de instalação editável). Rode Preparar ambiente — os testes gerados ainda não foram executados.",
     "smoke.notPassed": "Smoke test: a suíte gerada não passou (veja os logs do FORGE em Mostrar logs). Revise antes de aplicar. (Advisory: não bloqueia o Aplicar.)",
+    "smoke.noGo": "Smoke test pulado: `go` indisponível para rodar a suíte gerada.",
+    "smoke.buildIssue": "Smoke test inconclusivo: a suíte não pôde compilar/rodar offline (deps ou build — veja o aviso de compilação). (Advisory.)",
     "dialog.ragReindexed": "FORGE RAG: {files} arquivos, {chunks} trechos (modo {mode}).",
     "dialog.role.placeholder": "Seu papel no projeto — ajusta o estilo e os defaults do FORGE",
     "role.cientista": "Cientista de dados",
@@ -905,6 +911,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.regate.running": "Re-running the verification over the existing proposals…",
     "notice.deps.reconciled": "Dependency reconciliation: added to {path} {count} package(s) used in the code but not declared: {packages}. Review before applying.",
     "notice.smoke.noVenv": "Smoke test of the generated tests skipped: no workspace venv. Run Prepare environment to validate that the project actually runs.",
+    "notice.smoke.noGo": "Smoke test of the generated tests skipped: `go` unavailable. Install Go to validate that the project actually runs.",
     "notice.applyAll": "Apply all: {parts}.",
     "notice.applyAll.applied": "{count} applied",
     "notice.applyAll.blocked": "{count} blocked by the quality gate",
@@ -1017,12 +1024,14 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "smoke.timeout": "Smoke test of the generated tests: time ran out (inconclusive — non-blocking).",
     "smoke.noPython": "Smoke test skipped: Python unavailable to run the generated suite.",
     "smoke.passed": "Smoke test: {count} generated test(s) PASSED in the workspace venv — the project actually runs, not just compiles.",
-    "smoke.passedAll": "Smoke test: the generated test(s) PASSED in the workspace venv — the project actually runs, not just compiles.",
+    "smoke.passedAll": "Smoke test: the generated test(s) PASSED — the project actually runs, not just compiles.",
     "smoke.failed": "Smoke test: {count} generated test(s) FAILED in the workspace venv — review before applying. (Advisory: the gate doesn't block Apply for this.)",
     "smoke.none": "Smoke test: no tests were collected in the generated suite.",
     "smoke.noPytest": "Smoke test skipped: pytest is not installed in the venv. Run Prepare environment to validate that the generated tests pass.",
     "smoke.importFailed": "Smoke test skipped: I couldn't import all the modules (missing third-party dependencies, or the project needs an editable install). Run Prepare environment — the generated tests haven't been executed yet.",
     "smoke.notPassed": "Smoke test: the generated suite didn't pass (see the FORGE logs in Show logs). Review before applying. (Advisory: doesn't block Apply.)",
+    "smoke.noGo": "Smoke test skipped: `go` unavailable to run the generated suite.",
+    "smoke.buildIssue": "Smoke test inconclusive: the suite couldn't compile/run offline (deps or build — see the compile advisory). (Advisory.)",
     "dialog.ragReindexed": "FORGE RAG: {files} files, {chunks} chunks (mode {mode}).",
     "dialog.role.placeholder": "Your role in the project — adjusts FORGE's style and defaults",
     "role.cientista": "Data scientist",
@@ -1305,6 +1314,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.regate.running": "Re-ejecutando la verificación sobre las propuestas existentes…",
     "notice.deps.reconciled": "Reconciliación de dependencias: añadí a {path} {count} paquete(s) usados en el código pero no declarados: {packages}. Revisa antes de aplicar.",
     "notice.smoke.noVenv": "Smoke test de las pruebas generadas omitido: sin venv del workspace. Ejecuta Preparar entorno para validar que el proyecto de verdad corre.",
+    "notice.smoke.noGo": "Smoke test de las pruebas generadas omitido: `go` no disponible. Instala Go para validar que el proyecto de verdad corre.",
     "notice.applyAll": "Aplicar todo: {parts}.",
     "notice.applyAll.applied": "{count} aplicado(s)",
     "notice.applyAll.blocked": "{count} bloqueado(s) por el quality gate",
@@ -1417,12 +1427,14 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "smoke.timeout": "Smoke test de las pruebas generadas: tiempo agotado (inconcluso — no bloquea).",
     "smoke.noPython": "Smoke test omitido: Python no disponible para ejecutar la suite generada.",
     "smoke.passed": "Smoke test: {count} prueba(s) generadas PASARON en el venv del workspace — el proyecto de verdad corre, no solo compila.",
-    "smoke.passedAll": "Smoke test: las prueba(s) generadas PASARON en el venv del workspace — el proyecto de verdad corre, no solo compila.",
+    "smoke.passedAll": "Smoke test: las prueba(s) generadas PASARON — el proyecto de verdad corre, no solo compila.",
     "smoke.failed": "Smoke test: {count} prueba(s) generadas FALLARON en el venv del workspace — revisa antes de aplicar. (Advisory: el gate no bloquea el Aplicar por esto.)",
     "smoke.none": "Smoke test: ninguna prueba fue recolectada en la suite generada.",
     "smoke.noPytest": "Smoke test omitido: pytest no está instalado en el venv. Ejecuta Preparar entorno para validar que las pruebas generadas pasan.",
     "smoke.importFailed": "Smoke test omitido: no pude importar todos los módulos (dependencias de terceros ausentes, o el proyecto necesita instalación editable). Ejecuta Preparar entorno — las pruebas generadas aún no fueron ejecutadas.",
     "smoke.notPassed": "Smoke test: la suite generada no pasó (mira los logs de FORGE en Mostrar logs). Revisa antes de aplicar. (Advisory: no bloquea el Aplicar.)",
+    "smoke.noGo": "Smoke test omitido: `go` no disponible para ejecutar la suite generada.",
+    "smoke.buildIssue": "Smoke test no concluyente: la suite no pudo compilar/correr offline (deps o build — mira el aviso de compilación). (Advisory.)",
     "dialog.ragReindexed": "FORGE RAG: {files} archivos, {chunks} fragmentos (modo {mode}).",
     "dialog.role.placeholder": "Tu rol en el proyecto — ajusta el estilo y los defaults de FORGE",
     "role.cientista": "Científico de datos",
