@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyProjectIntent } from "../util/projectIntent";
+import { classifyProjectIntent, forcesHexagonalBackend } from "../util/projectIntent";
 
 const gen = (t: string) => assert.equal(classifyProjectIntent(t), "generate", `esperava generate: ${JSON.stringify(t)}`);
 const chat = (t: string) => assert.equal(classifyProjectIntent(t), "chat", `esperava chat: ${JSON.stringify(t)}`);
@@ -103,4 +103,27 @@ test("brief curto sem verbo/pergunta e vazio caem no default do Modo Projeto →
   gen("app que mostra onde estão os itens do estoque"); // "onde" no meio não é pergunta
   gen("");
   gen("   ");
+});
+
+// ---- R3: force-ativação da skill hexagonal-backend pela ESCOLHA do wizard (não pelo léxico do brief) ----
+// O seletor léxico não ativa a skill num brief comum ("gerenciador de senhas" → score 0.0, medido ao vivo);
+// a escolha estruturada python+hexagonal do wizard força. Testa o caso ALVO e os PERIGOSOS (o que NÃO força).
+test("forcesHexagonalBackend: SÓ Modo Projeto + Python + família ports/adapters (hexagonal|clean) força a skill", () => {
+  const P = { language: "python", architecture: "hexagonal" };
+  assert.equal(forcesHexagonalBackend("project", P), true, "python+hexagonal no wizard força");
+  // clean também: a skill anuncia cobrir "clean architecture, dependency inversion" (SKILL.md) e sofre o mesmo
+  // lexical-miss; compartilha inversão-de-dependência + fronteiras, e o playbook Python-level é o mesmo.
+  assert.equal(forcesHexagonalBackend("project", { language: "python", architecture: "clean" }), true);
+  // NÃO força: layered/mvc são paradigmas SEM ports — o playbook (Protocol/adapters) não encaixa.
+  assert.equal(forcesHexagonalBackend("project", { language: "python", architecture: "layered" }), false);
+  assert.equal(forcesHexagonalBackend("project", { language: "python", architecture: "mvc" }), false);
+  // NÃO força: skill é Python-only (FastAPI/Flask) — forçar num Go/TS/Java hexagonal ensinaria Python errado.
+  assert.equal(forcesHexagonalBackend("project", { language: "go", architecture: "hexagonal" }), false);
+  assert.equal(forcesHexagonalBackend("project", { language: "typescript", architecture: "hexagonal" }), false);
+  assert.equal(forcesHexagonalBackend("project", { language: "java", architecture: "hexagonal" }), false);
+  // NÃO força fora do Modo Projeto (chat/tdd usam o léxico + o isFrontendRequest, não esta regra).
+  assert.equal(forcesHexagonalBackend("normal", P), false);
+  assert.equal(forcesHexagonalBackend("tdd", P), false);
+  // Defensivo: sem project (não deveria ocorrer no modo projeto) → não força, sem lançar.
+  assert.equal(forcesHexagonalBackend("project", undefined), false);
 });

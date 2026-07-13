@@ -57,3 +57,21 @@ export function classifyProjectIntent(text: string): ProjectIntent {
   if (/\?\s*$/.test(t)) return "chat"; // 5. qualquer pergunta restante → responde no chat
   return "generate"; // 6. default do Modo Projeto
 }
+
+// R3: no Modo Projeto o dev escolhe a arquitetura no wizard (dado ESTRUTURADO), mas o seletor de skills só vê
+// o BRIEF ("gerenciador de senhas") — que não carrega os tokens distintivos (hexagonal/ports/adapters). Então
+// a skill carro-chefe `hexagonal-backend` NÃO ativa por léxico, e a geração perde o playbook alinhado aos gates
+// (layout flat que boota, DoD, Protocol/ABC). O host FORÇA a ativação pela ESCOLHA explícita do wizard. Como é
+// dado estruturado — não heurística de texto — NUNCA sequestra o público de DADOS, ao contrário do over-trigger
+// léxico que a skill teve de evitar. Dispara para a FAMÍLIA ports/adapters que a skill anuncia cobrir (a própria
+// description cita "clean architecture, dependency inversion"): `hexagonal` E `clean` — ambas compartilham
+// inversão-de-dependência + fronteiras por interface, e o playbook (layout flat, Protocol/ABC, fake-adapters) é
+// Python-level, agnóstico entre as duas. NÃO dispara p/ `layered`/`mvc` (paradigmas sem ports — o playbook não
+// encaixa) nem fora de Python (a skill é FastAPI/Flask). Params estruturais para manter o módulo puro. Puro.
+export function forcesHexagonalBackend(mode: string, project?: { language?: string; architecture?: string }): boolean {
+  return (
+    mode === "project" &&
+    project?.language === "python" &&
+    (project?.architecture === "hexagonal" || project?.architecture === "clean")
+  );
+}
