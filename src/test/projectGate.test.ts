@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ValidatorResult } from "../shared/protocol";
 import {
+  blockingMypyErrors,
   contractGateDecision,
   contractUnverified,
+  firstPartyRoots,
   GateCheckResult,
   isBlockingTscContract,
   isTscSyntaxError,
@@ -137,6 +139,84 @@ test("parseMypyErrors: coleta só linhas 'error' (com/sem coluna), ignora 'note'
   assert.match(map.get("adapters/api.py")!.join("\n"), /linha 5: Module "domain.models" has no attribute "OrderStatus"/);
   assert.match(map.get("application/use_cases.py")!.join("\n"), /linha 12:.*order_id/);
   assert.equal(map.get("adapters/api.py")!.length, 1); // a 'note' não entra
+});
+
+// ---- R2: gate mypy pega o import-fantasma FIRST-PARTY (removido o --ignore-missing-imports) ----
+
+test("firstPartyRoots: top-level dos .py do projeto; ignora não-.py e nomes inválidos de pacote", () => {
+  const roots = firstPartyRoots(
+    new Set(["app/main.py", "app/domain/order.py", "tests/test_x.py", "main.py", "README.md", "my-app/x.py", "requirements.txt"])
+  );
+  // 'app/main.py' → 'app'; 'main.py' de topo → 'main'; 'my-app' não é identificador Python → fora; .md/.txt → fora.
+  assert.deepEqual([...roots].sort(), ["app", "main", "tests"]);
+});
+
+// Saída REAL do mypy 2.3.0 SEM --ignore-missing-imports sobre uma árvore com: (1) módulo first-party fantasma,
+// (2) símbolo fantasma em módulo existente, (3+3b) terceiros ausentes, (5) erro de tipo. Capturada ao vivo.
+const MYPY_OUT_R2 = [
+  'app\\main.py:1: error: Cannot find implementation or library stub for module named "app.domain.user"  [import-not-found]',
+  "app\\main.py:1: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports",
+  'app\\main.py:2: error: Module "app.domain.order" has no attribute "Order"; maybe "NotOrder"?  [attr-defined]',
+  'app\\main.py:3: error: Module "app" has no attribute "missing_sibling"  [attr-defined]',
+  'app\\main.py:4: error: Cannot find implementation or library stub for module named "fastapi"  [import-not-found]',
+  'app\\main.py:5: error: Cannot find implementation or library stub for module named "sqlalchemy.orm"  [import-not-found]',
+  'app\\main.py:7: error: Incompatible types in assignment (expression has type "str", variable has type "int")  [assignment]',
+].join("\n");
+
+test("blockingMypyErrors: mantém o import-fantasma FIRST-PARTY + attr/tipo; descarta o import de TERCEIROS", () => {
+  const raw = parseMypyErrors(MYPY_OUT_R2, "");
+  const known = new Set(["app/__init__.py", "app/domain/__init__.py", "app/domain/order.py", "app/main.py"]);
+  const blocking = blockingMypyErrors(raw, { firstPartyRoots: new Set(["app"]), knownFiles: known });
+  const joined = (blocking.get("app/main.py") ?? []).join("\n");
+  // MANTÉM: fantasma first-party (o ImportError que derruba o app — o alvo do R2), símbolo, atributo, tipo.
+  assert.match(joined, /app\.domain\.user/);
+  assert.match(joined, /has no attribute "Order"/);
+  assert.match(joined, /missing_sibling/);
+  assert.match(joined, /Incompatible types/);
+  // DESCARTA: terceiros não instalados no temp (o ruído que o --ignore-missing-imports mascarava).
+  assert.doesNotMatch(joined, /fastapi/);
+  assert.doesNotMatch(joined, /sqlalchemy/);
+  assert.equal((blocking.get("app/main.py") ?? []).length, 4);
+});
+
+test("blockingMypyErrors: projeto que só usa TERCEIROS ausentes → mapa vazio (contrato verificado, não bloqueia)", () => {
+  const out = [
+    'app\\main.py:1: error: Cannot find implementation or library stub for module named "fastapi"  [import-not-found]',
+    'app\\main.py:2: error: Cannot find implementation or library stub for module named "sqlalchemy.orm"  [import-not-found]',
+    // import-untyped (dep INSTALADA mas sem stubs) também é ruído de terceiros → descarta.
+    'app\\main.py:3: error: Skipping analyzing "requests": module is installed, but missing library stubs or py.typed marker  [import-untyped]',
+  ].join("\n");
+  const blocking = blockingMypyErrors(parseMypyErrors(out, ""), { firstPartyRoots: new Set(["app"]), knownFiles: new Set(["app/main.py", "app/__init__.py"]) });
+  assert.equal(blocking.size, 0); // o runner marca o mypy como "ok" (rodou, sem drift first-party)
+});
+
+test("blockingMypyErrors: import first-party a um arquivo CONHECIDO (parcial/aplicado) → advisory; fantasma real → bloqueia", () => {
+  const out = 'app\\main.py:1: error: Cannot find implementation or library stub for module named "app.repo"  [import-not-found]';
+  // app/repo.py EXISTE no universo (aplicado antes / parcial não-materializado) → não é drift (como no gate TS).
+  const known = new Set(["app/main.py", "app/repo.py", "app/__init__.py"]);
+  assert.equal(blockingMypyErrors(parseMypyErrors(out, ""), { firstPartyRoots: new Set(["app"]), knownFiles: known }).size, 0);
+  // mesmo módulo, mas o arquivo NÃO existe no universo → fantasma real → BLOQUEIA.
+  const phantom = blockingMypyErrors(parseMypyErrors(out, ""), { firstPartyRoots: new Set(["app"]), knownFiles: new Set(["app/main.py", "app/__init__.py"]) });
+  assert.equal(phantom.get("app/main.py")?.length, 1);
+});
+
+test("blockingMypyErrors: pacote first-party fantasma via __init__ (app/domain.py e app/domain/__init__.py ausentes) bloqueia", () => {
+  const out = 'app\\main.py:1: error: Cannot find implementation or library stub for module named "app.domain"  [import-not-found]';
+  const blocking = blockingMypyErrors(parseMypyErrors(out, ""), { firstPartyRoots: new Set(["app"]), knownFiles: new Set(["app/main.py", "app/__init__.py"]) });
+  assert.equal(blocking.get("app/main.py")?.length, 1);
+});
+
+// FB-1 (revisão adversarial ao vivo): geração INCREMENTAL de pacote NAMESPACE (sem __init__.py). O submódulo
+// `from app.domain import user` (ou `import app.domain.user`) foi APLICADO em rodada anterior e NÃO é
+// materializado nesta; o mypy reporta o PACOTE 'app.domain' (não o leaf). Sem o prefixo, o app/domain/user.py
+// conhecido não casava e o arquivo — que RODA (exit 0) — era falso-bloqueado (regressão do R2). Reproduzido vivo.
+test("blockingMypyErrors: submódulo de pacote NAMESPACE aplicado antes (mypy reporta o PACOTE) → advisory, não bloqueia (FB-1)", () => {
+  const out = 'app\\services\\user_service.py:1: error: Cannot find implementation or library stub for module named "app.domain"  [import-not-found]';
+  const known = new Set(["app/services/user_service.py", "app/domain/user.py"]); // sem app/domain/__init__.py (namespace)
+  assert.equal(blockingMypyErrors(parseMypyErrors(out, ""), { firstPartyRoots: new Set(["app"]), knownFiles: known }).size, 0, "arquivo legítimo não pode ser bloqueado");
+  // controle: NADA conhecido SOB app/domain/ → fantasma real → BLOQUEIA.
+  const phantom = blockingMypyErrors(parseMypyErrors(out, ""), { firstPartyRoots: new Set(["app"]), knownFiles: new Set(["app/services/user_service.py"]) });
+  assert.equal(phantom.get("app/services/user_service.py")?.length, 1);
 });
 
 test("mypyUnavailable: 'No module named mypy' → indisponível (não é reprovação real)", () => {

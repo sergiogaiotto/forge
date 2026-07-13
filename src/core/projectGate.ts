@@ -112,6 +112,82 @@ export function parseMypyErrors(output: string, root = ""): Map<string, string[]
   return map;
 }
 
+// R2: o import-fantasma FIRST-PARTY (o "ImportError que derruba o app": `from app.domain.user import User`
+// sem `app/domain/user.py` no conjunto) era SILENCIADO junto com o ruído de terceiros pelo
+// --ignore-missing-imports do gate mypy — instalava o mypy mas o contrato de MÓDULO ficava cego. Removido o
+// flag, o mypy emite `import-not-found`/`import-untyped` para TODO import não-resolvível; estas funções puras
+// separam o fantasma first-party (que BLOQUEIA) do ruído de TERCEIROS (deps não instaladas no temp) e de
+// módulos CONHECIDOS não materializados nesta rodada (parcial/aplicado) — espelhando isBlockingTscContract.
+
+// Top-level dos pacotes/módulos do PROJETO (first-party), derivado do universo conhecido de arquivos.
+// `app/main.py` → `app`; um `main.py` de topo → `main`. Só identificadores Python válidos (o resto nem importa).
+export function firstPartyRoots(knownFiles: Set<string>): Set<string> {
+  const roots = new Set<string>();
+  for (const p of knownFiles) {
+    const norm = normGatePath(p);
+    if (!norm.toLowerCase().endsWith(".py")) continue;
+    const first = norm.split("/")[0]; // `app/x.py` → `app` (dir); `main.py` de topo → `main.py` (arquivo)
+    const name = /\.py$/i.test(first) ? first.slice(0, -3) : first;
+    if (PKG_SEGMENT.test(name)) roots.add(name);
+  }
+  return roots;
+}
+
+// Extrai o nome do módulo de um erro `import-not-found`/`import-untyped` do mypy; null se a msg não for desse
+// tipo. O módulo é sempre o 1º token entre aspas ("app.domain.user" | "fastapi"). Casa pelo [code] (default do
+// mypy, reforçado por --show-error-codes) OU pelo texto (defesa dupla, versão/config-robusta).
+function missingImportModule(msg: string): string | null {
+  const isMissing =
+    /\[import-(?:not-found|untyped)\]/.test(msg) ||
+    /Cannot find implementation or library stub for module named|module is installed, but missing library stubs/i.test(msg);
+  if (!isMissing) return null;
+  return /["']([^"']+)["']/.exec(msg)?.[1] ?? null;
+}
+
+// Um módulo pontilhado é CONHECIDO (parcial/aplicado no universo, não materializado nesta rodada — geração
+// incremental, NÃO drift) quando: (a) resolve a um arquivo direto `mod.py` ou pacote `mod/__init__.py`; OU
+// (b) o mypy reportou o PACOTE (não o leaf — é o que ele faz em `from pkg.sub import x` / `import pkg.sub.x`,
+// nomeando `pkg` ou `pkg.sub`) e há algum arquivo conhecido SOB esse pacote (prefixo `mod/`). Sem (b),
+// `from app.domain import user` de um submódulo aplicado NAMESPACE-style (sem __init__.py) falso-bloquearia
+// código que RODA. Espelha o resolveRelCandidates do gate TS para a geração incremental. Puro.
+function moduleIsKnown(mod: string, knownFiles: Set<string>): boolean {
+  const asPath = mod.replace(/\./g, "/");
+  if (knownFiles.has(`${asPath}.py`) || knownFiles.has(`${asPath}/${SYNTHETIC_INIT}`)) return true;
+  const prefix = `${asPath}/`;
+  for (const f of knownFiles) if (f.startsWith(prefix)) return true; // algum arquivo conhecido SOB o pacote
+  return false;
+}
+
+// Filtra o mapa de erros do mypy para conter SÓ o que deve BLOQUEAR o Aplicar: remove o `import-not-found`/
+// `import-untyped` de TERCEIROS (top-level fora dos roots do projeto — deps não instaladas no temp) e o de
+// módulos CONHECIDOS não materializados nesta rodada (parcial/aplicado — não é drift, como no gate TS).
+// Preserva o import-fantasma FIRST-PARTY e TODO erro NÃO-import (attr-defined, tipos, sintaxe). Puro.
+// LIMITAÇÃO CONHECIDA (follow-up, não-regressão): um top-level inteiramente AUSENTE (uma camada omitida, ex.:
+// `from application.x import Y` sem NENHUM arquivo em application/) tem top ∉ roots → é tratado como terceiro
+// e escapa. O pré-R2 (--ignore-missing-imports) também o silenciava; cobri-lo exigiria cruzar com o manifesto
+// (requirements/pyproject), cujo nome-pip ≠ nome-import arriscaria falso-bloqueio. Fica p/ um item futuro.
+// Idem imports SOFT (try/except ImportError, TYPE_CHECKING) de módulo first-party ausente: o mypy emite o
+// mesmo import-not-found e são bloqueados — o texto do mypy não distingue o contexto do guard sem ler o fonte.
+export function blockingMypyErrors(
+  map: Map<string, string[]>,
+  opts: { firstPartyRoots: Set<string>; knownFiles?: Set<string> }
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [file, msgs] of map) {
+    const kept = msgs.filter((msg) => {
+      const mod = missingImportModule(msg);
+      if (!mod) return true; // não é import faltante → mantém (attr-defined/tipo/sintaxe seguem bloqueando)
+      const top = mod.split(".")[0];
+      if (!opts.firstPartyRoots.has(top)) return false; // TERCEIRO → ruído do temp, descarta (advisory)
+      // first-party: descarta SÓ se o módulo é CONHECIDO (parcial/aplicado); senão é FANTASMA.
+      if (opts.knownFiles?.size && moduleIsKnown(mod, opts.knownFiles)) return false;
+      return true; // fantasma first-party (o ImportError que derruba o app) → BLOQUEIA
+    });
+    if (kept.length) out.set(file, kept);
+  }
+  return out;
+}
+
 // mypy não instalado ≠ mypy reprovou: `python -m mypy` sem o pacote sai != 0 com "No module named mypy"
 // (não é ENOENT — o python EXISTE). Nesse caso o gate degrada para consultivo, não bloqueia.
 export function mypyUnavailable(result: ValidatorResult): boolean {
