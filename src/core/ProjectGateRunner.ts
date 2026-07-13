@@ -193,10 +193,11 @@ export class ProjectGateRunner {
         checks.push(...g.checks);
         goBuildAdvisories = g.advisories;
       } else {
-        // Java (P4): SÓ a ARQUITETURA (abaixo) — o gate de compilação javac é follow-up. Sem um JDK validável
-        // no ambiente de dev, não se escreve o classificador de erros do javac às cegas (o falso-bloqueio do gate
-        // Go só foi pego por repro AO VIVO). `checks` fica vazio → o toolchain é consultivo; a regra de camadas
-        // (por pacote declarado) roda igual e pode bloquear. DoD/segurança/smoke/reconcile seguem Python-only.
+        // Java (P4): sem TOOLCHAIN — o gate de compilação javac é follow-up. Sem um JDK validável no ambiente
+        // de dev, não se escreve o classificador de erros do javac às cegas (o falso-bloqueio do gate Go só foi
+        // pego por repro AO VIVO). `checks` fica vazio → o toolchain é consultivo; mas a ARQUITETURA (regra de
+        // camadas, abaixo) E a DEFINIÇÃO DE PRONTO (DoD, agora multi-linguagem) rodam e podem bloquear. Só
+        // smoke/reconcile seguem Python-only (segurança já roda o SAST puro-TS para TS/JS).
       }
 
       const gate = summarizeGate(checks); // toolchain (compileall/mypy | tsc-sintaxe) → advisory/resumo honestos

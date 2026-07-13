@@ -126,10 +126,43 @@ test("caminhos Windows (barras invertidas) são normalizados", () => {
   assert.deepEqual(checkDefinitionOfDone(files, "python"), []);
 });
 
-test("linguagem não-Python NÃO bloqueia (DoD é Python-only por ora)", () => {
-  for (const lang of ["typescript", "java", "go"] as const) {
-    assert.deepEqual(checkDefinitionOfDone([{ path: "src/main.ts", content: "x" }], lang), []);
-  }
+// ---- Paridade multi-linguagem (TS / Go / Java) --------------------------------
+
+const RUN_README = { path: "README.md", content: "# App\n\n## Como rodar\n\n```\ninstall && run\n```\n" };
+
+test("TS pronto (package.json + *.test.ts + README run) → vazio; faltando manifesto/teste → achados", () => {
+  const done = [{ path: "package.json", content: "{}" }, { path: "src/order.test.ts", content: "test('x',()=>{})" }, RUN_README, { path: "src/main.ts", content: "x" }];
+  assert.deepEqual(checkDefinitionOfDone(done, "typescript"), []);
+  const miss = checkDefinitionOfDone([{ path: "src/main.ts", content: "x" }, RUN_README], "typescript").map((f) => f.requirement).sort();
+  assert.deepEqual(miss, ["manifest", "tests"]);
+  // .spec.tsx e __tests__/ também contam como teste
+  assert.ok(checkDefinitionOfDone([{ path: "package.json", content: "{}" }, { path: "a.spec.tsx", content: "x" }, RUN_README], "typescript").every((f) => f.requirement !== "tests"));
+  assert.ok(checkDefinitionOfDone([{ path: "package.json", content: "{}" }, { path: "__tests__/a.ts", content: "x" }, RUN_README], "typescript").every((f) => f.requirement !== "tests"));
+});
+
+test("Go pronto (go.mod + *_test.go + README) → vazio; faltando → achados", () => {
+  const done = [{ path: "go.mod", content: "module x" }, { path: "order_test.go", content: "package x" }, RUN_README, { path: "main.go", content: "package main" }];
+  assert.deepEqual(checkDefinitionOfDone(done, "go"), []);
+  const miss = checkDefinitionOfDone([{ path: "main.go", content: "package main" }, RUN_README], "go").map((f) => f.requirement).sort();
+  assert.deepEqual(miss, ["manifest", "tests"]);
+});
+
+test("Java pronto (pom.xml + *Test.java + README) → vazio; build.gradle também vale", () => {
+  const done = [{ path: "pom.xml", content: "<project/>" }, { path: "src/test/java/OrderTest.java", content: "class OrderTest {}" }, RUN_README, { path: "src/main/java/Main.java", content: "class Main {}" }];
+  assert.deepEqual(checkDefinitionOfDone(done, "java"), []);
+  assert.ok(checkDefinitionOfDone([{ path: "build.gradle", content: "x" }, { path: "FooTest.java", content: "x" }, RUN_README], "java").every((f) => f.requirement !== "manifest" && f.requirement !== "tests"));
+  // "Contest.java" (palavra terminando em "test", minúsculo) NÃO é teste JUnit → requisito de teste segue faltando
+  const contest = checkDefinitionOfDone([{ path: "pom.xml", content: "x" }, { path: "Contest.java", content: "x" }, RUN_README], "java").map((f) => f.requirement);
+  assert.deepEqual(contest, ["tests"], "Contest.java não conta como teste (T minúsculo)");
+});
+
+test("manifesto de OUTRA linguagem NÃO satisfaz (package.json num projeto Go não conta)", () => {
+  const miss = checkDefinitionOfDone([{ path: "package.json", content: "{}" }, { path: "main.go", content: "x" }, RUN_README], "go").map((f) => f.requirement).sort();
+  assert.deepEqual(miss, ["manifest", "tests"], "package.json não é manifesto Go");
+});
+
+test("linguagem sem DoD (ex.: outra) NÃO bloqueia", () => {
+  assert.deepEqual(checkDefinitionOfDone([{ path: "src/main.rb", content: "x" }], "ruby" as never), []);
 });
 
 test("cada achado traz uma mensagem pt-BR acionável", () => {
