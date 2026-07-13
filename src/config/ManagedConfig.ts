@@ -95,10 +95,12 @@ export class ManagedConfig {
     return this.cfg().get<boolean>("gate.blockUnverifiedContract", false);
   }
 
-  // Gate de SEGURANÇA (P2) no Modo Projeto: roda o bandit (SAST) sobre o projeto gerado. "conservative"
-  // (padrão): só achados de severidade ALTA E confiança ALTA bloqueiam o Aplicar (senha hardcoded, eval de
-  // input, cripto fraca); o resto é advisory. "advisory": nada bloqueia (só surface). "off": não roda.
-  // bandit ausente → consultivo (fail-open). Respeita o `validation.gateBlocksApply` mestre.
+  // Gate de SEGURANÇA (P2) no Modo Projeto: roda o bandit (SAST) sobre o Python gerado E um SAST puro-TS
+  // sobre o TS/JS gerado. "conservative" (padrão): só as classes de altíssima precisão de execução-de-código
+  // / injeção-de-shell bloqueiam o Aplicar (bandit ALTA+ALTA no Python; eval() global + exec/execSync com
+  // comando dinâmico no TS/JS — a fronteira foi calibrada por medição sobre código GERADO, 0 FP bloqueante);
+  // o resto é advisory. "advisory": nada bloqueia (só surface). "off": não roda. Ferramenta ausente →
+  // consultivo (fail-open). Respeita o `validation.gateBlocksApply` mestre.
   securityGate(): "conservative" | "advisory" | "off" {
     const v = this.cfg().get<string>("gate.security", "conservative");
     return v === "advisory" || v === "off" ? v : "conservative";

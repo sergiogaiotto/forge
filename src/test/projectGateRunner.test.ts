@@ -209,3 +209,80 @@ test("run TS (ao vivo): import a arquivo PARCIAL conhecido NÃO falso-bloqueia (
   assert.equal(res.summary!.fileErrors.some((f) => /main\.ts$/.test(f.path)), false, "import a arquivo parcial/aplicado conhecido não é drift → não bloqueia");
   assert.equal(entries.get("src/main.ts")!.gateOk, true);
 });
+
+// --- SAST-TS PROMOVIDO A BLOQUEANTE (paridade com o bandit) -------------------------------------------
+// O SAST-TS agora honra o `securityMode` do config (antes ficava "advisory" fixo). Validado por medição ao
+// vivo do scanSast sobre 259 arquivos GERADOS por LLM (0 FP na track natural). O arquivo é TS VÁLIDO, então o
+// tsc não adiciona bloqueio próprio — o único bloqueio vem do SAST (securityErrors), isolando a promoção.
+const SAST_VULN = "import { execSync } from \"child_process\";\nexport function run(expr: string, dir: string): unknown {\n  const a = eval(expr);\n  const b = execSync(\"rm -rf \" + dir);\n  return [a, b];\n}\n";
+
+test("run TS: SAST em modo CONSERVADOR BLOQUEIA eval(input)+execSync dinâmico (code-exec/shell-exec)", async () => {
+  const { task, entries } = makeTask([{ path: "src/run.ts", content: SAST_VULN }]);
+  const { deps, posts } = makeDeps(task, { definitionOfDone: false, securityGate: "conservative" });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary, "TS devolve summary");
+  const secErr = res.summary!.securityErrors ?? [];
+  assert.ok(secErr.some((e) => /run\.ts$/.test(e.path)), "eval/execSync dinâmico → securityErrors (bloqueante)");
+  assert.equal(entries.get("src/run.ts")!.gateOk, false, "modo conservador FECHA o Aplicar do arquivo com code-exec/shell-exec");
+  // O post project/gate carrega os securityErrors em `files` (mesmo canal do bandit).
+  const gatePost = posts.find((p) => p.type === "project/gate");
+  assert.ok(gatePost?.files.some((f: any) => /run\.ts$/.test(f.path)), "o cartão do arquivo reflete o bloqueio de segurança");
+});
+
+test("run TS: SAST em modo ADVISORY NÃO bloqueia — vira securityAdvisories", async () => {
+  const { task, entries } = makeTask([{ path: "src/run.ts", content: SAST_VULN }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false, securityGate: "advisory" });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal((res.summary!.securityErrors ?? []).length, 0, "advisory não produz bloqueio");
+  assert.ok((res.summary!.securityAdvisories ?? []).length >= 2, "os mesmos achados viram advisory (eval + execSync)");
+  assert.equal(entries.get("src/run.ts")!.gateOk, true, "advisory: o arquivo aplica");
+});
+
+// Guard de CI da LIÇÃO-MÃE: código TS LIMPO e idiomático (exatamente os idiomas que já causaram FP —
+// método `eval` de interpretador, page.$eval, db.exec, RegExp.exec, execFile com array, texto de template
+// mencionando eval, innerHTML de comparação) NÃO pode bloquear sob o modo conservador (o default de produção).
+// Sem este teste, um FP bloqueante de scanSast sobre TS válido passaria despercebido (os demais testes TS
+// naturais rodam com securityGate default "off").
+const SAST_CLEAN = [
+  'import { execFile } from "node:child_process";',
+  'import Database from "better-sqlite3";',
+  'export interface Expr { eval(env: unknown): number; }',
+  'export class Lit implements Expr {',
+  '  constructor(private v: number) {}',
+  '  eval(): number { return this.v; }',
+  '}',
+  'const db = new Database("app.db");',
+  'db.exec("CREATE TABLE IF NOT EXISTS t (id INTEGER)");',
+  'export function cloneRepo(url: string): void { execFile("git", ["clone", url]); }',
+  'export async function scrape(page: any): Promise<string | null> { return page.$eval("#t", (el: any) => el.textContent); }',
+  'const RE = /(\\w+)=(\\w+)/g;',
+  'export function parse(line: string) { return RE.exec(line); }',
+  'const help = `nunca use eval() com input do usuário`;',
+  'export function isEmpty(el: any): boolean { return el.innerHTML === ""; }',
+  'export const _h = help;',
+].join("\n");
+
+test("run TS: código LIMPO idiomático NÃO bloqueia sob conservador (guard anti-FP da lição-mãe)", async () => {
+  const { task, entries } = makeTask([{ path: "src/interp.ts", content: SAST_CLEAN }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false, securityGate: "conservative" });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal((res.summary!.securityErrors ?? []).length, 0, "TS idiomático limpo → ZERO securityError bloqueante");
+  assert.equal((res.summary!.securityAdvisories ?? []).length, 0, "e ZERO advisory (nenhum dos idiomas seguros é sinalizado)");
+  assert.equal(entries.get("src/interp.ts")!.gateOk, true, "aplica normalmente");
+});
+
+test("run TS: SAST OFF não roda o scanner (sem erros nem advisories de segurança)", async () => {
+  const { task, entries } = makeTask([{ path: "src/run.ts", content: SAST_VULN }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false, securityGate: "off" });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal((res.summary!.securityErrors ?? []).length, 0, "off: sem bloqueio");
+  assert.equal((res.summary!.securityAdvisories ?? []).length, 0, "off: sem advisory de segurança");
+  assert.equal(entries.get("src/run.ts")!.gateOk, true, "off: aplica");
+});
