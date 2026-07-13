@@ -148,6 +148,24 @@ test("runProjectSmoke: não-python retorna cedo, sem post", async () => {
   assert.equal(posts.length, 0);
 });
 
+test("runProjectSmoke ts: SEM suíte gerada (nenhum *.test/*.spec) → retorna cedo, sem post", async () => {
+  const { task } = makeTask([{ path: "src/app.ts", content: "export const x = 1;" }, { path: "package.json", content: '{"devDependencies":{"vitest":"*"}}' }]);
+  const { deps, posts } = makeDeps(task, { testEnabled: true });
+  await new ProjectGateRunner(deps).runProjectSmoke("typescript", "task-test");
+  assert.equal(posts.length, 0, "sem arquivo de teste, o smoke nem tenta rodar");
+});
+
+test("runProjectSmoke ts: COM suíte mas SEM node_modules no workspace → notice 'noRunner' (advisory), não spawna", async () => {
+  const { task } = makeTask([{ path: "src/sum.test.ts", content: "import { it } from 'vitest'; it('x', () => {});" }, { path: "package.json", content: '{"devDependencies":{"vitest":"*"}}' }]);
+  const { deps, posts } = makeDeps(task, { testEnabled: true });
+  // workspaceRoot undefined (default no makeDeps) → sem node_modules → degrada para advisory sem spawnar.
+  await new ProjectGateRunner(deps).runProjectSmoke("typescript", "task-test");
+  const notice = posts.find((p) => p.type === "stream/notice");
+  assert.ok(notice, "posta um aviso advisory");
+  assert.equal(notice.level, "info");
+  assert.match(notice.message, /runner|vitest\/jest/i);
+});
+
 test("reconcile: desligado (reconcileDependencies=false) é no-op", async () => {
   const { task } = makeTask([{ path: "requirements.txt", content: "flask\n" }, { path: "app.py", content: "import flask" }]);
   const { deps, posts } = makeDeps(task, { reconcileDependencies: false });

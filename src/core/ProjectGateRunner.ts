@@ -15,7 +15,7 @@ import { scanSast, splitSast } from "../util/sastScan";
 import { summarizeSmoke } from "../util/smoke";
 import { buildBanditInstall, buildMypyInstall, buildRuffInstall, findVenvPython } from "../util/pythonEnv";
 import { reconcileRequirements } from "../util/pythonDeps";
-import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
+import { buildGateTsconfig, detectNodeTestRunner, findWorkspaceTestRunner, findWorkspaceTscJs } from "../util/nodeEnv";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
 import { parseRuffReport, RUFF_GATE_CODES, splitRuffFindings } from "../util/ruffParse";
 import type { RunService } from "./RunService";
@@ -392,8 +392,63 @@ export class ProjectGateRunner {
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
     if (language === "python") return this.smokePython(taskId, props);
     if (language === "go") return this.smokeGo(taskId, props);
-    // typescript/java: smoke ainda não — o TS exige o node_modules do workspace (junction na árvore temp) +
-    // o runner resolvido sem a armadilha do .cmd no Windows (o mesmo cuidado do gate TS). Follow-up dedicado.
+    if (language === "typescript") return this.smokeTypescript(taskId, props);
+    // java: smoke ainda não — sem toolchain validável no ambiente de dev (mesmo motivo do gate javac).
+  }
+
+  // Smoke TS (P4): EXECUTA a suíte gerada (vitest/jest) contra a árvore materializada, usando o RUNNER + as
+  // deps do node_modules do WORKSPACE — que fazemos resolver JUNCTIONANDO `<ws>/node_modules` na árvore temp
+  // (nunca instalamos nada: egress deny-by-default). O runner roda via `node <entry>` (jamais o wrapper .cmd:
+  // o execFile sem shell não o invoca de forma confiável no Windows — a mesma armadilha do gate TS). NUNCA
+  // bloqueia; fail-open. Sem suíte (*.test/*.spec) / sem node_modules / sem runner suportado → advisory.
+  //
+  // SEGURANÇA DO JUNCTION: provado ao vivo que `fs.rm(root, {recursive})` do Node NÃO segue o junction (só o
+  // deslinka), mas removemos o link EXPLICITAMENTE antes do rm (defesa em profundidade) — jamais apagar o
+  // node_modules do workspace.
+  private async smokeTypescript(taskId: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<void> {
+    const isTest = (p: string) => /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(p) || /(?:^|\/)__tests__\/.+\.[cm]?[jt]sx?$/i.test(p);
+    const testProps = props.filter((e) => isTest(normGatePath(e.proposal.filePath)));
+    if (testProps.length === 0) return; // sem suíte gerada — nada a rodar
+    const ws = this.deps.workspaceRoot();
+    if (!ws || !existsSync(path.join(ws, "node_modules"))) {
+      this.deps.post({ type: "stream/notice", taskId, level: "info", message: hostT("smoke.noRunner") });
+      return;
+    }
+    // Detecta o runner do package.json GERADO (ou dos imports das suítes) e resolve o entry no workspace.
+    const pkg = props.find((e) => /(?:^|\/)package\.json$/i.test(normGatePath(e.proposal.filePath)))?.proposal.modified;
+    const runner = detectNodeTestRunner(pkg, testProps.map((e) => e.proposal.modified));
+    const resolved = runner ? findWorkspaceTestRunner(ws, runner, existsSync) : undefined;
+    if (!runner || !resolved) {
+      this.deps.post({ type: "stream/notice", taskId, level: "info", message: hostT("smoke.noRunner") });
+      return;
+    }
+    let root: string | undefined;
+    let junction: string | undefined;
+    try {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-smoke-"));
+      await this.writeProjectTree(root, props, "typescript"); // syntheticInitDirs só cria __init__.py p/ Python
+      junction = path.join(root, "node_modules");
+      // Junction (Windows) / symlink (POSIX) do node_modules do workspace → resolve o runner + as deps.
+      if (!existsSync(junction)) await fs.symlink(path.join(ws, "node_modules"), junction, "junction");
+      const timeoutMs = this.deps.config.run().timeoutSeconds * 1000;
+      // CI/NO_COLOR: saída determinística e sem ANSI (o classificador casa texto); FORCE_COLOR=0 reforça.
+      const env = { ...process.env, CI: "true", NO_COLOR: "1", FORCE_COLOR: "0" };
+      const result = await runFileCheck(
+        { id: "smoke:node", label: `${runner} (smoke)`, gate: false },
+        "node",
+        [resolved.entry, ...resolved.args],
+        { cwd: root, timeoutMs, outputCap: 16_000, env }
+      );
+      const verdict = summarizeSmoke(result, "typescript");
+      this.deps.post({ type: "stream/notice", taskId, level: verdict.level, message: verdict.message });
+      this.deps.log.info(`Smoke test (TS/${runner}): ${verdict.message}`);
+    } catch (e) {
+      this.deps.log.warn("Smoke test TS falhou ao executar — ignorado (advisory)", e);
+    } finally {
+      // Remove o LINK primeiro (não-recursivo → nunca desce no alvo), depois o resto da árvore temp.
+      if (junction) await fs.rm(junction, { recursive: false, force: true }).catch(() => fs.rmdir(junction!).catch(() => undefined));
+      if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   private async smokePython(taskId: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<void> {
