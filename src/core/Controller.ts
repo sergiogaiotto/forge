@@ -10,7 +10,7 @@ import { buildAuthHeaders, ProviderRuntimeConfig } from "../api/types";
 import { ChatMessage } from "../api/types";
 import { probeServedContextWindow } from "../util/servedWindow";
 import { ManagedConfig } from "../config/ManagedConfig";
-import { budgetGateDecision, estimateCost } from "../api/pricing";
+import { estimateCost } from "../api/pricing";
 import { LicenseClient } from "../license/LicenseClient";
 import { LicenseVerifier } from "../license/LicenseVerifier";
 import { SessionToken } from "../license/types";
@@ -119,6 +119,7 @@ import { Runner } from "./Runner";
 import { RunService } from "./RunService";
 import { ProjectGateRunner } from "./ProjectGateRunner";
 import { AttachmentStore } from "./AttachmentStore";
+import { SessionBudget } from "./SessionBudget";
 import { Task } from "./Task";
 
 const GS_PROVIDER = "forge.provider";
@@ -186,12 +187,9 @@ export class Controller {
   // (puro, testável). O onChange re-posta os chips na webview quando a lista muda.
   private readonly attachments = new AttachmentStore(() => this.postAttachments());
   private currentTask: Task | undefined;
-  // Usage REAL acumulado da sessão (todas as gerações, incl. continuações) — /contexto e /tokens.
-  private sessionUsage = { input: 0, output: 0 };
-  // FinOps (#12): custo estimado ACUMULADO da sessão (na moeda de `currency`) — alimenta o /contexto e o
-  // teto de gasto LOCAL (deterrente). Só acumula quando há tabela de preços configurada.
-  private sessionCost = { totalCost: 0, currency: "R$" };
-  private budgetWarned = false; // avisa UMA vez ao cruzar ~80% do teto (não a cada geração)
+  // FinOps (#12) + usage da sessão: tokens acumulados, custo estimado e o aviso-único do teto — estado +
+  // lógica (acumular/gate/reset) extraídos p/ SessionBudget (puro, testável); o post da notice fica aqui.
+  private readonly budget = new SessionBudget("R$");
   // Grounding dbt (dados, Onda 1): índice dos artefatos (target/manifest.json [+ catalog.json]),
   // recarregado por mtime (um `dbt compile` do dev atualiza sem reindexação manual). null = sem
   // projeto dbt ou sem artefatos (fail-open: as camadas que o consomem simplesmente não opinam).
@@ -1550,9 +1548,7 @@ export class Controller {
         // aviso de teto. Sem isto, o bloqueio do teto de gasto PERSISTIA após o /limpar — contradizendo a
         // própria mensagem do bloqueio ("use /limpar para uma nova sessão"). Os três zeram juntos (o
         // /contexto mostra tokens E custo da "Sessão:").
-        this.sessionUsage = { input: 0, output: 0 };
-        this.sessionCost = { totalCost: 0, currency: this.config.observability().currency };
-        this.budgetWarned = false;
+        this.budget.reset(this.config.observability().currency);
         this.postAttachments();
         this.post({ type: "notice", level: "info", message: hostT("notice.context.cleared") });
         break;
@@ -2011,25 +2007,23 @@ export class Controller {
   // false quando a geração deve ser barrada.
   private preGenerationGate(): boolean {
     const obs = this.config.observability();
-    const spent = this.sessionCost.totalCost;
-    const dec = budgetGateDecision(spent, obs.budget, this.budgetWarned);
-    if (dec.block) {
+    const decision = this.budget.gate(obs.budget);
+    if (decision === "block") {
       this.post({ type: "notice", level: "error", message: this.budgetBlockedMsg() });
       return false;
     }
-    if (dec.warn) {
-      this.budgetWarned = true;
-      this.post({ type: "notice", level: "warn", message: hostT("notice.budget.warn", { pct: Math.round((spent / obs.budget) * 100), spent: this.fmtCost(spent), budget: this.fmtCost(obs.budget), currency: obs.currency }) });
+    if (decision === "warn") {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.budget.warn", { pct: this.budget.pct(obs.budget), spent: this.fmtCost(this.budget.spent), budget: this.fmtCost(obs.budget), currency: obs.currency }) });
     }
     return true;
   }
 
   // Mensagem do bloqueio de teto — reusada pelo toast do gate E pelos canais de erro do modal de projeto /
-  // wizard de charter (que também gateiam). currency vem DIRETO do config (o sessionCost.currency tem init
+  // wizard de charter (que também gateiam). currency vem DIRETO do config (a moeda do SessionBudget tem init
   // truthy "R$" que mataria o fallback e mostraria a moeda errada antes da 1ª geração precificada).
   private budgetBlockedMsg(): string {
     const obs = this.config.observability();
-    return hostT("notice.budget.blocked", { spent: this.fmtCost(this.sessionCost.totalCost), budget: this.fmtCost(obs.budget), currency: obs.currency });
+    return hostT("notice.budget.blocked", { spent: this.fmtCost(this.budget.spent), budget: this.fmtCost(obs.budget), currency: obs.currency });
   }
 
   private fmtCost(n: number): string {
@@ -2574,11 +2568,11 @@ export class Controller {
         attachments: this.attachments.count(),
         attachmentTokens: estimateTokensOf(this.attachments.contents()),
         ragChunks: rag.chunks,
-        sessionInputTokens: this.sessionUsage.input,
-        sessionOutputTokens: this.sessionUsage.output,
+        sessionInputTokens: this.budget.snapshot().input,
+        sessionOutputTokens: this.budget.snapshot().output,
         // FinOps (#12): custo estimado da sessão + teto local SÓ com preços configurados — sem preços o custo
         // é sempre 0 e o teto nunca dispara, então mostrar a linha de teto seria uma proteção inerte/enganosa.
-        sessionCost: hasPricing ? Number(this.sessionCost.totalCost.toFixed(6)) : undefined,
+        sessionCost: hasPricing ? Number(this.budget.spent.toFixed(6)) : undefined,
         spendBudget: hasPricing && obs.budget > 0 ? obs.budget : undefined,
         currency: obs.currency,
       },
@@ -2588,15 +2582,10 @@ export class Controller {
   // Acumula o usage REAL (prompt/completion tokens) das gerações da sessão — alimenta o /contexto.
   private trackUsage(e: ObsEvent): void {
     if (e.type === "generation.end" && "usage" in e && e.usage) {
-      this.sessionUsage.input += e.usage.inputTokens ?? 0;
-      this.sessionUsage.output += e.usage.outputTokens ?? 0;
       // FinOps: custo estimado desta geração (só quando o Admin configurou preços) → acumula na sessão.
       const obs = this.config.observability();
       const cost = estimateCost(e.model, e.usage, obs.pricing, obs.currency);
-      if (cost) {
-        this.sessionCost.totalCost += cost.totalCost;
-        this.sessionCost.currency = cost.currency;
-      }
+      this.budget.track(e.usage.inputTokens ?? 0, e.usage.outputTokens ?? 0, cost ?? undefined);
     }
   }
 
