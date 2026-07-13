@@ -228,6 +228,34 @@ test("run TS (ao vivo): import a arquivo PARCIAL conhecido NÃO falso-bloqueia (
   assert.equal(entries.get("src/main.ts")!.gateOk, true);
 });
 
+// #08 do survey: o gate TS era NO-OP em .js/.jsx (tsconfig só incluía .ts/.tsx) — JS gerado quebrado passava
+// "tsc ok". Com allowJs+checkJs:false o tsc PARSEIA o JS e a SINTAXE (TS1xxx) bloqueia; sem tipar (checkJs:false)
+// o JS válido idiomático NÃO falso-bloqueia (validado ao vivo: checkJs:true inundaria de TS2875/implicit-any).
+test("run TS (ao vivo): .js com erro de SINTAXE BLOQUEIA (o gate não é mais no-op em JS)", async () => {
+  const { task, entries } = makeTask([{ path: "src/app.js", content: "export function f(a, b) { return a + ; }\n" }]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.ok(res.summary!.fileErrors.some((f) => /app\.js$/.test(f.path)), ".js com sintaxe quebrada (TS1xxx) → BLOQUEIA");
+  assert.equal(entries.get("src/app.js")!.gateOk, false);
+});
+
+test("run TS (ao vivo): .js/.jsx idiomático limpo NÃO falso-bloqueia (checkJs:false evita o ruído de tipo)", async () => {
+  const { task, entries } = makeTask([
+    { path: "src/server.js", content: "const express = require('express');\nconst app = express();\napp.get('/', (req, res) => res.json({ ok: true }));\napp.listen(3000);\n" },
+    { path: "src/App.jsx", content: "import React from 'react';\nexport const App = () => <div className=\"x\">hi</div>;\n" },
+  ]);
+  const { deps } = makeDeps(task, { definitionOfDone: false });
+  deps.workspaceRoot = () => process.cwd();
+  const res = await new ProjectGateRunner(deps).run("typescript", "hexagonal", true);
+  assert.ok(res.summary);
+  assert.equal(res.summary!.advisory, false, "o tsc RODOU (não degradou) — guarda anti-vácuo");
+  assert.equal(res.summary!.fileErrors.some((f) => /server\.js$|App\.jsx$/.test(f.path)), false, "JS/JSX válido não bloqueia (só sintaxe bloqueia, tipo não)");
+  assert.equal(entries.get("src/server.js")!.gateOk, true);
+  assert.equal(entries.get("src/App.jsx")!.gateOk, true);
+});
+
 // --- SAST-TS PROMOVIDO A BLOQUEANTE (paridade com o bandit) -------------------------------------------
 // O SAST-TS agora honra o `securityMode` do config (antes ficava "advisory" fixo). Validado por medição ao
 // vivo do scanSast sobre 259 arquivos GERADOS por LLM (0 FP na track natural). O arquivo é TS VÁLIDO, então o
