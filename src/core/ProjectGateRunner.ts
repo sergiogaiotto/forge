@@ -21,7 +21,9 @@ import { parseRuffReport, RUFF_GATE_CODES, splitRuffFindings } from "../util/ruf
 import type { RunService } from "./RunService";
 import type { Task } from "./Task";
 import {
+  blockingMypyErrors,
   contractUnverified,
+  firstPartyRoots,
   GateCheckResult,
   isBlockingTscContract,
   isTscSyntaxError,
@@ -159,22 +161,38 @@ export class ProjectGateRunner {
         checks.push({ result: compile, errors: parseCompileallErrors(compile.output, root) });
         pySyntaxError = compile.status === "failed"; // F-03: sintaxe quebrada → mypy aborta (ver contrato abaixo)
 
+        // Top-level dos pacotes do PROJETO (first-party), para o gate mypy distinguir o import-fantasma
+        // first-party do ruído de terceiros ao remover o --ignore-missing-imports. Deriva do universo conhecido.
+        const fpRoots = firstPartyRoots(knownFiles);
         // mypy (gate:true quando instalado): pega o DRIFT de contrato (import/atributo fantasma) cross-file.
-        // --ignore-missing-imports neutraliza o ruído de deps de terceiros (fastapi/jinja não instalados no
-        // temp) preservando os erros de módulos DESTE projeto. Não instalado → skipped (consultivo).
+        // R2: SEM --ignore-missing-imports (que silenciava TODO import faltante — inclusive o import-fantasma
+        // FIRST-PARTY, o "ImportError que derruba o app"). O flag esvaziava o gate: instalava o mypy mas o
+        // contrato de MÓDULO ficava cego. Agora o mypy emite import-not-found p/ todo import não-resolvível e
+        // blockingMypyErrors separa o fantasma first-party (BLOQUEIA) do ruído de terceiros/arquivos conhecidos.
+        // --show-error-codes garante o [code] p/ o filtro mesmo sob config que o desligue. Não instalado → skipped.
         let mypy = await runFileCheck(
           { id: "gate:mypy", label: "mypy", gate: true },
           py,
-          ["-m", "mypy", "--ignore-missing-imports", "--no-error-summary", "--no-color-output", "--hide-error-context", "--no-pretty", "."],
+          ["-m", "mypy", "--no-error-summary", "--no-color-output", "--hide-error-context", "--no-pretty", "--show-error-codes", "."],
           { cwd: root, timeoutMs, outputCap }
         );
         if (mypyUnavailable(mypy)) mypy = { ...mypy, status: "skipped", reason: "mypy não instalado (gate consultivo)" };
-        const mypyErrors = mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map<string, string[]>();
+        const rawMypy = mypy.status === "failed" ? parseMypyErrors(mypy.output, root) : new Map<string, string[]>();
         // Defesa em profundidade: mypy que reprovou SEM nenhum erro `path:linha` atribuível não type-checou
         // — ABORTOU (fatal/coleta, ex.: exit 2). Um type-check real sempre emite linhas atribuíveis. Tratar
         // como consultivo (skipped) em vez de deixar passar mascarado: o resumo vira "parcial", não "verde".
-        if (mypy.status === "failed" && mypyErrors.size === 0) {
+        if (mypy.status === "failed" && rawMypy.size === 0) {
           mypy = { ...mypy, status: "skipped", reason: "mypy não pôde analisar (abort/fatal) — gate consultivo" };
+        }
+        // Remove o ruído de import de TERCEIROS (deps não instaladas no temp) e de módulos CONHECIDOS não
+        // materializados nesta rodada (parcial/aplicado) — preservando o import-fantasma first-party (o alvo do R2).
+        const mypyErrors = blockingMypyErrors(rawMypy, { firstPartyRoots: fpRoots, knownFiles });
+        // Projeto LIMPO: o mypy RODOU (emitiu diagnósticos) mas todos eram ruído de terceiros/conhecidos → o
+        // contrato ESTÁ verificado. Sem isto, o `failed` com mapa vazio viraria bloqueio AMPLO (summarizeGate
+        // empurra "reprovou sem detalhes" p/ projectErrors) ou "parcial" — regredindo verde→parcial num projeto
+        // que só usa deps externas. Marca "ok": o resumo vira verde e mypyRan continua true (contrato verificado).
+        if (mypy.status === "failed" && mypyErrors.size === 0 && rawMypy.size > 0) {
+          mypy = { ...mypy, status: "ok" };
         }
         checks.push({ result: mypy, errors: mypyErrors });
       } else if (language === "typescript") {
