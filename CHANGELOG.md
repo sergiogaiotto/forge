@@ -51,6 +51,16 @@ escrita não-atômica que um crash corromperia, zerando o teto do dia (fechada c
   pattern-scan; config-gated e forçável). O manifesto de OUTRA linguagem não satisfaz (um `package.json` num
   projeto Go não conta). Precisão Java: `FooTest.java` exige **T maiúsculo** (JUnit é PascalCase) para não
   contar `Contest.java` como teste.
+- **Smoke test do projeto para Go — "de fato roda"** (`runProjectSmoke`/`summarizeSmoke`): o smoke test (rodar
+  a suíte GERADA contra a árvore materializada, além de "compila e tipa") era só Python (pytest). Agora Go
+  também: `go test ./...` **offline** (GOPROXY=off, CGO_ENABLED=0) sobre a árvore temp, com go.mod garantido.
+  ADVISORY (nunca bloqueia), fail-open, guardado (`forge.test.enabled` + `*_test.go` gerado + `go` presente).
+  `summarizeSmoke(_, "go")` classifica a saída: passou / falhou (conta `--- FAIL:`) / **inconclusivo** quando
+  não compila/resolve deps offline (jamais "falhou" por ambiente). A revisão adversarial rodou o `go test`
+  **ao vivo** e pegou um **falso-verde HIGH** — um `_test.go` só com `Example`-sem-`// Output:`/helpers compila
+  e sai 0 com `[no tests to run]` (o pytest sai 5; o go sai 0) → passava como "PASSOU"; corrigido exigindo
+  evidência de teste REAL (linha `ok\tpkg\tDURs` sem `[no tests…]`). O TS fica de follow-up (exige o
+  `node_modules` do workspace + o runner sem a armadilha do `.cmd` no Windows).
 
 ### Security
 - **Redação do RAG na origem — texto E símbolo** (`CodebaseIndex`/`indexPersistence`): os chunks passam

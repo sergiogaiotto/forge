@@ -383,10 +383,17 @@ export class ProjectGateRunner {
   // Respeita forge.test.enabled e só roda quando há suíte gerada (test_*.py / *_test.py). O `taskId`
   // ancora o aviso na resposta da geração.
   async runProjectSmoke(language: ProjectLanguage, taskId: string): Promise<void> {
-    if (language !== "python" || !this.deps.config.test().enabled) return;
+    if (!this.deps.config.test().enabled) return;
     const task = this.deps.currentTask();
     if (!task) return;
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
+    if (language === "python") return this.smokePython(taskId, props);
+    if (language === "go") return this.smokeGo(taskId, props);
+    // typescript/java: smoke ainda não — o TS exige o node_modules do workspace (junction na árvore temp) +
+    // o runner resolvido sem a armadilha do .cmd no Windows (o mesmo cuidado do gate TS). Follow-up dedicado.
+  }
+
+  private async smokePython(taskId: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<void> {
     const hasTests = props.some((e) => /(^|\/)test_[^/]*\.py$|_test\.py$/i.test(normGatePath(e.proposal.filePath)));
     if (!hasTests) return; // sem suíte gerada — nada a rodar
     const ws = this.deps.workspaceRoot();
@@ -413,6 +420,44 @@ export class ProjectGateRunner {
     } catch (e) {
       // Falha do PRÓPRIO smoke (temp/exec) nunca trava a entrega — é advisory.
       this.deps.log.warn("Smoke test do projeto falhou ao executar — ignorado (advisory)", e);
+    } finally {
+      if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  // Smoke Go (P4): `go test ./...` OFFLINE (GOPROXY=off — nunca baixa deps, respeita o egress deny) sobre a
+  // árvore materializada, com go.mod garantido. EXECUTA a suíte gerada (compila + roda os testes) — o sinal
+  // "de fato roda", além de "compila". CGO_ENABLED=0 fecha o vetor de exec por cgo. NUNCA bloqueia; fail-open.
+  // Sem `go` / sem suíte (_test.go) → advisory. Deps de terceiros não resolvem offline → summarizeSmoke("go")
+  // classifica como inconclusivo (ambiente), jamais "falhou".
+  private async smokeGo(taskId: string, props: { proposal: { filePath: string; modified: string } }[]): Promise<void> {
+    const hasTests = props.some((e) => /_test\.go$/i.test(normGatePath(e.proposal.filePath)));
+    if (!hasTests) return;
+    const go = await this.resolveGateGo();
+    if (!go) {
+      this.deps.post({ type: "stream/notice", taskId, level: "info", message: hostT("notice.smoke.noGo") });
+      return;
+    }
+    let root: string | undefined;
+    try {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-smoke-"));
+      await this.writeProjectTree(root, props, "go");
+      if (!existsSync(path.join(root, "go.mod"))) {
+        await fs.writeFile(path.join(root, "go.mod"), "module forgesmoke\n\ngo 1.21\n", "utf8");
+      }
+      const timeoutMs = this.deps.config.run().timeoutSeconds * 1000;
+      const env = { ...process.env, GOPROXY: "off", GOFLAGS: "-mod=mod", GOWORK: "off", GOTOOLCHAIN: "local", GO111MODULE: "on", CGO_ENABLED: "0" };
+      const result = await runFileCheck(
+        { id: "smoke:gotest", label: "go test (smoke)", gate: false },
+        go.go,
+        ["test", "./..."],
+        { cwd: root, timeoutMs, outputCap: 8000, env }
+      );
+      const verdict = summarizeSmoke(result, "go");
+      this.deps.post({ type: "stream/notice", taskId, level: verdict.level, message: verdict.message });
+      this.deps.log.info(`Smoke test (Go): ${verdict.message}`);
+    } catch (e) {
+      this.deps.log.warn("Smoke test Go falhou ao executar — ignorado (advisory)", e);
     } finally {
       if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }

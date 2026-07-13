@@ -12,6 +12,63 @@ const res = (status: ValidatorResult["status"], output = "", reason?: string): V
   reason,
 });
 
+// ---- Go (go test) -------------------------------------------------------------
+
+test("summarizeSmoke go: exit 0 COM pacote que rodou testes (ok pkg DURs) → passou (info, ran)", () => {
+  const v = summarizeSmoke(res("ok", "ok  \tforgesmoke/order\t0.312s\nPASS"), "go");
+  assert.equal(v.level, "info");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /PASSARAM|passou/i);
+});
+
+test("REGRESSÃO (revisão AO VIVO): exit 0 mas ZERO testes rodaram ([no tests to run]) → 'nenhum coletado', NÃO 'passou'", () => {
+  // O buraco de falso-verde: _test.go só com Example-sem-Output/helpers compila e sai 0 com "[no tests to run]"
+  // (o pytest sai 5; o go sai 0). Não pode afirmar "o projeto de fato roda".
+  for (const out of ["ok  \tforgesmoke\t0.014s [no tests to run]", "?   \tforgesmoke\t[no test files]", "ok  \tforgesmoke\t(cached) [no tests to run]"]) {
+    const v = summarizeSmoke(res("ok", out), "go");
+    assert.equal(v.ran, false, `[no tests] NÃO é "passou": ${out}`);
+    assert.match(v.message, /nenhum|no test/i);
+  }
+  // mistura: um pacote rodou testes, outro sem → conta como RODOU (não rebaixa)
+  const mixed = summarizeSmoke(res("ok", "ok  \tapp/svc\t0.02s\nok  \tapp/util\t[no tests to run]"), "go");
+  assert.equal(mixed.ran, true, "um pacote com teste real que passou → passou");
+});
+
+test("summarizeSmoke go: teste(s) FALHARAM (--- FAIL) → warn, com a contagem", () => {
+  const out = "--- FAIL: TestOrder (0.00s)\n    order_test.go:12: esperava 2, veio 3\n--- FAIL: TestSum (0.00s)\nFAIL\nexit status 1";
+  const v = summarizeSmoke(res("failed", out), "go");
+  assert.equal(v.level, "warn");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /2 teste/);
+});
+
+test("summarizeSmoke go: erro de BUILD/DEPS offline → inconclusivo (info, não 'falhou')", () => {
+  for (const out of [
+    'main.go:3:8: cannot find package "github.com/x/y"',
+    "go: updates to go.mod needed; to update it:\n\tgo mod tidy",
+    "# forgesmoke/svc\nsvc.go:5:2: imported and not used: \"fmt\"",
+    "order.go:9:2: undefined: helper",
+    "m.go:2:8: package nosuchstdpkg is not in std (/usr/local/go/src/nosuchstdpkg)", // import halucinado (revisão AO VIVO)
+    "no Go files in /tmp/forge-smoke-x",
+  ]) {
+    const v = summarizeSmoke(res("failed", out), "go");
+    assert.equal(v.level, "info", `build/deps NÃO é "falhou": ${out.slice(0, 30)}`);
+    assert.equal(v.ran, false);
+  }
+});
+
+test("summarizeSmoke go: 'no test files' → nenhum teste (info)", () => {
+  const v = summarizeSmoke(res("failed", "?   \tforgesmoke\t[no test files]"), "go");
+  assert.equal(v.ran, false);
+  assert.equal(v.level, "info");
+});
+
+test("summarizeSmoke go: sem go (skipped) → mensagem de go indisponível", () => {
+  const v = summarizeSmoke(res("skipped", "", "ENOENT"), "go");
+  assert.equal(v.ran, false);
+  assert.match(v.message, /go/i);
+});
+
 test("summarizeSmoke: testes passaram → info, ran, com a contagem", () => {
   const v = summarizeSmoke(res("ok", "===== 3 passed in 0.12s ====="));
   assert.equal(v.level, "info");
