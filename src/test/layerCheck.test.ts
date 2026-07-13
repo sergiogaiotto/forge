@@ -176,6 +176,16 @@ test("REGRESSÃO (survey): violação hexagonal com import MULTI-LINHA NÃO pass
   assert.deepEqual(v[0].imports, ["adapters.db"]);
 });
 
+test("parseImportsTs: import multi-linha em COMENTÁRIO/template NÃO é falsa violação (fix da revisão)", () => {
+  // O match content-wide poderia pegar um exemplo de uso multi-linha num JSDoc (LLM adora) → FP de camada.
+  const jsdoc = "/**\n * Exemplo:\n * import {\n *   Db,\n * } from '../adapters/db';\n */\nexport class Order {}\n";
+  assert.deepEqual(parseImportsTs(jsdoc), [], "import multi-linha comentado é ignorado");
+  const tmpl = "const example = `\nimport {\n  Db,\n} from '../adapters/db';\n`;\nexport class Order {}\n";
+  assert.deepEqual(parseImportsTs(tmpl), [], "import multi-linha em template literal é ignorado");
+  // mas um import REAL na MESMA string normal single-line não confunde (o especificador é preservado):
+  assert.deepEqual(parseImportsTs("import { Db } from '../adapters/db';"), ["adapters.db"], "import real segue capturado");
+});
+
 test("hexagonal TS: domínio importando adapters é VIOLAÇÃO (import relativo)", () => {
   const files = [
     { path: "src/domain/order.ts", content: "import { Session } from '../adapters/db';\nexport class Order {}" },

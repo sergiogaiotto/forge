@@ -111,7 +111,16 @@ export function parseImportsTs(content: string): string[] {
     const m = normalizeTsSpecifier(spec);
     if (m) mods.push(m);
   };
-  const src = content ?? "";
+  // Remove COMENTÁRIOS (bloco/linha) e o CONTEÚDO de template literals ANTES do match content-wide: como o
+  // `from` agora é casado através de LINHAS, um exemplo de import MULTI-LINHA num JSDoc/comentário ou template
+  // (`/* import {\n Db,\n} from '../adapters/db' */`) viraria falsa violação de camada (a versão por-linha
+  // antiga não pegava — regressão pega na revisão adversarial). É o análogo do stripJavaComments; o miolo de
+  // strings NORMAIS ('...'/"...") é preservado (um import real vive numa string, é o especificador). Naive/
+  // seguro: se um `/*` dentro de uma string comer um import real, é FALSO-NEGATIVO (não bloqueia) — nunca FP.
+  const src = (content ?? "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // /* … */
+    .replace(/\/\/[^\n]*/g, "") // // …  (preserva o \n final)
+    .replace(/`[^`]*`/g, " "); // conteúdo de template literal (um import real usa '/" — nunca crase)
   // `import … from 'x'` / `export … from 'x'` (inclui `import type`, `export *`) — casado CONTENT-WIDE para
   // pegar o `from` MULTI-LINHA: o estilo dominante do mundo real põe `from` numa linha SEPARADA do keyword
   // (`import {\n  Foo,\n  Bar,\n} from './adapters/db'`). O `[^;]*?` (lazy — `[^;]` casa `\n`) atravessa a
