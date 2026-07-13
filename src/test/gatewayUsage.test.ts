@@ -60,6 +60,11 @@ test("withIncludeUsage: SOBREPÕE include_usage=false do cliente (adversário n�
   assert.equal(out.model, "x", "preserva o resto do corpo");
 });
 
+test("withIncludeUsage: include_usage já true → repassa INALTERADO (sem re-serializar; preserva big-int)", () => {
+  const body = '{"stream":true,"stream_options":{"include_usage":true},"seed":12345678901234567890}';
+  assert.equal(withIncludeUsage(body), body, "não re-serializa quando já correto (evita perda de precisão do seed)");
+});
+
 test("withIncludeUsage: não-streaming e corpo malformado passam inalterados", () => {
   assert.equal(withIncludeUsage('{"stream":false,"messages":[]}'), '{"stream":false,"messages":[]}', "não-streaming: sem mudança (usage sempre presente)");
   assert.equal(withIncludeUsage('{"messages":[]}'), '{"messages":[]}', "sem stream: sem mudança");

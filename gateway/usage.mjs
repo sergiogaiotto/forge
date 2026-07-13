@@ -37,7 +37,9 @@ export function withIncludeUsage(bodyText) {
     const o = JSON.parse(bodyText);
     if (!o || typeof o !== "object" || o.stream !== true) return bodyText; // não-streaming / inválido → sem mudança
     const so = o.stream_options && typeof o.stream_options === "object" ? o.stream_options : {};
-    o.stream_options = { ...so, include_usage: true }; // FORÇA true (sobrepõe include_usage:false do cliente)
+    if (so.include_usage === true) return bodyText; // já correto → NÃO re-serializa (evita a perda de precisão do
+    // round-trip JSON em inteiros > 2^53, ex.: um `seed` grande — só afeta o caminho de injeção, já raro).
+    o.stream_options = { ...so, include_usage: true }; // FORÇA true (sobrepõe include_usage:false/ausente do cliente)
     return JSON.stringify(o);
   } catch {
     return bodyText; // corpo não-JSON → repassa como veio

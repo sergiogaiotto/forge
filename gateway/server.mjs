@@ -368,6 +368,7 @@ async function handleProxy(req, res, reqId) {
   const startTime = Date.now();
   let completionStartTime = 0;
   let output = "";
+  let upstreamOk = false; // o upstream respondeu 2xx (geração REAL)? gate do fallback de estimativa no settle
   try {
     let upstream;
     try {
@@ -383,6 +384,7 @@ async function handleProxy(req, res, reqId) {
       logLine("error", "upstream inacessível", { reqId, error: err.message });
       return send(res, 502, { error: "upstream unavailable", detail: err.message }); // o finally reconcilia a reserva
     }
+    upstreamOk = upstream.ok; // 2xx = geração real; um corpo de erro (4xx/5xx) NÃO deve virar cobrança estimada
     res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") || "text/event-stream" });
     const reader = upstream.body?.getReader();
     const decoder = new TextDecoder();
@@ -404,10 +406,12 @@ async function handleProxy(req, res, reqId) {
     if (session.budget > 0) {
       const u = extractUsage(output);
       const reported = (u.inputTokens || 0) + (u.outputTokens || 0);
-      // FALLBACK anti-bypass: se o upstream NÃO ecoou usage (apesar do include_usage) MAS houve geração
-      // (output != ""), cobra uma estimativa por bytes em vez de estornar a reserva a ZERO — senão o teto
-      // de tokens/dia seria burlável. Output vazio (502/sem geração) segue estornando (actual=0). Achado do survey.
-      const actual = reported > 0 ? reported : output.length > 0 ? estimateActualTokens(bodyText, output) : 0;
+      // FALLBACK anti-bypass: se o upstream NÃO ecoou usage (apesar do include_usage) MAS houve geração REAL
+      // (2xx com output), cobra uma estimativa por bytes em vez de estornar a reserva a ZERO — senão o teto
+      // seria burlável. Gate em upstreamOk: um corpo de ERRO (4xx/5xx) ou 502/output-vazio segue estornando
+      // (actual=0) — senão uma requisição REJEITADA cobraria ~len/4 do corpo (até ~500K p/ um corpo de 2MB),
+      // podendo estourar o teto e causar um 402 espúrio (achado da revisão adversarial).
+      const actual = reported > 0 ? reported : upstreamOk && output.length > 0 ? estimateActualTokens(bodyText, output) : 0;
       settle(spendLedger, session.subject, day, reserve, actual);
     }
   }
