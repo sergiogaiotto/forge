@@ -33,6 +33,16 @@ escrita não-atômica que um crash corromperia, zerando o teto do dia (fechada c
   O `/limpar` zera a sessão (tokens+custo). Um **402** do gateway aflora com mensagem clara (não JSON cru).
   A revisão adversarial (3 eixos) fechou 4 defeitos antes do merge — incl. o `/limpar` que não zerava o gasto
   (tornando inerte o remédio anunciado no bloqueio) e o gate que pulava blueprint/charter.
+- **SAST puro-TS no gate — paridade de visibilidade de segurança para TS/JS** (`sastScan`): o gate de segurança
+  era só Python (bandit). Agora um SAST **puro-TS** (sem dep/tool externo, no molde do `a11yLint`) varre a saída
+  TypeScript/JS gerada e sinaliza execução dinâmica de código (`eval`/`new Function`), injeção de shell
+  (`child_process` com comando dinâmico / `shell:true`), XSS (`dangerouslySetInnerHTML`/`innerHTML` dinâmico) e
+  segredo hardcoded (tokens de provedor). **Advisory-first** (como o a11y/ruff seguiram): a promoção a bloqueante
+  é follow-up após validar contra corpus de output gerado. A revisão adversarial (3 eixos) foi decisiva — a
+  validação inicial rodou contra o código escrito à mão do repo, mas o gate roda sobre código **gerado**, onde
+  texto de template com `eval()` (prompt de LLM/erro/doc), `page.$eval`, `db.exec(sql+id)` e `re.exec` geravam
+  falso-positivo; o `codeOnly` passou a apagar texto de template (mantendo `${…}`), e a detecção ganhou precisão
+  de membro/receiver e import real. 0 achado espúrio no código não-teste do repo.
 
 ### Security
 - **Redação do RAG na origem — texto E símbolo** (`CodebaseIndex`/`indexPersistence`): os chunks passam
