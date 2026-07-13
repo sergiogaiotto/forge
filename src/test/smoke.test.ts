@@ -144,3 +144,92 @@ test("summarizeSmoke: teste que FALHOU com ImportError no traceback → FALHARAM
   assert.equal(v.ran, true);
   assert.match(v.message, /FALHARAM/);
 });
+
+// ---- TypeScript smoke (vitest / jest) — saídas CAPTURADAS AO VIVO -----------------------------------
+
+test("summarizeSmoke ts (vitest): PASS (exit 0) → info, ran, com a contagem", () => {
+  const v = summarizeSmoke(res("ok", " Test Files  1 passed (1)\n      Tests  2 passed (2)\n"), "typescript");
+  assert.equal(v.level, "info");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /2 teste/);
+  assert.match(v.message, /PASSARAM/);
+});
+
+test("summarizeSmoke ts (vitest): FAIL (exit 1) → warn, ran, com a contagem", () => {
+  const v = summarizeSmoke(res("failed", " ❯ src/sum.test.ts (1 test | 1 failed) 6ms\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n"), "typescript");
+  assert.equal(v.level, "warn");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /1 teste/);
+  assert.match(v.message, /FALHARAM/);
+});
+
+test("summarizeSmoke ts (vitest): 'No test files found' (exit 1) → nenhum teste (info, NÃO ran)", () => {
+  const v = summarizeSmoke(res("failed", "No test files found, exiting with code 1\n\ninclude: **/*.{test,spec}.?(c|m)[jt]s?(x)"), "typescript");
+  assert.equal(v.level, "info");
+  assert.equal(v.ran, false);
+  assert.match(v.message, /nenhum teste/i);
+});
+
+test("summarizeSmoke ts (jest): PASS (exit 0) → info, ran, com a contagem", () => {
+  const v = summarizeSmoke(res("ok", "Test Suites: 1 passed, 1 total\nTests:       2 passed, 2 total\nSnapshots:   0 total\n"), "typescript");
+  assert.equal(v.level, "info");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /2 teste/);
+});
+
+test("summarizeSmoke ts (jest): FAIL (exit 1) → warn, com a contagem (linha Tests, não Test Suites)", () => {
+  const v = summarizeSmoke(res("failed", "Test Suites: 1 failed, 1 total\nTests:       1 failed, 1 passed, 2 total\n"), "typescript");
+  assert.equal(v.level, "warn");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /1 teste/);
+  assert.match(v.message, /FALHARAM/);
+});
+
+test("summarizeSmoke ts (jest): 'No tests found' (exit 1) → nenhum teste (info)", () => {
+  const v = summarizeSmoke(res("failed", "No tests found, exiting with code 1\nRun with `--passWithNoTests`"), "typescript");
+  assert.equal(v.ran, false);
+  assert.equal(v.level, "info");
+  assert.match(v.message, /nenhum teste/i);
+});
+
+// REGRESSÃO CRÍTICA (empíria AO VIVO): o ts-jest quebra por versão o tempo todo → "Test suite failed to run"
+// + "Test Suites: 1 failed" + "Tests: 0 total". Isso é AMBIENTE, NÃO "teste falhou". O 'failed' de "Test
+// Suites: 1 failed" NÃO pode disparar o ramo de falha — a âncora é a linha `Tests`, que aqui é "0 total".
+test("summarizeSmoke ts (jest): 'Test suite failed to run' (ts-jest quebrado) → AMBIENTE (info), NÃO 'falhou'", () => {
+  const out = "FAIL src/sum.test.ts\n  ● Test suite failed to run\n\n    TypeError: Cannot read properties of undefined (reading 'fileExists')\n      at ConfigSet._resolveTsConfig (...)\n\nTest Suites: 1 failed, 1 total\nTests:       0 total\nSnapshots:   0 total\n";
+  const v = summarizeSmoke(res("failed", out), "typescript");
+  assert.equal(v.level, "info", "erro de transform/config é ambiente, não defeito do código gerado");
+  assert.equal(v.ran, false);
+  assert.match(v.message, /inconclusivo|deps ou build/i);
+});
+
+test("summarizeSmoke ts: 'Cannot find module' (dep de terceiros ausente) → AMBIENTE (info)", () => {
+  const v = summarizeSmoke(res("failed", "Error: Cannot find module 'zod'\n    at ..."), "typescript");
+  assert.equal(v.level, "info");
+  assert.equal(v.ran, false);
+});
+
+test("summarizeSmoke ts: sem runner (skipped) → mensagem de runner indisponível", () => {
+  const v = summarizeSmoke(res("skipped", "", "ferramenta não disponível no PATH"), "typescript");
+  assert.equal(v.ran, false);
+  assert.match(v.message, /runner|vitest\/jest/i);
+});
+
+// REGRESSÃO (revisão adversarial, MEDIUM): exit 0 mas ZERO testes (passWithNoTests no config do projeto
+// gerado) NÃO é "passou" — espelha o ranReal do Go. Sem isto, "os testes PASSARAM" com nada rodado.
+test("summarizeSmoke ts: exit 0 com 'No test files found' (passWithNoTests) → nenhum teste, NÃO 'passou'", () => {
+  const v = summarizeSmoke(res("ok", "No test files found, exiting with code 0"), "typescript");
+  assert.equal(v.ran, false, "0 testes não é 'passou'");
+  assert.match(v.message, /nenhum teste/i);
+});
+
+// REGRESSÃO (revisão adversarial, HIGH): uma FALHA real cujo CORPO contém "SyntaxError"/"Cannot find module"
+// NÃO pode virar AMBIENTE (info) — a contagem de falha na linha `Tests` decide ANTES. (O outputCap amplo
+// preserva o resumo; aqui provamos que, com o resumo presente, a falha ganha do token de ambiente no corpo.)
+test("summarizeSmoke ts: FALHA com 'SyntaxError'/'Cannot find module' no corpo + resumo presente → FALHARAM (warn), NÃO ambiente", () => {
+  const out = " FAIL  src/parse.test.ts > rejeita malformado\nSyntaxError: Unexpected token }\n  ● Cannot find module 'x' (mensagem de erro asserida)\n\n Test Files  1 failed (1)\n      Tests  2 failed (2)\n";
+  const v = summarizeSmoke(res("failed", out), "typescript");
+  assert.equal(v.level, "warn", "a contagem 'Tests 2 failed' decide antes do token de ambiente no corpo");
+  assert.equal(v.ran, true);
+  assert.match(v.message, /2 teste/);
+});

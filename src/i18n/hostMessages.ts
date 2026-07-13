@@ -212,6 +212,10 @@ export type HostMessageKey =
   | "smoke.notPassed"
   | "smoke.noGo"
   | "smoke.buildIssue"
+  | "smoke.noRunner"
+  | "smoke.node.passed"
+  | "smoke.node.passedAll"
+  | "smoke.node.failed"
   // Diálogos nativos
   | "dialog.ragReindexed"
   | "dialog.role.placeholder"
@@ -629,6 +633,10 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "smoke.notPassed": "Smoke test: a suíte gerada não passou (veja os logs do FORGE em Mostrar logs). Revise antes de aplicar. (Advisory: não bloqueia o Aplicar.)",
     "smoke.noGo": "Smoke test pulado: `go` indisponível para rodar a suíte gerada.",
     "smoke.buildIssue": "Smoke test inconclusivo: a suíte não pôde compilar/rodar offline (deps ou build — veja o aviso de compilação). (Advisory.)",
+    "smoke.noRunner": "Smoke test pulado: nenhum runner de teste TS suportado (vitest/jest) encontrado no node_modules do workspace. Instale-o e reabra para validar que os testes gerados passam.",
+    "smoke.node.passed": "Smoke test: {count} teste(s) gerado(s) PASSARAM (runner do workspace) — o projeto de fato roda, não só compila.",
+    "smoke.node.passedAll": "Smoke test: os teste(s) gerado(s) PASSARAM (runner do workspace) — o projeto de fato roda, não só compila.",
+    "smoke.node.failed": "Smoke test: {count} teste(s) gerado(s) FALHARAM (runner do workspace) — revise antes de aplicar. (Advisory: o gate não bloqueia o Aplicar por isto.)",
     "dialog.ragReindexed": "FORGE RAG: {files} arquivos, {chunks} trechos (modo {mode}).",
     "dialog.role.placeholder": "Seu papel no projeto — ajusta o estilo e os defaults do FORGE",
     "role.cientista": "Cientista de dados",
@@ -1032,6 +1040,10 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "smoke.notPassed": "Smoke test: the generated suite didn't pass (see the FORGE logs in Show logs). Review before applying. (Advisory: doesn't block Apply.)",
     "smoke.noGo": "Smoke test skipped: `go` unavailable to run the generated suite.",
     "smoke.buildIssue": "Smoke test inconclusive: the suite couldn't compile/run offline (deps or build — see the compile advisory). (Advisory.)",
+    "smoke.noRunner": "Smoke test skipped: no supported TS test runner (vitest/jest) found in the workspace node_modules. Install it and reopen to validate that the generated tests pass.",
+    "smoke.node.passed": "Smoke test: {count} generated test(s) PASSED (workspace runner) — the project actually runs, not just compiles.",
+    "smoke.node.passedAll": "Smoke test: the generated test(s) PASSED (workspace runner) — the project actually runs, not just compiles.",
+    "smoke.node.failed": "Smoke test: {count} generated test(s) FAILED (workspace runner) — review before applying. (Advisory: the gate doesn't block Apply for this.)",
     "dialog.ragReindexed": "FORGE RAG: {files} files, {chunks} chunks (mode {mode}).",
     "dialog.role.placeholder": "Your role in the project — adjusts FORGE's style and defaults",
     "role.cientista": "Data scientist",
@@ -1435,6 +1447,10 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "smoke.notPassed": "Smoke test: la suite generada no pasó (mira los logs de FORGE en Mostrar logs). Revisa antes de aplicar. (Advisory: no bloquea el Aplicar.)",
     "smoke.noGo": "Smoke test omitido: `go` no disponible para ejecutar la suite generada.",
     "smoke.buildIssue": "Smoke test no concluyente: la suite no pudo compilar/correr offline (deps o build — mira el aviso de compilación). (Advisory.)",
+    "smoke.noRunner": "Smoke test omitido: no se encontró un runner de pruebas TS soportado (vitest/jest) en el node_modules del workspace. Instálalo y reabre para validar que las pruebas generadas pasan.",
+    "smoke.node.passed": "Smoke test: {count} prueba(s) generadas PASARON (runner del workspace) — el proyecto de verdad corre, no solo compila.",
+    "smoke.node.passedAll": "Smoke test: las prueba(s) generadas PASARON (runner del workspace) — el proyecto de verdad corre, no solo compila.",
+    "smoke.node.failed": "Smoke test: {count} prueba(s) generadas FALLARON (runner del workspace) — revisa antes de aplicar. (Advisory: el gate no bloquea el Aplicar por esto.)",
     "dialog.ragReindexed": "FORGE RAG: {files} archivos, {chunks} fragmentos (modo {mode}).",
     "dialog.role.placeholder": "Tu rol en el proyecto — ajusta el estilo y los defaults de FORGE",
     "role.cientista": "Científico de datos",
