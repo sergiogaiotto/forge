@@ -118,6 +118,7 @@ import { renderDiagnosticsBundle } from "../obs/diagnostics";
 import { Runner } from "./Runner";
 import { RunService } from "./RunService";
 import { ProjectGateRunner } from "./ProjectGateRunner";
+import { AttachmentStore } from "./AttachmentStore";
 import { Task } from "./Task";
 
 const GS_PROVIDER = "forge.provider";
@@ -181,8 +182,9 @@ export class Controller {
   private servedWindowCache = new Map<string, number>();
   private licenseKey: string | undefined;
   private history: ChatMessage[] = [];
-  private pendingAttachments: { id: string; label: string; kind: "workspace" | "upload" | "selection" | "search"; content: string }[] = [];
-  private attachmentSeq = 0;
+  // Anexos pendentes do chat — estado + lógica (cap/janela-8/consumo/snapshot) extraídos p/ AttachmentStore
+  // (puro, testável). O onChange re-posta os chips na webview quando a lista muda.
+  private readonly attachments = new AttachmentStore(() => this.postAttachments());
   private currentTask: Task | undefined;
   // Usage REAL acumulado da sessão (todas as gerações, incl. continuações) — /contexto e /tokens.
   private sessionUsage = { input: 0, output: 0 };
@@ -1543,7 +1545,7 @@ export class Controller {
         // stream/text na conversa "nova" (task fantasma confirmada em revisão adversarial).
         this.currentTask?.abort();
         this.history = [];
-        this.pendingAttachments = [];
+        this.attachments.clear();
         // FinOps (#12): /limpar É "nova sessão" → zera também os contadores de sessão (tokens + custo) e o
         // aviso de teto. Sem isto, o bloqueio do teto de gasto PERSISTIA após o /limpar — contradizendo a
         // própria mensagem do bloqueio ("use /limpar para uma nova sessão"). Os três zeram juntos (o
@@ -1664,8 +1666,7 @@ export class Controller {
         await this.addImageOcrAttachment(msg.dataUrl);
         break;
       case "context/removeAttachment":
-        this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== msg.id);
-        this.postAttachments();
+        this.attachments.remove(msg.id); // remove() re-posta os chips (via onChange) se algo saiu
         break;
       case "context/search":
         await this.searchInternal();
@@ -1774,7 +1775,7 @@ export class Controller {
     this.sessionToken = undefined;
     this.licenseKey = undefined;
     this.history = [];
-    this.pendingAttachments = [];
+    this.attachments.clear();
     await this.postState();
   }
 
@@ -2081,10 +2082,9 @@ export class Controller {
 
     const ragStart = Date.now();
     let retrievedContext = await this.gatherContext(text);
-    if (this.pendingAttachments.length > 0) {
-      const att = this.pendingAttachments.map((a) => `### Anexo: ${a.label}\n\`\`\`\n${a.content}\n\`\`\``).join("\n\n");
-      retrievedContext = `Anexos fornecidos pelo usuário:\n${att}\n\n${retrievedContext}`;
-      this.pendingAttachments = [];
+    const attachmentBlock = this.attachments.consumeAsContext();
+    if (attachmentBlock) {
+      retrievedContext = attachmentBlock + retrievedContext;
       this.postAttachments(); // limpa os chips (anexos são consumidos no envio)
     }
     // Auto-leitura: se o input cita arquivos do workspace num erro/traceback, o HOST os lê e injeta no
@@ -2571,8 +2571,8 @@ export class Controller {
         pinnedTokens: estimateTokens(basePrompt) + estimateTokens(projectProfile),
         historyTokens: estimateTokensOf(this.history.map((h) => h.content)),
         historyTurns: this.history.length,
-        attachments: this.pendingAttachments.length,
-        attachmentTokens: estimateTokensOf(this.pendingAttachments.map((a) => a.content)),
+        attachments: this.attachments.count(),
+        attachmentTokens: estimateTokensOf(this.attachments.contents()),
         ragChunks: rag.chunks,
         sessionInputTokens: this.sessionUsage.input,
         sessionOutputTokens: this.sessionUsage.output,
@@ -3165,17 +3165,11 @@ export class Controller {
   // ---- anexos de contexto (workspace / upload / seleção) ---------------------
 
   private postAttachments(): void {
-    this.post({
-      type: "context/attachments",
-      items: this.pendingAttachments.map((a) => ({ id: a.id, label: a.label, bytes: a.content.length, kind: a.kind })),
-    });
+    this.post({ type: "context/attachments", items: this.attachments.chips() });
   }
 
   private addAttachment(label: string, kind: "workspace" | "upload" | "selection" | "search", content: string): void {
-    const capped = content.length > 16000 ? content.slice(0, 16000) + "\n… (truncado)" : content;
-    this.pendingAttachments.push({ id: `att_${++this.attachmentSeq}`, label, kind, content: capped });
-    if (this.pendingAttachments.length > 8) this.pendingAttachments = this.pendingAttachments.slice(-8);
-    this.postAttachments();
+    this.attachments.add(label, kind, content); // add() capa, mantém 8 e re-posta os chips (via onChange)
   }
 
   async pickWorkspaceFile(): Promise<void> {
