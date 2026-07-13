@@ -11,6 +11,7 @@ import { safeWorkspacePath } from "../util/safePath";
 import { findLayerViolations, layerRuleLabel } from "../util/layerCheck";
 import { evaluateDodGate } from "../util/dodCheck";
 import { scanA11y } from "../util/a11yLint";
+import { scanSast, splitSast } from "../util/sastScan";
 import { summarizeSmoke } from "../util/smoke";
 import { buildBanditInstall, buildMypyInstall, buildRuffInstall, findVenvPython } from "../util/pythonEnv";
 import { reconcileRequirements } from "../util/pythonDeps";
@@ -239,8 +240,20 @@ export class ProjectGateRunner {
       // E confiança ALTA BLOQUEIA (senha hardcoded, eval de input, cripto fraca); o resto é advisory. O bandit
       // analisa por AST (NÃO executa o código, ao contrário do smoke test). SEPARADO do toolchain (fora do
       // summarizeGate/auto-reparo), como a arquitetura. bandit ausente/sem relatório → null (fail-open).
-      // bandit é Python-only (usa o `py` resolvido). Em TypeScript a segurança não roda por ora (follow-up).
-      const security = language === "python" && securityMode !== "off" ? await this.runSecurityScan(py!, root, securityMode) : null;
+      // bandit é Python-only (usa o `py` resolvido). Para TYPESCRIPT/JS, um SAST PURO-TS (scanSast, sem dep/tool
+      // externo) traz a VISIBILIDADE de segurança que faltava — TS não tinha NENHUMA cobertura (como o a11y era o
+      // único domínio sem motor). Produz o mesmo shape {blocking, advisories} e reusa todo o downstream.
+      // ADVISORY-FIRST (mode "advisory" sempre): as classes bloqueantes de um pattern-scan (eval/exec) só atingem
+      // a barra de FP-quase-zero sobre código GERADO após validação contra um corpus de output real — a revisão
+      // adversarial mostrou FPs (texto de template com "eval()", page.$eval, db.exec) que a validação no código
+      // do próprio repo não cobria. É a mesma trajetória do a11y/ruff (advisory → promover com empíria). Promover
+      // a bloqueante é follow-up. off silencia.
+      const security =
+        language === "python" && securityMode !== "off"
+          ? await this.runSecurityScan(py!, root, securityMode)
+          : language === "typescript" && securityMode !== "off"
+            ? splitSast(scanSast(props.map((e) => ({ path: normGatePath(e.proposal.filePath), content: e.proposal.modified }))), "advisory")
+            : null;
       const securityErrors = security?.blocking ?? [];
       const securityAdvisories = security?.advisories ?? [];
       // ruff Pyflakes (F-18 + #9): Python-only + ligado. Split em BLOQUEANTE (F821/F822/F823 — nome-indefinido/
