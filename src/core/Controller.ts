@@ -100,7 +100,7 @@ import { parseRuffReport, ruffAdvisories } from "../util/ruffParse";
 import { pickBlueprintFromChannels, topoSort } from "../util/blueprint";
 import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/harmony";
 import { charterProbablyCut } from "../util/charterCut";
-import { classifyProjectIntent } from "../util/projectIntent";
+import { classifyProjectIntent, forcesHexagonalBackend } from "../util/projectIntent";
 import { isFrontendRequest } from "../util/frontendIntent";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
@@ -2047,6 +2047,17 @@ export class Controller {
     if (mode === "normal" && isFrontendRequest(text)) {
       const fe = this.skills.find((s) => s.enabled && s.name === "frontend-html-a11y");
       if (fe && !toActivate.some((s) => s.name === fe.name)) toActivate = [...toActivate, fe];
+    }
+    // R3 (análogo ao frontend, mas keyed na escolha ESTRUTURADA do wizard): o Modo Projeto Python + família
+    // ports/adapters (hexagonal/clean) FORÇA a skill carro-chefe hexagonal-backend — o brief comum não cruza o
+    // limiar léxico, e sem a skill a geração perde o playbook alinhado aos gates. Por ser a escolha explícita
+    // (não texto), não over-triggera
+    // nos dados. Respeita a skill DESABILITADA (só força se enabled). PREPENDE (ao contrário do append do
+    // frontend): a arquitetura do wizard é a intenção PRIMÁRIA, então a skill deve ser a MAIS protegida no
+    // orçamento do assembler (empacota na ordem da lista; a última a estourar é cortada). Ver forcesHexagonalBackend.
+    if (forcesHexagonalBackend(mode, project)) {
+      const hex = this.skills.find((s) => s.enabled && s.name === "hexagonal-backend");
+      if (hex && !toActivate.some((s) => s.name === hex.name)) toActivate = [hex, ...toActivate];
     }
     const activated = await Promise.all(
       toActivate.map(async (meta) => ({ meta, body: await this.loader.loadBody(meta) }))
