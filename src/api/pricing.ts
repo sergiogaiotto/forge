@@ -54,8 +54,8 @@ function round6(n: number): number {
   return Math.round(n * 1e6) / 1e6; // 6 casas — custo por geração costuma ser fração de centavo
 }
 
-// FinOps (#12): decisão do teto de gasto da SESSÃO no cliente (deterrente). Pura/testável — o Controller
-// guarda o estado (`sessionCost`, `budgetWarned`) e emite os avisos. block quando o gasto ATINGE o teto;
+// FinOps (#12): decisão do teto de gasto da SESSÃO no cliente (deterrente). Pura/testável — o SessionBudget
+// guarda o estado (custo/aviso) e o Controller emite os avisos. block quando o gasto ATINGE o teto;
 // warn ao cruzar ~80% (só uma vez — o chamador passa `warned`). budget<=0 = sem teto. Sem preços o custo
 // é 0, então o teto (em moeda) simplesmente nunca dispara.
 export function budgetGateDecision(spent: number, budget: number, warned: boolean): { block: boolean; warn: boolean } {
