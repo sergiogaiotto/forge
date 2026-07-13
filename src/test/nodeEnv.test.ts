@@ -15,13 +15,15 @@ test("buildTscInstall: instala typescript como devDependency", () => {
   assert.equal(buildTscInstall("pnpm"), "pnpm install --save-dev typescript");
 });
 
-test("buildGateTsconfig: JSON válido, tolerante a deps ausentes (noEmit/skipLibCheck/moduleResolution)", () => {
+test("buildGateTsconfig: JSON válido, tolerante a deps ausentes; JS/JSX no include com allowJs+checkJs:false", () => {
   const cfg = JSON.parse(buildGateTsconfig());
   assert.equal(cfg.compilerOptions.noEmit, true);
   assert.equal(cfg.compilerOptions.skipLibCheck, true);
   assert.equal(cfg.compilerOptions.moduleResolution, "node");
   assert.equal(cfg.compilerOptions.strict, false); // reduz falso-positivo sem node_modules
-  assert.deepEqual(cfg.include, ["**/*.ts", "**/*.tsx"]);
+  assert.equal(cfg.compilerOptions.allowJs, true, "parseia JS p/ pegar sintaxe (gate era no-op em .js)");
+  assert.equal(cfg.compilerOptions.checkJs, false, "NÃO tipa JS (checkJs:true = ruído sem node_modules)");
+  assert.deepEqual(cfg.include, ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]);
 });
 
 // ---- Smoke TS: detecção do runner + resolução do entry -------------------------

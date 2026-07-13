@@ -65,6 +65,14 @@ export function findWorkspaceTestRunner(
 // tsconfig MÍNIMO materializado na árvore temp para o `tsc --noEmit`: checa sintaxe + contrato interno, mas
 // TOLERANTE a deps ausentes (sem node_modules no temp). strict:false e skipLibCheck reduzem falso-positivo;
 // moduleResolution:node resolve os imports RELATIVOS do próprio projeto; noEmit não escreve nada.
+//
+// JS/JSX (allowJs:true, checkJs:false): sem isto o gate era NO-OP em .js/.jsx/.mjs/.cjs (o include só pegava
+// .ts/.tsx) — um Express em .js ou um React SPA em .jsx chegava "tsc ok" SEM cobertura alguma (achado do
+// survey). Com allowJs, o tsc PARSEIA o JS e reporta erro de SINTAXE (TS1xxx) — a classe que o gate BLOQUEIA
+// —, restaurando a paridade de sintaxe com o .ts. checkJs:false é DELIBERADO: com checkJs:true o tsc TIPA o
+// JS e, SEM node_modules no temp, inunda de ruído (TS2875 do jsx-runtime em toda .jsx, implicit-any) — validado
+// AO VIVO. Assim JS gerado quebrado (que nem parseia) BLOQUEIA; o contrato semântico (import-fantasma) de JS
+// fica p/ um follow-up (exigiria checkJs + filtrar o ruído do jsx-runtime).
 export function buildGateTsconfig(): string {
   return JSON.stringify(
     {
@@ -77,12 +85,13 @@ export function buildGateTsconfig(): string {
         strict: false,
         noImplicitAny: false,
         esModuleInterop: true,
-        allowJs: false,
+        allowJs: true,
+        checkJs: false, // parseia JS (sintaxe TS1xxx bloqueia) SEM tipar (checkJs:true = ruído sem node_modules)
         jsx: "react-jsx",
         resolveJsonModule: true,
         forceConsistentCasingInFileNames: false,
       },
-      include: ["**/*.ts", "**/*.tsx"],
+      include: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"],
     },
     null,
     2
