@@ -77,3 +77,44 @@ test("isFrontendRequest: pedido curto SEM âncora não dispara (gap de recall do
   assert.equal(isFrontendRequest("faça um formulário de contato"), false);
   assert.equal(isFrontendRequest(""), false);
 });
+
+// FIX do survey pós-#217: o CAMPO 'email'/'newsletter' num formulário de UI legítimo NÃO pode mais ser
+// suprimido pela porta negativa (o token cru `email`/`newsletter` em DATA_WEB matava login/cadastro/contato).
+test("isFrontendRequest: form/UI de cliente com campo 'email'/'newsletter' → true (não é mais suprimido)", () => {
+  for (const t of [
+    "crie uma página HTML de login com campo de email e senha",
+    "formulário de cadastro em HTML com nome e email, acessível (aria)",
+    "landing page com formulário de inscrição na newsletter",
+    "tela de contato em HTML com email e mensagem",
+    "formulário de inscrição na newsletter em HTML", // form de newsletter (UI), não conteúdo de newsletter
+    "formulário de newsletter em HTML acessível com aria",
+    "formulário de contato acessível com email", // 'acessível' (adj) agora é sinal forte (acess[íi]\\w*)
+    "modal de login com email em HTML", // 'modal'/'login' → contexto de form (override do gate de e-mail-dado)
+    "página de cadastro com email e senha, acessível",
+  ]) {
+    assert.equal(isFrontendRequest(t), true, `UI com campo email/newsletter deveria ativar a11y: ${t}`);
+  }
+});
+
+// Trava: e-mail/newsletter de DADOS (template/envio/marketing/HTML-do-email) segue false MESMO com um
+// substantivo de UI junto ("botão") — o artefato é o e-mail, não a UI de browser (a11y não se aplica).
+test("isFrontendRequest: e-mail/newsletter de DADOS (template/envio/marketing) segue false", () => {
+  for (const t of [
+    "crie um template de e-mail HTML de boas-vindas",
+    "gere um e-mail em HTML com um botão de call-to-action", // o ARTEFATO é o e-mail (gere um e-mail)
+    "email de confirmação em HTML com botão", // e-mail de propósito, mesmo com 'botão' (achado adversarial)
+    "template do e-mail de recuperação de senha em HTML", // 'do' e-mail
+    "e-mail transacional em HTML com um botão",
+    "assinatura de e-mail em HTML",
+    "preciso de um email em HTML com botão", // verbo fora da lista, mas 'email…html' sem contexto de form
+    "um e-mail em HTML com um botão", // sem verbo, sem form → dado
+    "email de marketing em HTML com botão",
+    "boleto por email em HTML com botão", // artefato entregue POR e-mail (não é UI de browser)
+    "escreva o código para enviar e-mail com nodemailer",
+    "monte um template de newsletter em HTML",
+    "gere o conteúdo de uma newsletter sobre o produto",
+    "configure e-mail marketing com sendgrid",
+  ]) {
+    assert.equal(isFrontendRequest(t), false, `e-mail/newsletter de dados NÃO é frontend: ${t}`);
+  }
+});
