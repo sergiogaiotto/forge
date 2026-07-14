@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatMessage } from "../api/types";
-import { checkCompleteness, dedupeFileBlocksByPath, partialFilePath, partialProposalKeys, resilientGenerate } from "../util/completeness";
+import { checkCompleteness, dedupeFileBlocksByPath, emittedContracts, partialFilePath, partialProposalKeys, resilientGenerate } from "../util/completeness";
 import { parseFileBlocks } from "../util/fileBlocks";
 
 const FENCE = "````"; // 4 crases (FORGE_FENCE)
@@ -549,4 +549,39 @@ test("cenário do README ponta-a-ponta: 1 arquivo FECHADO com corte do provider 
   assert.equal(r.truncated, true, "provider sinalizou finish_reason=length");
   assert.equal(r.completeness.complete, true, "mas o bloco do README fechou");
   assert.equal(partialFilePath(r.truncated, r.completeness, r.full), undefined);
+});
+
+// ---- R5: a continuação clean-room passa os CONTRATOS reais dos já-emitidos ----
+
+test("R5 emittedContracts: extrai os blocos já emitidos (path+content) e EXCLUI o bloco ABERTO (travado)", () => {
+  const full =
+    FENCE + "forge-file path=a.py\nclass A:\n    def go(self) -> int: ...\n" + FENCE + "\n" +
+    FENCE + "forge-file path=b.py\nclass B: ...\n" + FENCE + "\n" +
+    FENCE + "forge-file path=c.py\nclass C_incompl"; // c.py cerca ABERTA (travado/abandonado)
+  const c = emittedContracts(full, "c.py");
+  const paths = c.map((b) => b.path.replace(/^\.\//, ""));
+  assert.ok(paths.includes("a.py") && paths.includes("b.py"), "traz os já-emitidos completos");
+  assert.ok(!paths.includes("c.py"), "exclui o bloco aberto (travado) — não é contrato confiável");
+  assert.match(c.find((b) => /a\.py/.test(b.path))!.content, /class A/, "traz o CONTEÚDO real (a assinatura)");
+});
+
+test("R5: o laço clean-room ENTREGA ao builder os contratos reais dos já-emitidos (não regenera cego)", async () => {
+  let seen: { path: string; content: string }[] = [];
+  const s = scripted([
+    { text: AB_CLOSED }, // a.py + b.py fechados; README.md do plano FALTA (sem cerca aberta) → clean-room
+    { text: FENCE + "forge-file path=README.md\n# Doc\n" + FENCE + "\n" }, // a clean-room emite o faltante
+  ]);
+  const r = await resilientGenerate(base, s.fn, {
+    ...opts,
+    expectedPaths: ["a.py", "b.py", "README.md"],
+    buildMissingFilesContinuation: (missing, emitted) => {
+      seen = emitted;
+      return `emita: ${missing.join(", ")}`;
+    },
+  });
+  assert.equal(r.completeness.complete, true);
+  const paths = seen.map((e) => e.path.replace(/^\.\//, ""));
+  assert.ok(paths.includes("a.py") && paths.includes("b.py"), "o builder RECEBEU o contrato de a.py e b.py já emitidos");
+  assert.ok(!paths.includes("README.md"), "o faltante que está sendo regenerado NÃO é seu próprio contrato");
+  assert.ok(seen.every((e) => typeof e.content === "string" && e.content.length > 0), "os contratos trazem o conteúdo real");
 });

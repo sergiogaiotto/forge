@@ -230,7 +230,9 @@ export interface ResilientOptions {
   // A âncora estagnava o laço: o modelo re-emitia a cauda, o stitch dedupava, crescimento zero → stall.
   // O plano + propósitos vivem no system prompt (constante em toda chamada), então a âncora não é sinal de
   // retomada aqui — só um ímã de re-emissão. Ausente ⇒ mantém o caminho ancorado antigo (compat de teste).
-  buildMissingFilesContinuation?: (missing: string[]) => string;
+  // `emitted` = os blocos que ESTA geração já produziu (o CONTRATO real), p/ o builder mostrar as assinaturas
+  // concretas e o modelo NÃO regenerar os faltantes CEGO (R5 — o plano no system prompt não tem as assinaturas).
+  buildMissingFilesContinuation?: (missing: string[], emitted: FileBlock[]) => string;
   // Modo Projeto: os caminhos ESPERADOS do blueprint. Enquanto algum não tiver sido emitido como bloco
   // FECHADO, a geração NÃO está completa — mesmo sem cerca aberta e sem o provider sinalizar corte (o
   // gpt-oss às vezes auto-encerra a cauda com arquivos faltando). A continuação NOMEIA os que faltam. (F-02)
@@ -268,6 +270,15 @@ export function missingExpectedFiles(full: string, expected: string[] | undefine
   if (!expected || expected.length === 0) return [];
   const emitted = new Set(parseFileBlocks(full).map((b) => normResilientPath(b.path)));
   return expected.filter((p) => !emitted.has(normResilientPath(p)));
+}
+
+// R5: os blocos JÁ EMITIDOS por esta geração (o CONTRATO real) para a continuação clean-room mostrar as
+// assinaturas concretas ao modelo — senão ele regenera os faltantes CEGO ao que já escreveu (drift/símbolo
+// fantasma). Dedupa por path e EXCLUI o bloco ABERTO (o arquivo travado/abandonado, ainda incompleto — não é
+// contrato confiável). Usa parseFileBlocks (AUTORITATIVO, recupera cerca mal-contada), como missingExpectedFiles.
+export function emittedContracts(full: string, openPath: string | undefined): FileBlock[] {
+  const open = openPath ? normResilientPath(openPath) : "";
+  return dedupeFileBlocksByPath(parseFileBlocks(full), openPath).filter((b) => normResilientPath(b.path) !== open);
 }
 
 // Colapsa blocos com o MESMO path (o modelo às vezes re-emite um arquivo já gerado numa continuação
@@ -396,12 +407,13 @@ export async function resilientGenerate(
       if (!full.endsWith("\n")) full += "\n";
       stuckPath = undefined;
       stuckStreak = 0;
-      convo = [...baseMessages, { role: "user", content: opts.buildMissingFilesContinuation!(missing) }];
+      convo = [...baseMessages, { role: "user", content: opts.buildMissingFilesContinuation!(missing, emittedContracts(full, completeness.path)) }];
     } else if (!openFence && missing.length > 0 && opts.buildMissingFilesContinuation) {
       // Clean-room (F-02): faltam arquivos do plano e o último bloco NÃO ficou aberto. Pede os faltantes
       // NOMEADOS como blocos novos e autônomos, SEM a âncora da cauda — ela só convida a re-emissão da cauda
       // (stitch dedupa → crescimento zero → stall). O plano+propósitos vivem no system prompt (constante).
-      convo = [...baseMessages, { role: "user", content: opts.buildMissingFilesContinuation(missing) }];
+      // R5: os contratos reais dos já-emitidos vão na mensagem para o modelo não regenerar os faltantes cego.
+      convo = [...baseMessages, { role: "user", content: opts.buildMissingFilesContinuation(missing, emittedContracts(full, completeness.path)) }];
     } else {
       // cerca aberta → continuar o MESMO arquivo (âncora obrigatória p/ retomar no ponto exato do corte);
       // corte sem faltantes conhecidos (ex.: chat, missing=[]) → tail genérico, também ancorado.

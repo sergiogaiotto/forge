@@ -649,12 +649,27 @@ export function buildTailContinuation(missing?: string[]): string {
 // e contraproducente aqui, o modelo não vê o próprio output): pedimos os arquivos NOMEADOS como blocos NOVOS e
 // AUTÔNOMOS. O plano + propósitos + deps já estão no system prompt (constante em toda chamada), o que preserva
 // a coerência cross-file. A âncora da cauda só estagnava o laço (re-emissão da cauda → stitch dedupa → stall).
-export function buildMissingFilesContinuation(missing: string[]): string {
+// R5: `emitted` = os arquivos que ESTA geração já produziu (o CONTRATO REAL). Sem eles o modelo regenera os
+// faltantes CEGO — o plano no system prompt só tem path+propósito+deps, NÃO as assinaturas concretas que ele
+// mesmo emitiu → drift (import/símbolo fantasma cross-file, o "instala e não roda"). Mostramos as assinaturas
+// reais (capadas p/ proteger a janela — a continuação NÃO passa pelo ContextAssembler), como o buildProjectRepairPrompt.
+export function buildMissingFilesContinuation(missing: string[], emitted: { path: string; content: string }[] = []): string {
+  // Cap CONSERVADOR: a continuação NÃO passa pelo ContextAssembler (é enviada crua com baseMessages), então
+  // este é o único teto anti-janela. 8×1000 = ~8000 chars ≈ o anchorChars da continuação ANCORADA existente —
+  // mantém o mesmo envelope de tokens (sem 400 novo). O head de cada arquivo cobre imports + defs (assinaturas).
+  const MAX_FILES = 8;
+  const MAX_CHARS = 1000;
+  const cap = (c: string) => (c.length > MAX_CHARS ? `${c.slice(0, MAX_CHARS)}\n# … (truncado — assinaturas acima)` : c);
+  const contracts = emitted
+    .slice(0, MAX_FILES)
+    .map((f) => `--- CONTRATO REAL de ${f.path} (reuse estes nomes/assinaturas EXATAMENTE) ---\n${cap(f.content)}`)
+    .join("\n\n");
+  const contractBlock = contracts ? `\n\nARQUIVOS JÁ GERADOS nesta resposta (o contrato a casar — NÃO os re-emita):\n${contracts}` : "";
   return `Faltam EXATAMENTE estes arquivos do PLANO — emita TODOS agora, cada um como um bloco \`${FORGE_FILE_BLOCK_LANG}\` COMPLETO e AUTÔNOMO, com o \`path=\` correto: ${missing.join(", ")}.
-- Gere o conteúdo INTEIRO de cada arquivo (não um trecho); reuse os nomes/assinaturas/deps já definidos no plano para manter a COERÊNCIA com os arquivos já gerados.
+- Gere o conteúdo INTEIRO de cada arquivo (não um trecho); reuse os nomes/assinaturas/deps EXATOS dos ARQUIVOS JÁ GERADOS abaixo (não invente uma API convencional) para manter a COERÊNCIA cross-file. ${NO_PHANTOM_SYMBOL}
 - Responda APENAS com os blocos de arquivo. NADA de saudação, confirmação ("ok", "vou continuar") nem comentário. O PRIMEIRO caractere já é a cerca de abertura.
 - Emita SOMENTE os arquivos listados acima; não re-emita nenhum outro.
-- ${NO_ELLIPSIS_RULE}`;
+- ${NO_ELLIPSIS_RULE}${contractBlock}`;
 }
 
 // Reparo de protocolo (Onda 3): a resposta anterior MOSTROU o conteúdo de arquivo(s) em cerca comum (três

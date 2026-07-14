@@ -371,6 +371,21 @@ test("buildMissingFilesContinuation: nomeia os faltantes como blocos completos, 
   assert.match(one, /correto: README\.md\./, "um só faltante → lista com o único nome, sem vírgula pendente");
 });
 
+test("R5: buildMissingFilesContinuation mostra os CONTRATOS reais dos já-emitidos (capados) p/ coerência cross-file", () => {
+  const emitted = [
+    { path: "app/domain/order.py", content: "class Order:\n    def place(self, x: int) -> int: ...\n" },
+    { path: "app/ports/repo.py", content: "y".repeat(5000) }, // grande → capado (protege a janela)
+  ];
+  const p = buildMissingFilesContinuation(["app/services/svc.py"], emitted);
+  assert.match(p, /CONTRATO REAL de app\/domain\/order\.py/);
+  assert.match(p, /class Order/, "mostra a assinatura REAL (não só o path)");
+  assert.match(p, /truncado/, "conteúdo grande é capado p/ não estourar a janela (a continuação não passa pelo assembler)");
+  // sem `emitted` → compat: sem bloco de contrato, mas ainda nomeia o faltante (comportamento antigo)
+  const bare = buildMissingFilesContinuation(["x.py"]);
+  assert.ok(!/CONTRATO REAL/.test(bare), "sem já-emitidos, não injeta bloco de contrato");
+  assert.match(bare, /x\.py/);
+});
+
 // Onda 1 (quick wins 1.3/1.4): o prompt do projeto injeta o PROPÓSITO do charter e as deps FIXADAS do
 // requirements.txt — sem isso o modelo ignora o charter (sai o exemplo Pedido/Pagamento) e alucina libs.
 test("buildBlueprintSystemPrompt: injeta propósito do charter e deps fixadas quando há contexto", () => {
