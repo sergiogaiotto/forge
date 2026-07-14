@@ -77,7 +77,8 @@ import { runFileCheck } from "../util/execCheck";
 import { summarizeSmoke } from "../util/smoke";
 import { findLayerViolations, layerRuleLabel } from "../util/layerCheck";
 import { DbtIndex, mdSafe, renderImpactCard, renderSchemaContext } from "../dbt/artifacts";
-import { dbtIndexStale, DbtProjectLocation, findDbtProject, loadDbtIndex, LoadedDbtIndex } from "../dbt/loader";
+import { dbtIndexStale, findDbtProject, loadDbtIndex } from "../dbt/loader";
+import { DbtIndexStore } from "../dbt/DbtIndexStore";
 import { analyzeSqlProposal, sqlEvidenceForReview } from "../sql/engine";
 import { renderFindings } from "../sql/antipatterns";
 import { classifySql } from "../sql/classify";
@@ -193,13 +194,15 @@ export class Controller {
   // Grounding dbt (dados, Onda 1): índice dos artefatos (target/manifest.json [+ catalog.json]),
   // recarregado por mtime (um `dbt compile` do dev atualiza sem reindexação manual). null = sem
   // projeto dbt ou sem artefatos (fail-open: as camadas que o consomem simplesmente não opinam).
-  private dbtLoaded: LoadedDbtIndex | null = null;
-  private dbtProbed = false; // já VARREMOS o workspace atrás de dbt_project.yml? (só isso — nunca "desisti do manifest")
-  // Localização do projeto dbt encontrada no probe — mantida mesmo quando o manifest ainda não existe
-  // ou uma recarga falhou (TOCTOU com `dbt compile` em andamento): a próxima chamada RE-TENTA a partir
-  // dela (um fs.stat barato), em vez de degradar o grounding para o resto da sessão (revisão adversarial).
-  private dbtLocation: DbtProjectLocation | null = null;
-  private dbtInflight: Promise<DbtIndex | undefined> | null = null; // single-flight (propostas chegam em paralelo)
+  // Estado (índice carregado/probe-once/localização/single-flight) + invariantes extraídos p/ DbtIndexStore
+  // (puro/testável; I/O do dbt/loader e workspaceRoot injetados — padrão ProviderRuntimeResolver #197).
+  private readonly dbtStore = new DbtIndexStore({
+    workspaceRoot: () => this.workspaceRoot(),
+    findDbtProject,
+    loadDbtIndex,
+    isStale: dbtIndexStale,
+    log,
+  });
   // Onda 3: serviço de warehouse (CLI tradicional + MCP) e snapshots de schema vivo por conexão —
   // persistidos no globalStorage e fundidos ao índice dbt no grounding (getGroundingIndex).
   private warehouseSvc: WarehouseService | null = null;
@@ -2604,43 +2607,6 @@ export class Controller {
     };
   }
 
-  // ---- grounding dbt (dados) ---------------------------------------------------------------------
-
-  // Índice dos artefatos dbt do workspace, com recarga por mtime. undefined = sem grounding.
-  // Single-flight: chamadas concorrentes (várias propostas validando em paralelo) compartilham a mesma
-  // Promise em vez de recarregar em duplicidade ou verem "sem grounding" durante o probe.
-  private getDbtIndex(): Promise<DbtIndex | undefined> {
-    if (this.dbtInflight) return this.dbtInflight;
-    this.dbtInflight = this.getDbtIndexInner().finally(() => {
-      this.dbtInflight = null;
-    });
-    return this.dbtInflight;
-  }
-
-  private async getDbtIndexInner(): Promise<DbtIndex | undefined> {
-    const ws = this.workspaceRoot();
-    if (!ws) return undefined;
-    try {
-      if (this.dbtLoaded && !(await dbtIndexStale(this.dbtLoaded))) return this.dbtLoaded.index;
-      if (!this.dbtProbed) {
-        this.dbtProbed = true; // significa só "já varri o workspace atrás de dbt_project.yml"
-        this.dbtLocation = await findDbtProject(ws);
-      }
-      if (!this.dbtLocation) return undefined; // não há projeto dbt — nada a fazer nesta sessão
-      // (Re)carrega da localização conhecida: cobre o primeiro load, a recarga por staleness E o
-      // "rode dbt parse e tente de novo" (manifest criado DEPOIS do probe). Custo: um fs.stat.
-      const before = this.dbtLoaded?.index;
-      this.dbtLoaded = await loadDbtIndex(this.dbtLocation, (m, e) => log.warn(m, e));
-      if (this.dbtLoaded && this.dbtLoaded.index !== before) {
-        log.info(`dbt: grounding ativo — ${this.dbtLoaded.index.size()} tabelas do manifest (${this.dbtLoaded.location.targetDir}).`);
-      }
-      return this.dbtLoaded?.index;
-    } catch (err) {
-      log.warn("dbt: grounding indisponível (fail-open).", err);
-      return undefined;
-    }
-  }
-
   // ---- warehouse (Onda 3/4) ------------------------------------------------------------------------
 
   private warehouse(): WarehouseService {
@@ -2672,7 +2638,7 @@ export class Controller {
         log.warn("warehouse: snapshots não carregados (fail-open).", err);
       }
     }
-    const dbt = await this.getDbtIndex();
+    const dbt = await this.dbtStore.get();
     const all = [...(dbt ? [dbt] : []), ...this.whSnapshots.values()];
     if (all.length === 0) return undefined;
     return all.length === 1 ? all[0] : mergeIndexes(all);
@@ -3021,7 +2987,7 @@ export class Controller {
   // /impacto [modelo]: raio de explosão determinístico via lineage do manifest (host-computado, sem
   // LLM) + lineage de coluna do arquivo do modelo quando legível. O cartão volta como impact/report.
   async reportImpact(target?: string): Promise<void> {
-    const index = await this.getDbtIndex();
+    const index = await this.dbtStore.get();
     if (!index || index.size() === 0) {
       this.post({ type: "impact/report", markdown: hostT("card.impact.noManifest") });
       return;
@@ -3053,7 +3019,7 @@ export class Controller {
     // lineage de coluna do próprio modelo (Onda 2): de onde vem cada coluna de saída
     try {
       if (!modelFile && node.originalFilePath && this.workspaceRoot()) {
-        const base = this.dbtLoaded?.location.projectDir ?? this.workspaceRoot()!;
+        const base = this.dbtStore.projectDir() ?? this.workspaceRoot()!;
         modelFile = await fs.readFile(path.join(base, node.originalFilePath), "utf8");
       }
       if (modelFile) {
