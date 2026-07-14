@@ -11,18 +11,21 @@ export function attestedUserId(subject, capture) {
     : "u_" + crypto.createHash("sha256").update(String(subject)).digest("hex").slice(0, 16);
 }
 
-// Rebaixa/redige input/output/systemPrompt conforme a captura do Admin. "full" passa cru (opt-in
-// explícito); "metadata-only" remove o conteúdo; "masked" (default) redige via `mask`.
+// Rebaixa/redige input/output/systemPrompt conforme a captura do Admin. "full" passa cru (opt-in explícito);
+// "metadata-only" remove todo conteúdo; "masked" (default) OMITE input+systemPrompt e redige o output.
+// R4 (redação/egresso): input e systemPrompt carregam o PROMPT INTEIRO (base + skills + RAG do codebase
+// PRIVADO). Em masked eles são OMITIDOS, não só redigidos: a redação tira SEGREDOS/PII, NÃO código proprietário
+// — redigir e enviar ainda exfiltraria o codebase ao Langfuse. O output (a GERAÇÃO) segue redigido em masked
+// (útil p/ debug). Simétrico com proxyTrace.buildProxyTraceEvents. Só 'full' (opt-in do Admin) envia o input.
 export function applyCaptureToEvent(e, capture, mask) {
   const b = e.body;
   if (!b || typeof b !== "object") return e;
   if (capture === "full") return e;
-  const scrub = (v) => (v === undefined || v === null ? v : capture === "metadata-only" ? undefined : mask(v));
-  if ("input" in b) b.input = scrub(b.input);
-  if ("output" in b) b.output = scrub(b.output);
+  if ("input" in b) b.input = undefined; // omitido em masked E metadata-only (prompt/RAG privado)
   if (b.metadata && typeof b.metadata === "object" && "systemPrompt" in b.metadata) {
-    b.metadata.systemPrompt = scrub(b.metadata.systemPrompt);
+    b.metadata.systemPrompt = undefined; // idem — o prompt do sistema não sai do gateway fora de 'full'
   }
+  if ("output" in b) b.output = capture === "metadata-only" ? undefined : mask(b.output); // geração: redigida em masked
   return e;
 }
 

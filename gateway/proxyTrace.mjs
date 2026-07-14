@@ -27,6 +27,12 @@ export function buildProxyTraceEvents(ctx, record, opts) {
     sessionId: ctx.sessionId,
     skills: ctx.skills,
   };
+  // R4 (redação/egresso): o `input` carrega o PROMPT INTEIRO — base + skills + RAG do codebase PRIVADO do dev
+  // + histórico. Em masked (default "LGPD-safe") e metadata-only ele é OMITIDO, não só redigido: a redação
+  // (redact) tira SEGREDOS/PII, NÃO código proprietário — logo redigir e enviar ainda exfiltraria o codebase ao
+  // Langfuse. Só 'full' (opt-in EXPLÍCITO do Admin) envia o input cru. O output (a GERAÇÃO) segue redigido em
+  // masked (útil p/ debug e é o que o dev vai aplicar). Simétrico com obsRelay.applyCaptureToEvent.
+  const input = capture === "full" ? record.input : undefined;
   const traceId = newId();
   const genId = newId();
   return [
@@ -45,7 +51,7 @@ export function buildProxyTraceEvents(ctx, record, opts) {
         traceId,
         name: "generation",
         model: ctx.model,
-        input: mask(record.input),
+        input,
         output: mask(record.output),
         usage: record.usage,
         startTime: new Date(record.startTime).toISOString(),

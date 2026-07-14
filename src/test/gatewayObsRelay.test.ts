@@ -15,11 +15,17 @@ const genEv = (over: Record<string, unknown> = {}): Ev => ({ type: "generation-c
 
 const opts = (over: Record<string, unknown> = {}) => ({ capture: "masked", mask, environment: "prod", session, sampleRate: 1, rand: () => 0, ...over });
 
-test("REGRESSÃO: captura server-side em 'masked' redige input/output (política do Admin prevalece)", () => {
-  const { events } = processRelayBatch([genEv({ input: "email joao@claro.com", output: "chave sk-abc123def" })], opts());
-  const b = events[0].body as Record<string, string>;
-  assert.ok(!b.input.includes("joao@claro.com"), "input redigido no servidor");
-  assert.ok(!b.output.includes("sk-abc123def"), "output redigido no servidor");
+test("R4: 'masked' OMITE input+systemPrompt (não só redige) e redige o output (política do Admin prevalece)", () => {
+  // input e systemPrompt carregam o prompt inteiro + RAG do codebase PRIVADO → omitidos em masked (a redação
+  // só tira segredos, não código proprietário). O output (a geração) segue redigido.
+  const { events } = processRelayBatch(
+    [genEv({ input: "from app.secret import KEY", output: "chave sk-abc123def", metadata: { systemPrompt: "prompt com RAG privado" } })],
+    opts()
+  );
+  const b = events[0].body as Record<string, any>;
+  assert.equal(b.input, undefined, "input OMITIDO no servidor (não só redigido)");
+  assert.equal(b.metadata?.systemPrompt, undefined, "systemPrompt OMITIDO no servidor");
+  assert.ok(!String(b.output).includes("sk-abc123def"), "output redigido no servidor");
 });
 
 test("REGRESSÃO: captura 'metadata-only' remove conteúdo; 'full' passa cru", () => {

@@ -61,9 +61,19 @@ test("REGRESSÃO (PII): metadata NÃO contém e-mail/login crus — só campos s
   }
 });
 
-test("input/output passam pelo mask; usage mantém o shape server-side {inputTokens,outputTokens}", () => {
-  const ev = buildProxyTraceEvents(ctx(), record({ input: "meu email joao@x.com" }), opts()) as Ev[];
+test("R4: input OMITIDO em masked (não só redigido); output redigido; usage server-side preservado", () => {
+  // O input carrega o prompt inteiro + RAG do codebase PRIVADO → em masked é OMITIDO (redigir não basta: a
+  // redação só tira segredos, não código proprietário). O output (a geração) segue redigido.
+  const ev = buildProxyTraceEvents(ctx(), record({ input: "from app.secret import KEY  # código privado", output: "resp joao@x.com" }), opts()) as Ev[];
   const gen = ev.find((e) => e.type === "generation-create")!;
-  assert.ok(!String(gen.body.input).includes("joao@x.com"), "input redigido pela captura masked");
+  assert.equal(gen.body.input, undefined, "input OMITIDO em masked (não vai ao Langfuse)");
+  assert.ok(!String(gen.body.output).includes("joao@x.com"), "output redigido pela captura masked");
   assert.deepEqual(gen.body.usage, { inputTokens: 10, outputTokens: 5 }, "shape server-side preservado");
+});
+
+test("R4: só 'full' (opt-in do Admin) envia o input cru; 'metadata-only' também omite", () => {
+  const full = buildProxyTraceEvents(ctx(), record({ input: "prompt inteiro" }), opts({ capture: "full" })) as Ev[];
+  assert.equal(full.find((e) => e.type === "generation-create")!.body.input, "prompt inteiro", "full envia o input cru");
+  const md = buildProxyTraceEvents(ctx(), record({ input: "prompt inteiro" }), opts({ capture: "metadata-only" })) as Ev[];
+  assert.equal(md.find((e) => e.type === "generation-create")!.body.input, undefined, "metadata-only omite o input");
 });
