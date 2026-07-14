@@ -21,6 +21,7 @@ import { redact } from "./redaction.cjs";
 import { extractUsage, withIncludeUsage } from "./usage.mjs";
 import { pruneExpired, admitSession, authorizeScope, renewedExpiry } from "./sessions.mjs";
 import { buildProxyTraceEvents } from "./proxyTrace.mjs";
+import { rateLimited as rateLimitedPure, pruneRateBuckets } from "./rateLimit.mjs";
 import { utcDay, overBudget, charge, settle, estimateRequestTokens, estimateActualTokens, pruneOldDays, serializeLedger, parseLedger } from "./spend.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -148,21 +149,15 @@ function verifyLicense(key) {
   return { ok: true, payload };
 }
 
-// ---- rate limiting (token bucket por chave) ---------------------------------
+// ---- rate limiting (token bucket por chave — política pura em rateLimit.mjs) -------------------------------
+// A CHAVE é escolhida POR SUBJECT (não por token: N sessões do mesmo subject multiplicariam o limite). O Map
+// é podado ao encostar num teto de chaves — os buckets CHEIOS-ociosos são removíveis sem alterar decisão (o
+// rateLimited os recria idênticos), boundando a memória em sessão longa sem varrer a cada request.
+const RATE_BUCKET_MAX = 50000; // teto de chaves antes de podar (rede de segurança anti-leak/DoS de memória)
 function rateLimited(key) {
-  const cap = CFG.rateLimitPerMin;
-  const refillPerMs = cap / 60000;
   const now = Date.now();
-  let b = rateBuckets.get(key);
-  if (!b) {
-    b = { tokens: cap, updatedAt: now };
-    rateBuckets.set(key, b);
-  }
-  b.tokens = Math.min(cap, b.tokens + (now - b.updatedAt) * refillPerMs);
-  b.updatedAt = now;
-  if (b.tokens < 1) return true;
-  b.tokens -= 1;
-  return false;
+  if (rateBuckets.size >= RATE_BUCKET_MAX) pruneRateBuckets(rateBuckets, CFG.rateLimitPerMin, now);
+  return rateLimitedPure(rateBuckets, key, CFG.rateLimitPerMin, now);
 }
 
 // ---- observabilidade (fila em lote, fail-open, RNF-012/013) ------------------
@@ -291,7 +286,7 @@ async function handleObsIngest(req, res, reqId) {
     sessions.delete(token);
     return send(res, 403, { error: "revoked" });
   }
-  if (rateLimited("obs:" + token)) return send(res, 429, { error: "rate limited" });
+  if (rateLimited("obs:" + session.subject)) return send(res, 429, { error: "rate limited" }); // por SUBJECT, não por token
   const lf = CFG.langfuse;
   const body = JSON.parse((await readBody(req, 4_000_000)) || "{}");
   if (!lf.enabled || !lf.secretKey) return send(res, 202, { accepted: 0 });
@@ -327,7 +322,7 @@ async function handleProxy(req, res, reqId) {
     logLine("info", "proxy recusado — subject revogado", { reqId, subject: session.subject });
     return send(res, 403, { error: "revoked" });
   }
-  if (rateLimited(token)) return send(res, 429, { error: "rate limited" });
+  if (rateLimited("proxy:" + session.subject)) return send(res, 429, { error: "rate limited" }); // por SUBJECT, não por token (N sessões não multiplicam o limite)
 
   const bodyText = await readBody(req);
   const skills = (req.headers["x-forge-skills"] || "").split(",").filter(Boolean);
