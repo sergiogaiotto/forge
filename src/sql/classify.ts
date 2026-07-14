@@ -33,6 +33,9 @@ export interface SqlStatement {
   // O conteúdo tinha string não-terminada: parte do texto foi APAGADA da análise — as camadas acima
   // degradam achados de segurança para advisory (a análise pode estar vendo/perdendo um WHERE falso).
   unterminated: boolean;
+  // Nome da função com EFEITO COLATERAL invocada (setval/nextval/dblink_exec/…), ou undefined. Um SELECT que
+  // a chama MUTA estado → a governança o trata como escrita (nunca "auto" em readonly). Ver sideEffectFnCall.
+  volatileFn?: string;
 }
 
 const KIND_RE: Record<string, StatementKind> = {
@@ -60,6 +63,58 @@ const KIND_RE: Record<string, StatementKind> = {
 };
 
 const WRITE_KINDS = new Set<StatementKind>(["insert", "update", "delete", "merge", "create", "alter", "drop", "truncate", "grant", "block"]);
+
+// Funções/pseudo-colunas com EFEITO COLATERAL que um SELECT pode invocar: MUTAM estado apesar do verbo
+// líder ser leitura, então a governança de execução as trata como ESCRITA (achado adversarial do #218 — era
+// o follow-up não-entregue do #208). dblink/dblink_exec/query_to_xml executam SQL ARBITRÁRIO (o write vai na
+// string-arg que o lex já apagou); setval/nextval e o Oracle `seq.NEXTVAL` avançam/mutam sequências;
+// lo_*/pg_read_file/pg_ls_dir tocam o filesystem; os pg_* de controle reconfiguram/derrubam o servidor.
+// É DENYLIST, não allowlist — bloquear TODA função quebraria o SELECT analítico legítimo (que quase sempre
+// chama alguma função pura: date_trunc/coalesce/json_extract…). LIMITE DOCUMENTADO: não cobre UDF volátil de
+// nome arbitrário (impossível por análise estática — o catálogo de funções é do admin do banco). Casa `nome(`
+// (chamada de função), não coluna/tabela homônima; roda sobre o texto JÁ limpo (o nome nunca vem de dentro
+// de string/comentário).
+const SIDE_EFFECT_FN_RE =
+  /\b(dblink_exec|dblink_connect_u|dblink_connect|dblink_open|dblink_send_query|dblink|setval|nextval|lo_import|lo_export|lo_create|lo_unlink|lo_put|lo_from_bytea|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|pg_reload_conf|pg_rotate_logfile|pg_terminate_backend|pg_cancel_backend|pg_switch_wal|pg_create_restore_point|pg_stat_reset|pg_stat_reset_shared|pg_logical_emit_message|pg_create_logical_replication_slot|pg_create_physical_replication_slot|pg_drop_replication_slot|pg_replication_origin_create|pg_replication_origin_advance|pg_replication_origin_drop|pg_replication_origin_session_setup|pg_import_system_collations|pg_promote|set_config|query_to_xml|query_to_xmlschema|httpuritype)\s*\(/i;
+// Oracle: sequência é `seq.NEXTVAL` (pseudo-coluna, não `nextval(`) — AVANÇA a sequência. CURRVAL só lê (fora).
+const ORACLE_NEXTVAL_RE = /\.\s*NEXTVAL\b/i;
+// Oracle: pacotes de I/O de REDE/ARQUIVO/exec chamáveis de um SELECT (SSRF/exfil/leitura de FS/SQL arbitrário
+// — clássicos): `UTL_HTTP.REQUEST('http://…')`, `UTL_FILE.FOPEN(...)`, `UTL_INADDR.GET_HOST_ADDRESS`,
+// `DBMS_LDAP.INIT`, `DBMS_XMLGEN.GETXML('SELECT …')`. Acesso a membro `PKG.` (não `PKG(`). Nenhum é parte
+// legítima de uma consulta de leitura de DADOS.
+const ORACLE_IO_PKG_RE = /\b(utl_http|utl_tcp|utl_smtp|utl_file|utl_inaddr|dbms_ldap|dbms_xmlgen|dbms_pipe|dbms_alert)\s*\./i;
+
+// Decodifica os identificadores unicode-escapados U&"…" do Postgres (escape DEFAULT `\`): \XXXX (4 hex) e
+// \+XXXXXX (6 hex) → o caractere. Sem isto, `U&"\0073etval"(…)` resolve p/ `setval` no parser (\0073 = 's')
+// mas o TEXTO (`\0073etval`) evade a denylist (achado adversarial). Um `U&"my_col"` legítimo decodifica p/ si
+// mesmo → sem match (zero falso-positivo). RESÍDUO documentado: `UESCAPE 'c'` (escape custom) não é
+// decodificado — vetor exótico-ao-quadrado (custom escape char num identificador de função). Puro.
+function decodeUnicodeIdents(s: string): string {
+  if (!/u&"/i.test(s)) return s;
+  return s.replace(/u&"((?:[^"]|"")*)"/gi, (_w, body: string) =>
+    '"' +
+    body.replace(/\\([0-9a-fA-F]{4})|\\\+([0-9a-fA-F]{6})/g, (m, a: string, b: string) => {
+      const cp = parseInt(a ?? b, 16);
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    }) +
+    '"'
+  );
+}
+
+// Nome da 1ª função/pacote com efeito colateral invocado no statement, ou null. PURO/testável.
+export function sideEffectFnCall(stripped: string): string | null {
+  // Normaliza a quotação de IDENTIFICADOR + decodifica U&"…" ANTES do match (achados adversariais): (1)
+  // `"setval"(…)` / `pg_catalog."setval"(` chamam a função setval (o `"` entre o nome e o `(`/`.` evadiria um
+  // match cru); (2) `U&"\0073etval"(…)` resolve p/ setval no parser. As strings já foram apagadas pelo lex,
+  // então aqui só há aspas/backticks/colchetes de IDENTIFICADOR — decodificar/removê-los é seguro.
+  const s = decodeUnicodeIdents(stripped ?? "").replace(/["`[\]]/g, "");
+  const m = SIDE_EFFECT_FN_RE.exec(s);
+  if (m) return m[1].toLowerCase();
+  if (ORACLE_NEXTVAL_RE.test(s)) return "nextval";
+  const pkg = ORACLE_IO_PKG_RE.exec(s);
+  if (pkg) return pkg[1].toLowerCase();
+  return null;
+}
 
 // Palavras que NUNCA são alias de tabela (aparecem logo após o nome da tabela).
 const NOT_ALIAS = new Set([
@@ -284,6 +339,7 @@ export function classifySql(content: string, opts?: StripOpts): SqlStatement[] {
       ctes,
       aliases,
       unterminated,
+      volatileFn: sideEffectFnCall(st) ?? undefined,
     });
   }
   return out;

