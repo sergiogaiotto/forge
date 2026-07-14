@@ -406,6 +406,32 @@ test("E2E rate-limit da ativação: 2ª ativação do mesmo subject no mesmo min
   }
 });
 
+test("E2E DoS pré-auth: flood de keys INVÁLIDAS por IP é limitado (429) ANTES do verify (não só por subject válido)", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "forge-e2e-preauth-"));
+  const keysDir = path.join(tmp, "keys");
+  let gw: { base: string; stop: () => Promise<void>; log: () => string } | undefined;
+  let failed = false;
+  try {
+    const kg = spawnSync(process.execPath, [ADMIN_CLI, "keygen", "--keys-dir", keysDir, "--json"], { encoding: "utf8" });
+    assert.equal(kg.status, 0, `keygen falhou: ${kg.stderr}`);
+    // PREAUTH_RATE_PER_MIN=1: 1 token por IP; RATE alto p/ não mascarar. A DoS era: key lixo nunca chegava ao
+    // rateLimited (por subject VÁLIDO, pós-verify) → cada tentativa pagava o Ed25519. Agora o IP é limitado ANTES.
+    gw = await bootGateway(keysDir, "http://127.0.0.1:9", { PREAUTH_RATE_PER_MIN: "1", RATE_LIMIT_PER_MIN: "1000", MAX_SESSIONS: "1000" });
+    const body = JSON.stringify({ key: "FORGE-lixo.invalido" }); // key INVÁLIDA — verify falha, nunca há subject
+    const a1 = await fetch(`${gw.base}/license/activate`, { method: "POST", headers: { "content-type": "application/json" }, body });
+    assert.equal(a1.status, 403, "1ª: passa o pré-auth (consome o token do IP), mas a key inválida é recusada");
+    const a2 = await fetch(`${gw.base}/license/activate`, { method: "POST", headers: { "content-type": "application/json" }, body });
+    assert.equal(a2.status, 429, "2ª do MESMO IP: 429 pelo PRÉ-AUTH (antes do verify), mesmo sem subject válido");
+  } catch (e) {
+    failed = true;
+    throw e;
+  } finally {
+    await gw?.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (failed || process.env.FORGE_E2E_DEBUG) process.stderr.write(gw?.log() ?? "");
+  }
+});
+
 test("E2E rate-limit do PROXY: por SUBJECT (não por token) — 2 sessões do mesmo subject DIVIDEM o cap, não multiplicam", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "forge-e2e-rlx-"));
   const keysDir = path.join(tmp, "keys");

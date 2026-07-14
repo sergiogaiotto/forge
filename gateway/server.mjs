@@ -43,6 +43,7 @@ const CFG = {
   sessionTtlSec: parseInt(process.env.SESSION_TTL_SEC || "3600", 10),
   maxSessions: parseInt(process.env.MAX_SESSIONS || "10000", 10),
   rateLimitPerMin: parseInt(process.env.RATE_LIMIT_PER_MIN || "120", 10),
+  preAuthRateLimitPerMin: parseInt(process.env.PREAUTH_RATE_PER_MIN || "60", 10), // por IP, ANTES do verify (anti-DoS de /activate)
   tls: { key: process.env.HTTPS_KEY || "", cert: process.env.HTTPS_CERT || "" },
   langfuse: {
     enabled: (process.env.LANGFUSE_ENABLED || "false") === "true",
@@ -126,10 +127,19 @@ function validateConfig() {
 }
 
 // ---- licença ----------------------------------------------------------------
+// Cache do KeyObject da chave pública: SEM isto, cada verifyLicense fazia readFileSync do keyinfo + JSON.parse
+// + createPublicKey SÍNCRONO no event loop — um flood NÃO-AUTENTICADO a /activate (keys lixo) travava o loop
+// para TODOS os tenants (achado do survey). Invalida por mtime (rotação do keyinfo sem restart): o statSync é
+// barato (syscall sem ler conteúdo); o parse/createPublicKey só re-roda quando o arquivo MUDA.
+let pubKeyCache = null; // { keyObject, mtimeMs }
 function publicKey() {
+  const mtimeMs = fs.statSync(CFG.keyinfoPath).mtimeMs;
+  if (pubKeyCache && pubKeyCache.mtimeMs === mtimeMs) return pubKeyCache.keyObject;
   const { publicKeyB64 } = JSON.parse(fs.readFileSync(CFG.keyinfoPath, "utf8"));
   const raw = Buffer.from(publicKeyB64, "base64");
-  return crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: "der", type: "spki" });
+  const keyObject = crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: "der", type: "spki" });
+  pubKeyCache = { keyObject, mtimeMs };
+  return keyObject;
 }
 function verifyLicense(key) {
   const raw = key.startsWith("FORGE-") ? key.slice(6) : key;
@@ -154,10 +164,15 @@ function verifyLicense(key) {
 // é podado ao encostar num teto de chaves — os buckets CHEIOS-ociosos são removíveis sem alterar decisão (o
 // rateLimited os recria idênticos), boundando a memória em sessão longa sem varrer a cada request.
 const RATE_BUCKET_MAX = 50000; // teto de chaves antes de podar (rede de segurança anti-leak/DoS de memória)
-function rateLimited(key) {
+function rateLimited(key, limitPerMin = CFG.rateLimitPerMin) {
   const now = Date.now();
   if (rateBuckets.size >= RATE_BUCKET_MAX) pruneRateBuckets(rateBuckets, CFG.rateLimitPerMin, now);
-  return rateLimitedPure(rateBuckets, key, CFG.rateLimitPerMin, now);
+  return rateLimitedPure(rateBuckets, key, limitPerMin, now);
+}
+// IP do peer imediato — chave do rate-limit PRÉ-AUTH (atrás de um proxy reverso confiável seria o proxy; o
+// limite é generoso e o cache da chave é a defesa primária, então isso é rede de segurança, não gate fino).
+function clientIp(req) {
+  return req.socket?.remoteAddress || "unknown";
 }
 
 // ---- observabilidade (fila em lote, fail-open, RNF-012/013) ------------------
@@ -211,7 +226,12 @@ async function flushTraces() {
 
 // ---- rotas ------------------------------------------------------------------
 async function handleActivate(req, res, reqId) {
-  const { key } = JSON.parse((await readBody(req)) || "{}");
+  // Rate-limit PRÉ-AUTH por IP, ANTES de qualquer trabalho: o rateLimited de baixo é por subject VÁLIDO
+  // (pós-verify), então um flood NÃO-AUTENTICADO de keys lixo nunca era limitado e cada tentativa pagava a
+  // verificação Ed25519 no event loop (achado do survey). Descarta o flood barato (429), generoso p/ o retry
+  // legítimo. Corpo CAPADO em 8KB (uma licença é pequena; 2MB era vetor de amplificação — corta cedo).
+  if (rateLimited("activate-ip:" + clientIp(req), CFG.preAuthRateLimitPerMin)) return send(res, 429, { error: "rate limited" });
+  const { key } = JSON.parse((await readBody(req, 8192)) || "{}");
   if (!key) return send(res, 400, { error: "missing key" });
   const v = verifyLicense(key);
   if (!v.ok) {
@@ -246,7 +266,7 @@ async function handleActivate(req, res, reqId) {
 }
 
 async function handleRenew(req, res, reqId) {
-  const { token } = JSON.parse((await readBody(req)) || "{}");
+  const { token } = JSON.parse((await readBody(req, 8192)) || "{}"); // token é pequeno; capa cedo o corpo de amplificação
   const s = sessions.get(token);
   if (!s) return send(res, 403, { error: "unknown token" });
   // Rate-limit da RENOVAÇÃO por subject: sem isto, um portador válido renova em loop para PINAR a tabela
