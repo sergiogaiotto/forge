@@ -83,14 +83,27 @@ test("WarehouseSnapshotStore: LOAD fail-open — readdir falho → vazio e SILEN
   assert.equal(warns.length, 0, "o caso normal (dir ainda não existe) não gera ruído");
 });
 
-test("WarehouseSnapshotStore: LOAD fail-open — readFile que estoura loga e não trava", async () => {
+test("WarehouseSnapshotStore: PER-FILE RESILIENCE — um snapshot corrompido é ignorado; os válidos carregam", async () => {
+  // Linha SEM `table`: parseSnapshot ACEITA (connectionId string + rows array), mas snapshotToIndex estoura
+  // em table.split(".") — o caso EXATO que a revisão adversarial do #213 flagou. Antes abortava a carga
+  // inteira (perdia todo o grounding da sessão por um arquivo ruim); agora só ESSE arquivo é pulado.
+  const poison = JSON.stringify({ connectionId: "bad", kind: "postgres", takenAt: "", rows: [{ column: "x" }] });
+  const { store, warns } = makeStore({ files: { "wh-schema-bad.json": poison, "wh-schema-ok.json": serializeSnapshot(snap("ok")) } });
+  const idx = await store.indexes();
+  assert.equal(idx.length, 1, "o válido carrega apesar do vizinho corrompido");
+  assert.ok(idx[0].findTable("public.orders"), "é o snapshot bom");
+  assert.equal(warns.length, 1, "logou só o arquivo ignorado");
+  assert.match(warns[0].m, /ignorado/);
+});
+
+test("WarehouseSnapshotStore: LOAD fail-open — readFile que estoura pula o arquivo e loga (não trava)", async () => {
   const { store, warns } = makeStore({
     files: { "wh-schema-a.json": serializeSnapshot(snap("a")) },
     fsOver: { readFile: async () => { throw new Error("EIO"); } },
   });
-  assert.deepEqual(await store.indexes(), [], "carga abortada, fail-open");
-  assert.equal(warns.length, 1, "logou o fail-open da carga");
-  assert.match(warns[0].m, /não carregados/);
+  assert.deepEqual(await store.indexes(), [], "o único arquivo falhou → vazio, fail-open");
+  assert.equal(warns.length, 1, "logou o arquivo ignorado");
+  assert.match(warns[0].m, /ignorado/);
 });
 
 test("WarehouseSnapshotStore: CAPTURE — converte, devolve o índice e persiste (mkdir+writeFile)", async () => {
@@ -154,4 +167,53 @@ test("WarehouseSnapshotStore: ROUND-TRIP persist→load — outro store lê o ar
   assert.equal(idx.length, 1);
   assert.equal(idx[0].size(), 1, "reconstruiu a tabela public.orders");
   assert.ok(idx[0].findTable("public.orders"), "a tabela do snapshot voltou pelo round-trip serialize/parse");
+});
+
+test("WarehouseSnapshotStore: SINGLE-FLIGHT — indexes() concorrentes compartilham UMA carga; o 2º não vê vazio", async () => {
+  let readdirs = 0;
+  let open!: (v: unknown) => void;
+  const gate = new Promise((r) => (open = r));
+  const { store } = makeStore({
+    files: { "wh-schema-a.json": serializeSnapshot(snap("a")) },
+    fsOver: {
+      readdir: async () => {
+        readdirs++;
+        await gate; // segura a varredura no meio, ANTES de popular byConn
+        return ["wh-schema-a.json"];
+      },
+    },
+  });
+  const p1 = store.indexes();
+  const p2 = store.indexes(); // concorrente, ANTES de p1 resolver
+  open(null);
+  const [a, b] = await Promise.all([p1, p2]);
+  assert.equal(readdirs, 1, "uma só varredura para os dois gets concorrentes");
+  assert.equal(a.length, 1, "o 1º vê o snapshot");
+  assert.equal(b.length, 1, "o 2º NÃO vê vazio (compartilhou a carga — sem single-flight retornaria [] no meio)");
+});
+
+test("WarehouseSnapshotStore: CONNECTIONID ALLOWLIST — id com separador (/ e \\ do win32) não persiste (fail-closed), fica em memória", async () => {
+  const { store, calls, warns } = makeStore();
+  const idx = await store.capture(snap("../evil")); // separador POSIX
+  const idx2 = await store.capture(snap("..\\evil")); // separador win32 (rodamos no Windows)
+  assert.equal(idx.size(), 1, "o índice é devolvido normalmente");
+  assert.equal(calls.writes.length, 0, "NENHUM escreveu — comporia um caminho FORA do globalStorage");
+  assert.equal(calls.mkdir, 0, "nem tentou criar o dir");
+  assert.equal(warns.length, 2, "os dois ids hostis avisaram");
+  assert.match(warns[0].m, /inseguro/);
+  assert.match(warns[1].m, /inseguro/);
+  const listed = await store.indexes();
+  assert.equal(listed.length, 2, "ambos seguem em memória nesta sessão (fail-open p/ o grounding)");
+  assert.ok(listed.includes(idx) && listed.includes(idx2));
+});
+
+test("WarehouseSnapshotStore: CONNECTIONID ALLOWLIST — ids normais (ponto, hífen, underscore) persistem", async () => {
+  const { store, calls } = makeStore();
+  for (const id of ["prod", "oracle_prod", "bq.dataset", "conn-1"]) await store.capture(snap(id));
+  assert.equal(calls.writes.length, 4, "todo connectionId de admin normal persiste (SAFE_CONN não rejeita)");
+  assert.deepEqual(
+    calls.writes.map((w) => w.file).sort(),
+    ["wh-schema-bq.dataset.json", "wh-schema-conn-1.json", "wh-schema-oracle_prod.json", "wh-schema-prod.json"],
+    "nome do arquivo por conexão, id preservado"
+  );
 });
