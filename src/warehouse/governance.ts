@@ -40,13 +40,19 @@ export function decideSqlRun(sql: string, conn: { readonly?: boolean; kind?: str
   // vazio) NUNCA é leitura garantida — trata como escrita (achado da revisão: dialetos/sintaxes fora
   // do KIND_RE não podem cair no verdict "auto").
   const unknown = stmts.some((s) => s.kind === "other" && s.stripped.trim().length > 0);
-  if (writes.length > 0 || unterminated || unknown) {
+  // Um SELECT que invoca função com EFEITO COLATERAL (setval/nextval/dblink_exec/UDF de I/O) MUTA estado
+  // apesar do verbo líder ser leitura → NUNCA "auto" em readonly (achado adversarial do #218). Denylist em
+  // classify.sideEffectFnCall (não cobre UDF volátil de nome arbitrário — limite da análise estática).
+  const volatileFns = [...new Set(stmts.map((s) => s.volatileFn).filter((v): v is string => !!v))];
+  if (writes.length > 0 || unterminated || unknown || volatileFns.length > 0) {
     const what =
       writes.length > 0
         ? writes.join(", ")
-        : unterminated
-          ? "SQL não classificável por inteiro (string não-terminada)"
-          : "SQL cuja natureza o motor não confirma como somente-leitura";
+        : volatileFns.length > 0
+          ? `função com efeito colateral: ${volatileFns.join(", ")}`
+          : unterminated
+            ? "SQL não classificável por inteiro (string não-terminada)"
+            : "SQL cuja natureza o motor não confirma como somente-leitura";
     if (isReadonly) {
       return {
         verdict: "blocked",
