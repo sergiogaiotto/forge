@@ -159,12 +159,15 @@ test("buildIngestion: generation.end em 'masked' redige os segredos que o MASK_P
   ];
   for (const { s, leak } of cases) {
     const [ev] = buildIngestion(
-      { type: "generation.end", taskId: "t1", durationMs: 1, model: "m", input: `use ${s} no cliente`, output: `e de novo ${s}`, proposals: 0 },
+      { type: "generation.end", taskId: "t1", durationMs: 1, model: "m", input: `use ${s} no cliente`, output: `e de novo ${s}`, error: `provider falhou: ${s}`, proposals: 0 },
       opts
     );
     const b = ev.body as any;
     assert.ok(!String(b.input).includes(leak), `input deveria redigir ${leak.slice(0, 12)}…`);
     assert.ok(!String(b.output).includes(leak), `output deveria redigir ${leak.slice(0, 12)}…`);
+    // statusMessage (o error do provider) era CRU aqui enquanto input/output eram mascarados — a assimetria do tema 3
+    assert.ok(!String(b.statusMessage).includes(leak), `statusMessage deveria redigir ${leak.slice(0, 12)}…`);
+    assert.equal(b.level, "ERROR", "o level continua sinalizando o erro");
   }
 });
 
