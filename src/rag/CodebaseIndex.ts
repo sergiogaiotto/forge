@@ -247,6 +247,18 @@ export class CodebaseIndex {
   }
 
   private async indexOneFile(root: string, rel: string, cfg: RagConfig): Promise<void> {
+    // Teto de segurança de memória/custo de embeddings: um arquivo NOVO não entra se o índice já bateu o teto.
+    // O build() já guarda (break no laço), mas a via INCREMENTAL (updateFile via watcher) não guardava — durante
+    // uma geração do Modo Projeto, o onDidCreate por arquivo gerado crescia byFile SEM limite, passando de
+    // MAX_CHUNKS (achado do survey). Re-indexar um arquivo JÁ presente (onDidChange) é permitido: substitui os
+    // próprios chunks (não cresce o total líquido; um arquivo que encolheu pode até liberar espaço).
+    if (!this.byFile.has(rel) && this.chunkCount() >= MAX_CHUNKS) {
+      if (!this.capped) {
+        this.capped = true;
+        this.warnCapped(); // avisa 1× na TRANSIÇÃO p/ capped, não por arquivo pulado (evita spam de log numa geração)
+      }
+      return;
+    }
     const abs = path.join(root, rel);
     try {
       const stat = await fs.stat(abs);
