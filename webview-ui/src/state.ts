@@ -100,7 +100,9 @@ export interface UIState {
   lastFileRun: RunResultData | null;
   lastTestRun: RunResultData | null;
   attachments: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[];
-  workspaceFiles: WorkspaceEntry[]; // catálogo do workspace para a menção "@" (cacheado; carregado sob demanda)
+  workspaceFiles: WorkspaceEntry[]; // catálogo do workspace para a menção "@" (cacheado; re-pedido ao abrir + watcher)
+  wsFilesTruncated: boolean; // catálogo bateu o teto (repo grande) → complementa com search-on-type
+  wsSearch: { query: string; items: WorkspaceEntry[] } | null; // resultado do search-on-type do host (por query)
   profile: ProfileView | null;
   // notes: aviso/erro ancorado POR SEÇÃO, renderizado dentro do modal do wizard — um toast ficaria
   // atrás do backdrop (z-index) e sumiria em 5s sem ser visto (ex.: seção truncada por limite de tokens).
@@ -148,6 +150,8 @@ export const initialState: UIState = {
   lastTestRun: null,
   attachments: [],
   workspaceFiles: [],
+  wsFilesTruncated: false,
+  wsSearch: null,
   profile: null,
   charter: null,
   project: null,
@@ -339,7 +343,9 @@ function applyExt(state: UIState, msg: ExtToWebview): UIState {
     case "context/attachments":
       return { ...state, attachments: msg.items };
     case "context/workspaceFiles":
-      return { ...state, workspaceFiles: msg.items };
+      return { ...state, workspaceFiles: msg.items, wsFilesTruncated: msg.truncated };
+    case "context/workspaceFilesResult":
+      return { ...state, wsSearch: { query: msg.query, items: msg.items } };
     case "profile/state":
       return { ...state, profile: msg.profile };
     case "project/blueprint":

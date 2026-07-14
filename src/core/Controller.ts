@@ -130,6 +130,11 @@ const GS_LICENSE_META = "forge.license.meta";
 const GS_IDENTITY_EMAIL = "forge.identity.email";
 const WS_DISABLED_SKILLS = "forge.skills.disabled";
 
+// Menção "@": excludes conservadores (dirs de dependência/artefato) e teto do catálogo. Ao bater o teto o
+// catálogo vem `truncated` e o webview complementa com search-on-type (searchWorkspaceFiles).
+const MENTION_EXCLUDES = "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}";
+const MENTION_CATALOG_CAP = 5000;
+
 interface ProviderPersisted {
   type: ProviderRuntimeConfig["type"];
   modelId: string;
@@ -1661,6 +1666,9 @@ export class Controller {
       case "context/listWorkspaceFiles":
         await this.listWorkspaceFiles();
         break;
+      case "context/searchWorkspaceFiles":
+        await this.searchWorkspaceFiles(msg.query);
+        break;
       case "context/addWorkspaceFile":
         await this.addWorkspaceFileAttachment(msg.path, msg.kind);
         break;
@@ -3159,21 +3167,60 @@ export class Controller {
     await this.attachWorkspaceFileSafely(ws, chosen.uri.fsPath, pick);
   }
 
-  // Menção "@": envia o catálogo do workspace (arquivos + pastas derivadas dos diretórios) UMA vez; o webview
-  // cacheia e filtra localmente (sem round-trip por tecla). Mesmos excludes do pickWorkspaceFile. Sem
-  // workspace → catálogo vazio (o picker fica inerte).
+  // Menção "@": envia o catálogo do workspace (arquivos + pastas derivadas dos diretórios). O webview cacheia e
+  // filtra localmente (sem round-trip por tecla) e re-pede ao ABRIR o picker (frescor de movidos/copiados); o
+  // FileSystemWatcher (ensureMentionWatcher) ainda re-posta sozinho em create/delete/rename. Sem workspace →
+  // catálogo vazio. `truncated`: bateu o teto (repo grande) → o webview complementa com search-on-type.
   async listWorkspaceFiles(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
-      this.post({ type: "context/workspaceFiles", items: [] });
+      this.post({ type: "context/workspaceFiles", items: [], truncated: false });
       return;
     }
-    const uris = await vscode.workspace.findFiles("**/*", "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 5000);
+    this.ensureMentionWatcher();
+    const uris = await vscode.workspace.findFiles("**/*", MENTION_EXCLUDES, MENTION_CATALOG_CAP);
     const rel = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/"));
     // buildMentionCatalog EXCLUI segredos (.env/*.pem/credenciais) do catálogo — não viram citáveis (2ª
     // camada; addWorkspaceFileAttachment ainda recusa+redige no anexo). Deriva as pastas e ordena.
     const items = buildMentionCatalog(rel, isSensitiveFile);
-    this.post({ type: "context/workspaceFiles", items });
+    this.post({ type: "context/workspaceFiles", items, truncated: uris.length >= MENTION_CATALOG_CAP });
+  }
+
+  // FileSystemWatcher do catálogo do `@` (frescor AO VIVO, sem reabrir o picker): create/delete/rename re-posta
+  // o catálogo (debounce). Ignora churn sob os excludes (npm install não deve re-varrer). onDidChange (conteúdo)
+  // NÃO altera a LISTA de caminhos → não re-varre. Criado 1× (na 1ª listagem), disposto no deactivate.
+  private mentionWatcher: vscode.FileSystemWatcher | undefined;
+  private mentionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private ensureMentionWatcher(): void {
+    if (this.mentionWatcher) return;
+    const w = vscode.workspace.createFileSystemWatcher("**/*");
+    const onChange = (uri: vscode.Uri): void => {
+      const ws = this.workspaceRoot();
+      const rel = ws ? path.relative(ws, uri.fsPath).split(path.sep).join("/") : "";
+      if (/(^|\/)(node_modules|\.git|dist|\.venv|__pycache__)(\/|$)/.test(rel)) return; // churn dos excludes → ignora
+      if (this.mentionRefreshTimer) clearTimeout(this.mentionRefreshTimer);
+      this.mentionRefreshTimer = setTimeout(() => void this.listWorkspaceFiles(), 500);
+    };
+    w.onDidCreate(onChange);
+    w.onDidDelete(onChange);
+    this.mentionWatcher = w;
+    this.context.subscriptions.push(w, { dispose: () => this.mentionRefreshTimer && clearTimeout(this.mentionRefreshTimer) });
+  }
+
+  // Menção "@": busca server-side quando o catálogo veio TRUNCADO (repo grande — o arquivo citado pode estar
+  // fora do teto de 5000). Usa o termo mais específico do query (após a última "/") como glob de substring
+  // (sanitizado: sem metacaractere de glob), passa pelo MESMO buildMentionCatalog (exclui segredos) e ecoa o
+  // `query` para o webview descartar respostas obsoletas. Cap baixo (o webview ainda ranqueia/corta).
+  async searchWorkspaceFiles(query: string): Promise<void> {
+    const ws = this.workspaceRoot();
+    const term = (query ?? "").split("/").pop()?.replace(/[^\w.\-]/g, "") ?? "";
+    if (!ws || !term) {
+      this.post({ type: "context/workspaceFilesResult", query, items: [] });
+      return;
+    }
+    const uris = await vscode.workspace.findFiles(`**/*${term}*`, MENTION_EXCLUDES, 200);
+    const rel = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/"));
+    this.post({ type: "context/workspaceFilesResult", query, items: buildMentionCatalog(rel, isSensitiveFile) });
   }
 
   // Auto-leitura de arquivos citados num erro/traceback/log colado. O provider NÃO recebe tools, então o

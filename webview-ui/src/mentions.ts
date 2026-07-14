@@ -43,6 +43,19 @@ export function mentionInsertText(entry: WorkspaceEntry): string {
   return `@${entry.path}${entry.kind === "folder" ? "/" : ""} `;
 }
 
+// Remove entradas de caminho duplicado (mantém a PRIMEIRA, preservando a ordem) — ao fundir o catálogo
+// cacheado com os resultados do search-on-type (repo grande), os dois conjuntos podem sobrepor. Puro.
+export function dedupeMentions(items: WorkspaceEntry[]): WorkspaceEntry[] {
+  const seen = new Set<string>();
+  const out: WorkspaceEntry[] = [];
+  for (const e of items ?? []) {
+    if (seen.has(e.path)) continue;
+    seen.add(e.path);
+    out.push(e);
+  }
+  return out;
+}
+
 // Separa o caminho relativo em prefixo de diretório (esmaecido na linha do picker) e basename (forte), para
 // que citações em subdiretório fiquem legíveis e inequívocas. `dir` inclui a "/" final, ou "" na raiz. Puro.
 export function splitMentionLabel(path: string): { dir: string; base: string } {
