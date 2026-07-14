@@ -14,6 +14,7 @@
 //   3. searchInFiles honra um ORÇAMENTO de tempo (wall-clock) — corta a varredura agregada se estourar,
 //      última linha de defesa para qualquer padrão que escape do detector.
 import { hostT } from "../i18n";
+import type { WorkspaceEntry } from "../shared/protocol";
 
 export const BROWSE_MAX_ENTRIES = 60;
 export const SEARCH_MAX_MATCHES = 100;
@@ -30,6 +31,23 @@ const SKIP_EXT =
 
 export function isSearchablePath(relPath: string): boolean {
   return !SKIP_EXT.test(relPath);
+}
+
+// Catálogo do picker de menção "@" a partir dos caminhos relativos do workspace: EXCLUI arquivos sensíveis
+// (segredos NUNCA viram citáveis — paridade com o auto-read/RAG, que redigem/recusam segredos), deriva as
+// pastas ancestrais de cada arquivo (assim `src/core/x.ts` torna `src` e `src/core` citáveis) e ordena
+// (pastas primeiro, depois arquivos; ambos alfabéticos). `isSensitive` injetado (isSensitiveFile). PURO.
+export function buildMentionCatalog(relPaths: string[], isSensitive: (p: string) => boolean): WorkspaceEntry[] {
+  const files = (relPaths ?? []).filter(Boolean).filter((p) => !isSensitive(p));
+  const folders = new Set<string>();
+  for (const f of files) {
+    const parts = f.split("/");
+    for (let i = 1; i < parts.length; i++) folders.add(parts.slice(0, i).join("/"));
+  }
+  return [
+    ...[...folders].sort().map((p) => ({ path: p, kind: "folder" as const })),
+    ...files.sort().map((p) => ({ path: p, kind: "file" as const })),
+  ];
 }
 
 // Quantificador SEM limite superior na posição i? `*`, `+` ou `{n,}` (o `{n,m}` finito não é o vetor

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { setHostLocale } from "../i18n";
 import {
   BROWSE_MAX_ENTRIES,
+  buildMentionCatalog,
   compileSearchPattern,
   hasNestedQuantifier,
   isSearchablePath,
@@ -15,8 +16,51 @@ import {
   searchInFiles,
   TODO_PATTERN,
 } from "../workspace/browse";
+import { isSensitiveFile } from "../util/errorRefs";
 
 const id = (s: string) => s; // máscara identidade para testes que não exercitam LGPD
+
+test("buildMentionCatalog: deriva pastas ancestrais e ordena (pastas primeiro, alfabético)", () => {
+  const items = buildMentionCatalog(["src/core/Controller.ts", "src/util/x.ts", "README.md"], () => false);
+  assert.deepEqual(
+    items,
+    [
+      { path: "src", kind: "folder" },
+      { path: "src/core", kind: "folder" },
+      { path: "src/util", kind: "folder" },
+      { path: "README.md", kind: "file" },
+      { path: "src/core/Controller.ts", kind: "file" },
+      { path: "src/util/x.ts", kind: "file" },
+    ],
+    "cada segmento ancestral vira pasta citável; pastas antes dos arquivos"
+  );
+});
+
+test("buildMentionCatalog: EXCLUI segredos do catálogo (denylist REAL isSensitiveFile) — não viram citáveis", () => {
+  const items = buildMentionCatalog(
+    ["src/app.ts", ".env", "config/.env.production", "keys/server.pem", "creds/aws_credentials.json", "src/private_key.py"],
+    isSensitiveFile
+  );
+  const paths = items.map((i) => i.path);
+  assert.ok(!paths.includes(".env"), ".env fora");
+  assert.ok(!paths.includes("config/.env.production"), ".env.* fora");
+  assert.ok(!paths.includes("keys/server.pem"), "*.pem fora");
+  assert.ok(!paths.includes("creds/aws_credentials.json"), "credentials fora");
+  assert.ok(paths.includes("src/app.ts"), "fonte comum entra");
+  assert.ok(paths.includes("src/private_key.py"), "private_key.PY é FONTE legítima — entra (SENSITIVE_UNLESS_SOURCE)");
+});
+
+test("buildMentionCatalog: pasta que só continha segredo NÃO aparece; a que tem fonte, sim", () => {
+  const items = buildMentionCatalog(["keys/server.pem", "app/main.ts"], isSensitiveFile);
+  const folders = items.filter((i) => i.kind === "folder").map((i) => i.path);
+  assert.ok(!folders.includes("keys"), "a pasta 'keys' some (só tinha o .pem excluído)");
+  assert.ok(folders.includes("app"), "'app' fica (tem main.ts)");
+});
+
+test("buildMentionCatalog: entrada vazia/falsy é robusta", () => {
+  assert.deepEqual(buildMentionCatalog([], () => false), []);
+  assert.deepEqual(buildMentionCatalog(["", "a.ts"], () => false), [{ path: "a.ts", kind: "file" }]);
+});
 
 test("compileSearchPattern: vazio orienta, longo recusa, inválido explica, válido compila case-insensitive", () => {
   assert.ok("error" in compileSearchPattern(""));
