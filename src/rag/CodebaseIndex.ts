@@ -5,6 +5,7 @@ import { RagConfig } from "../config/ManagedConfig";
 import { hostT } from "../i18n";
 import { EgressEnforcer } from "../net/EgressEnforcer";
 import { log } from "../util/logger";
+import { redactSecrets } from "../util/redact";
 import { cosine } from "../util/vector";
 import { Bm25Index } from "./Bm25Index";
 import { chunkFile } from "./chunker";
@@ -374,11 +375,17 @@ export class CodebaseIndex {
 
   async retrieve(query: string, k: number): Promise<RetrievalHit[]> {
     if (!this.ready || this.chunkCount() === 0) return [];
+    // SEGURANÇA (exfil RAG, 3ª via): redige a QUERY antes de qualquer uso. O embed a manda ao endpoint
+    // EXTERNO de embeddings — a MESMA via que o indexOneFile já fecha para os chunks (redactChunks); a query
+    // era o vetor que faltava (a mensagem do dev pode trazer erro colado/connection-string/código com segredo).
+    // Como o índice (vetores/BM25) é montado sobre chunks REDIGIDOS, buscar em espaço redigido ALINHA a
+    // qualidade (redactSecrets preserva símbolos/identificadores/hosts; segredo é token opaco sem valor de busca).
+    const q = redactSecrets(query);
     if (this.mode === "embeddings") {
       const embedder = this.embedder();
       if (embedder?.available()) {
         try {
-          const [qv] = await embedder.embed([query]);
+          const [qv] = await embedder.embed([q]);
           const hits = this.allChunks()
             .filter((c) => c.vector)
             .map((c) => ({ chunk: c, score: cosine(qv, c.vector!) }))
@@ -392,7 +399,7 @@ export class CodebaseIndex {
       }
     }
     if (!this.bm25) this.bm25 = new Bm25Index(this.allChunks());
-    return this.bm25.query(query, k);
+    return this.bm25.query(q, k); // q redigido: alinha com o índice (chunks redigidos) e não vaza no fallback
   }
 }
 
