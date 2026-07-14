@@ -64,19 +64,20 @@ test("resolveMaxOutput: override válido vence; inválido cai no catálogo; nunc
   assert.equal(resolveMaxOutput(4096.9, meta), 4096); // floor
 });
 
-// Clamp contra a janela SERVIDA — evita o footgun de um teto de saída que o gateway recusaria com 400.
-test("clampOutputToServed: rebaixa o teto quando o servedWindow é menor que o pedido", () => {
+// Clamp contra a janela SERVIDA, reservando a ENTRADA proporcional (≥30%) + margem — evita o footgun de um
+// teto de saída que o gateway recusaria com 400 E o colapso da entrada (R6). A reserva NÃO é mais fixa (era 4096).
+test("clampOutputToServed: rebaixa o teto reservando entrada proporcional + margem", () => {
   const meta = getModelMeta("openai-compatible", "openai/gpt-oss-120b"); // janela nominal 131072
-  // servedWindow=0 → usa o nominal do catálogo: 128k pedido não é rebaixado (cabe, menos a reserva)
-  assert.equal(clampOutputToServed(131072, meta, 0, 4096), 131072 - 4096);
-  // gateway serve só 8192 → 128k pedido é rebaixado a 8192 - reserva
-  assert.equal(clampOutputToServed(131072, meta, 8192, 4096), 8192 - 4096);
-  // pedido já pequeno cabe sem rebaixar
-  assert.equal(clampOutputToServed(16384, meta, 65536, 4096), 16384);
-  // piso útil de 1024: nunca rebaixa abaixo disso mesmo com janela minúscula
-  assert.equal(clampOutputToServed(131072, meta, 2000, 4096), 1024);
+  // servedWindow=0 → nominal 131072: reserva = max(4096, 30%·128k=39322) + margem 13108 → teto 78642
+  assert.equal(clampOutputToServed(131072, meta, 0), 131072 - 39322 - 13108);
+  // gateway serve só 8192 → reserva = max(4096, 30%·8192)=4096 + margem 820 → teto 3276
+  assert.equal(clampOutputToServed(131072, meta, 8192), 8192 - 4096 - 820);
+  // pedido já pequeno cabe sem rebaixar (16384 < teto)
+  assert.equal(clampOutputToServed(16384, meta, 65536), 16384);
+  // piso útil de 1024: janela minúscula onde a reserva excederia o espaço → nunca abaixo de 1024
+  assert.equal(clampOutputToServed(131072, meta, 2000), 1024);
   // servedWindow acima do nominal do catálogo é limitado ao nominal
-  assert.equal(clampOutputToServed(131072, meta, 999999, 4096), 131072 - 4096);
+  assert.equal(clampOutputToServed(131072, meta, 999999), 131072 - 39322 - 13108);
 });
 
 test("MAX_OUTPUT_PRESETS/maxOutputLabel: presets até 128k e rótulos legíveis", () => {
