@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decideSqlRun } from "../warehouse/governance";
+import { classifySql } from "../sql/classify";
+import { dialectUsesBackslashEscapes } from "../sql/lex";
 import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
@@ -39,6 +41,48 @@ test("governança: DROP/TRUNCATE NUNCA executam, mesmo com readonly:false; não-
   const partial = decideSqlRun("SELECT 'aberta FROM t", { ...ORA, readonly: false });
   assert.equal(partial.verdict, "confirm");
   assert.equal(decideSqlRun("SELECT 'aberta FROM t", ORA).verdict, "blocked");
+});
+
+// Achado do survey pós-#217 (irmão do CTAS #208): escrita escondida atrás de `\'`. Oracle/Postgres/DuckDB
+// tratam `\` como LITERAL → `'x\'` FECHA a string e o `; UPDATE` aflora como escrita. O lexer honrava `\'`
+// como escape UNIVERSALMENTE → o UPDATE ia dentro de uma string de um SELECT → rodava "auto" em readonly.
+const INJECT = String.raw`SELECT id FROM t WHERE name = 'x\' ; UPDATE accounts SET balance=0; --'`;
+
+test("governança: backslash-escape NÃO vaza escrita como leitura em Oracle/Postgres (readonly bypass fechado)", () => {
+  // Oracle e Postgres: backslash literal → a string fecha no `\'`, o UPDATE escondido é bloqueado em readonly.
+  assert.equal(decideSqlRun(INJECT, ORA).verdict, "blocked");
+  assert.equal(decideSqlRun(INJECT, PG).verdict, "blocked");
+  // com readonly:false a escrita é permitida SÓ com confirmação (não roda auto)
+  assert.equal(decideSqlRun(INJECT, { ...PG, readonly: false }).verdict, "confirm");
+  // dialeto desconhecido (sem kind) → fail-closed (trata como não-backslash → bloqueia)
+  assert.equal(decideSqlRun(INJECT, { readonly: true }).verdict, "blocked");
+});
+
+test("governança: BigQuery HONRA o backslash-escape → SELECT legítimo com `\\'` roda auto (sem falso-positivo)", () => {
+  // Em BigQuery `\'` É escape: a string toda é um valor; o statement é um único SELECT de leitura.
+  assert.equal(decideSqlRun(INJECT, BQ).verdict, "auto");
+  // e um SELECT BQ trivial com aspa escapada segue leitura
+  assert.equal(decideSqlRun(String.raw`SELECT * FROM t WHERE s = 'O\'Brien'`, BQ).verdict, "auto");
+});
+
+test("classifySql: backslashEscapes=false separa o statement escondido; default (true) mantém como um SELECT", () => {
+  const closed = classifySql(INJECT, { backslashEscapes: false });
+  assert.equal(closed.length, 2, "a string fecha no \\' → SELECT + UPDATE");
+  assert.ok(closed.some((s) => s.kind === "update" && s.write), "o UPDATE escondido é visto como escrita");
+  const escaped = classifySql(INJECT, { backslashEscapes: true });
+  assert.equal(escaped.length, 1, "com escape, o UPDATE fica DENTRO da string do SELECT");
+  assert.equal(escaped[0].kind, "select");
+  // default (sem opts) preserva o comportamento do gate (dialeto-agnóstico, retrocompat)
+  assert.equal(classifySql(INJECT).length, 1);
+});
+
+test("dialectUsesBackslashEscapes: só backslash-dialects; desconhecido = false (fail-closed)", () => {
+  assert.equal(dialectUsesBackslashEscapes("bigquery"), true);
+  assert.equal(dialectUsesBackslashEscapes("mysql"), true); // futuro, se adicionado
+  assert.equal(dialectUsesBackslashEscapes("oracle"), false);
+  assert.equal(dialectUsesBackslashEscapes("postgres"), false);
+  assert.equal(dialectUsesBackslashEscapes("duckdb"), false);
+  assert.equal(dialectUsesBackslashEscapes(undefined), false);
 });
 
 // ---------- planos de CLI (caminho tradicional) ----------

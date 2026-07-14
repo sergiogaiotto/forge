@@ -3,7 +3,7 @@
 // SELECT é leitura; INSERT/UPDATE/DELETE são escrita; DROP/TRUNCATE são destrutivos. Heurístico por
 // tokenização (dialeto-agnóstico, sobre o texto já limpo pelo lex) — nunca bloqueia por si só: quem
 // decide o que fazer com a classificação são as camadas acima (engine/gates). PURO/testável.
-import { depthMap, splitStatements, stripSqlNoiseEx } from "./lex";
+import { depthMap, splitStatements, StripOpts, stripSqlNoiseEx } from "./lex";
 
 export type StatementKind =
   | "select"
@@ -241,8 +241,8 @@ function selectIntoIsWrite(stripped: string, d: Int32Array): boolean {
 
 // Classifica todos os statements de um conteúdo SQL (já sem Jinja, se dbt). Nunca lança: entrada
 // impossível de analisar rende `kind: "other"` — fail-open, como os demais gates do FORGE.
-export function classifySql(content: string): SqlStatement[] {
-  const { text: stripped, unterminated } = stripSqlNoiseEx(content ?? "");
+export function classifySql(content: string, opts?: StripOpts): SqlStatement[] {
+  const { text: stripped, unterminated } = stripSqlNoiseEx(content ?? "", opts);
   const slices = splitStatements(stripped);
   const out: SqlStatement[] = [];
   for (const s of slices) {

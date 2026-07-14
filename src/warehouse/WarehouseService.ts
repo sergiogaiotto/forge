@@ -13,6 +13,7 @@ import { hostT } from "../i18n";
 import { SecretsStore } from "../secrets/SecretsStore";
 import { maskDataSample } from "../util/piiScan";
 import { classifySql } from "../sql/classify";
+import { dialectUsesBackslashEscapes } from "../sql/lex";
 import { buildSpawn, resolveExecutable, unsafeField } from "./exec";
 import { decideSqlRun } from "./governance";
 import { buildCostPlan, buildRunPlan, buildTestPlan, CliPlan, isPlanError, PlanError, sanitizeWarehouseOutput } from "./sqlRunners";
@@ -118,7 +119,7 @@ export class WarehouseService {
     if (decision.verdict !== "auto") {
       return { refused: hostT("wh.err.costReadonly", { reason: decision.reason }) };
     }
-    const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn), statementCount: classifySql(sql).length });
+    const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn), statementCount: classifySql(sql, { backslashEscapes: dialectUsesBackslashEscapes(conn.kind) }).length });
     return this.execute(conn, plan, { rowCap: 500 });
   }
 
