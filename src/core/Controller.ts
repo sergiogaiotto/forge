@@ -94,7 +94,7 @@ import { WarehouseSnapshotStore } from "../warehouse/WarehouseSnapshotStore";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
 import { maskDataSample, renderPiiCard, scanIndexForPii } from "../util/piiScan";
-import { compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCard, renderTodoCard, searchInFiles, SearchMatch, SEARCH_MAX_FILE_BYTES, SEARCH_MAX_FILES, SEARCH_MAX_MATCHES, SEARCH_TIME_BUDGET_MS, TODO_PATTERN } from "../workspace/browse";
+import { buildMentionCatalog, compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCard, renderTodoCard, searchInFiles, SearchMatch, SEARCH_MAX_FILE_BYTES, SEARCH_MAX_FILES, SEARCH_MAX_MATCHES, SEARCH_TIME_BUDGET_MS, TODO_PATTERN } from "../workspace/browse";
 import { SqlRunResult, WarehouseConnection } from "../warehouse/types";
 import { evaluateDodGate } from "../util/dodCheck";
 import { parseBanditReport, SecurityMode, splitSecurityFindings } from "../util/banditParse";
@@ -3108,6 +3108,40 @@ export class Controller {
     this.attachments.add(label, kind, content); // add() capa, mantém 8 e re-posta os chips (via onChange)
   }
 
+  // Lê um arquivo do workspace e o anexa COM as 4 defesas de segredo (paridade com autoReadReferencedFiles) —
+  // o caminho ÚNICO e guardado usado pelos DOIS gêmeos de citação de arquivo do workspace (o `@` e o picker
+  // da paleta pickWorkspaceFile), para que não divirjam. O conteúdo do anexo vai ao gateway; o dev escolheu
+  // anexar, mas isso NÃO pode virar canal de exfiltração de segredo cru. Defesas: (1) realpath + re-contenção
+  // (um symlink DENTRO do workspace apontando p/ FORA — ex.: config.ts -> ~/.ssh/id_rsa — passaria a contenção
+  // de STRING e o fs seguiria o link); (2) denylist por tipo no alvo REAL (.env/*.pem/credencial); (3) guard de
+  // corpo PEM (nome que escapou à denylist); (4) redação de segredos antes de anexar. Posta a notice e devolve
+  // false quando recusa/falha. `abs` é absoluto; `label` rotula o chip/anexo.
+  private async attachWorkspaceFileSafely(ws: string, abs: string, label: string): Promise<boolean> {
+    let real: string;
+    try {
+      real = await fs.realpath(abs);
+    } catch {
+      this.post({ type: "notice", level: "error", message: hostT("notice.attach.unreadable", { path: label }) });
+      return false;
+    }
+    if (!safeWorkspacePath(ws, path.relative(ws, real)) || isSensitiveFile(real)) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.attach.sensitive", { path: label }) });
+      return false;
+    }
+    try {
+      const raw = await fs.readFile(real, "utf8");
+      if (looksLikePrivateKey(raw)) {
+        this.post({ type: "notice", level: "warn", message: hostT("notice.attach.sensitive", { path: label }) });
+        return false;
+      }
+      this.addAttachment(label, "workspace", redactSecrets(raw));
+      return true;
+    } catch {
+      this.post({ type: "notice", level: "error", message: hostT("notice.attach.unreadable", { path: label }) });
+      return false;
+    }
+  }
+
   async pickWorkspaceFile(): Promise<void> {
     const ws = this.workspaceRoot();
     if (!ws) {
@@ -3115,16 +3149,14 @@ export class Controller {
       return;
     }
     const uris = await vscode.workspace.findFiles("**/*", "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 3000);
-    const items = uris.map((u) => ({ label: path.relative(ws, u.fsPath).split(path.sep).join("/"), uri: u }));
+    // Segredos fora do quickpick (paridade com o catálogo do `@`/buildMentionCatalog) — o gêmeo do `@`, sem
+    // isto, ofereceria `.env`/*.pem e o attachWorkspaceFileSafely é a 2ª camada (recusa+redige na leitura).
+    const items = uris.map((u) => ({ label: path.relative(ws, u.fsPath).split(path.sep).join("/"), uri: u })).filter((i) => !isSensitiveFile(i.label));
     const pick = await vscode.window.showQuickPick(items.map((i) => i.label), { placeHolder: hostT("dialog.attach.placeholder") });
     if (!pick) return;
     const chosen = items.find((i) => i.label === pick);
     if (!chosen) return;
-    try {
-      this.addAttachment(pick, "workspace", await fs.readFile(chosen.uri.fsPath, "utf8"));
-    } catch {
-      this.post({ type: "notice", level: "error", message: hostT("notice.attach.unreadable", { path: pick }) });
-    }
+    await this.attachWorkspaceFileSafely(ws, chosen.uri.fsPath, pick);
   }
 
   // Menção "@": envia o catálogo do workspace (arquivos + pastas derivadas dos diretórios) UMA vez; o webview
@@ -3137,16 +3169,10 @@ export class Controller {
       return;
     }
     const uris = await vscode.workspace.findFiles("**/*", "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 5000);
-    const files = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/")).filter(Boolean);
-    const folders = new Set<string>();
-    for (const f of files) {
-      const parts = f.split("/");
-      for (let i = 1; i < parts.length; i++) folders.add(parts.slice(0, i).join("/"));
-    }
-    const items = [
-      ...[...folders].sort().map((p) => ({ path: p, kind: "folder" as const })),
-      ...files.sort().map((p) => ({ path: p, kind: "file" as const })),
-    ];
+    const rel = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/"));
+    // buildMentionCatalog EXCLUI segredos (.env/*.pem/credenciais) do catálogo — não viram citáveis (2ª
+    // camada; addWorkspaceFileAttachment ainda recusa+redige no anexo). Deriva as pastas e ordena.
+    const items = buildMentionCatalog(rel, isSensitiveFile);
     this.post({ type: "context/workspaceFiles", items });
   }
 
@@ -3222,10 +3248,13 @@ export class Controller {
         // uma pasta com metacaractere de glob no nome (ex.: rota dinâmica Next.js `app/[id]`) seria mal-globada
         // (`[id]` vira classe de caracteres) e listaria VAZIO — achado da revisão. Só o `**/*` é glob agora.
         const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(abs), "**/*"), "{**/node_modules/**,**/.git/**,**/dist/**,**/.venv/**,**/__pycache__/**}", 500);
-        const list = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/")).sort();
+        // Segredos fora da listagem (não vaza nem o NOME de .env/*.pem/credencial), paridade com o catálogo.
+        const list = uris.map((u) => path.relative(ws, u.fsPath).split(path.sep).join("/")).filter((p) => !isSensitiveFile(p)).sort();
         this.addAttachment(`${rel}/ (${list.length} arquivo${list.length === 1 ? "" : "s"})`, "workspace", `Arquivos da pasta ${rel}/:\n${list.join("\n") || "(vazia)"}`);
       } else {
-        this.addAttachment(rel, "workspace", await fs.readFile(abs, "utf8"));
+        // Mesmo caminho guardado do pickWorkspaceFile: realpath+re-contenção, denylist, PEM guard e redação
+        // (o conteúdo vai ao gateway; o `@` não pode virar canal de exfiltração de segredo cru).
+        await this.attachWorkspaceFileSafely(ws, abs, rel);
       }
     } catch {
       this.post({ type: "notice", level: "error", message: hostT("notice.attach.unreadable", { path: rel }) });
@@ -3237,7 +3266,16 @@ export class Controller {
     if (!picks || !picks[0]) return;
     const uri = picks[0];
     try {
-      this.addAttachment(path.basename(uri.fsPath), "upload", await fs.readFile(uri.fsPath, "utf8"));
+      // Arquivo EXTERNO (dialog do SO, fora do workspace): o dev escolheu explicitamente, mas o conteúdo vai
+      // ao gateway — nunca CRU. Sem o denylist por nome (é uma escolha externa deliberada), mas com o guard de
+      // corpo PEM (não manda chave privada) e a redação de segredos (tokens/senhas/chaves) — paridade com os
+      // demais anexos. redactSecrets é no-op em conteúdo comum.
+      const raw = await fs.readFile(uri.fsPath, "utf8");
+      if (looksLikePrivateKey(raw)) {
+        this.post({ type: "notice", level: "warn", message: hostT("notice.attach.sensitive", { path: path.basename(uri.fsPath) }) });
+        return;
+      }
+      this.addAttachment(path.basename(uri.fsPath), "upload", redactSecrets(raw));
     } catch {
       this.post({ type: "notice", level: "error", message: hostT("notice.attach.binary") });
     }
@@ -3250,7 +3288,9 @@ export class Controller {
       return;
     }
     const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, editor.document.uri.fsPath) : editor.document.fileName;
-    this.addAttachment(`${path.basename(rel)} (seleção)`, "selection", editor.document.getText(editor.selection));
+    // Redige a seleção antes de anexar: uma seleção dentro de um .env/config aberto levaria segredo cru ao
+    // gateway (a redação é a fronteira — mesmo com o dev escolhendo). No-op em código comum.
+    this.addAttachment(`${path.basename(rel)} (seleção)`, "selection", redactSecrets(editor.document.getText(editor.selection)));
   }
 
   // Anexa a seleção do TERMINAL. Não há API pública para ler a seleção de um terminal (a interface
@@ -3294,7 +3334,9 @@ export class Controller {
         this.post({ type: "notice", level: "error", message: hostT("notice.attach.selectTerminal") });
         return;
       }
-      this.addAttachment(`${terminal.name} (terminal)`, "selection", sel);
+      // Redige a seleção do terminal: saída de terminal ROTINEIRAMENTE contém dump de env, token, connection
+      // string — nunca cru ao gateway. No-op em saída comum.
+      this.addAttachment(`${terminal.name} (terminal)`, "selection", redactSecrets(sel));
     } finally {
       this.termAttachInFlight = false;
     }
@@ -3338,7 +3380,8 @@ export class Controller {
         this.post({ type: "notice", level: "warn", message: hostT("notice.ocr.noText") });
         return;
       }
-      this.addAttachment("print (OCR)", "upload", text);
+      // Redige o texto OCR: um print de .env/credencial/token viraria segredo cru no gateway. No-op no resto.
+      this.addAttachment("print (OCR)", "upload", redactSecrets(text));
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (!wrote) {

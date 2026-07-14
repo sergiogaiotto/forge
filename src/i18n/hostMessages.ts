@@ -129,6 +129,7 @@ export type HostMessageKey =
   // Anexos/OCR/busca
   | "notice.attach.unreadable"
   | "notice.attach.binary"
+  | "notice.attach.sensitive"
   | "notice.attach.selectEditor"
   | "notice.attach.noTerminal"
   | "notice.attach.selectTerminal"
@@ -555,6 +556,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.summarize.drift": "O histórico mudou durante o resumo — descartei o resumo para não perder nada. Rode /resumir de novo.",
     "notice.attach.unreadable": "Não foi possível ler {path} (binário?).",
     "notice.attach.binary": "Não foi possível ler o arquivo (provavelmente binário). Suportado: texto.",
+    "notice.attach.sensitive": "Não anexei {path}: parece um arquivo de segredo (.env/chave/credencial). Arquivos de segredo ficam fora do contexto enviado.",
     "notice.attach.selectEditor": "Selecione um trecho no editor para anexar.",
     "notice.attach.noTerminal": "Nenhum terminal ativo. Abra um terminal e selecione um trecho para anexar.",
     "notice.attach.selectTerminal": "Selecione um trecho no terminal para anexar e tente novamente.",
@@ -962,6 +964,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.summarize.drift": "The history changed during the summary — I discarded the summary so nothing is lost. Run /summarize again.",
     "notice.attach.unreadable": "Could not read {path} (binary?).",
     "notice.attach.binary": "Could not read the file (probably binary). Supported: text.",
+    "notice.attach.sensitive": "Didn't attach {path}: it looks like a secret file (.env/key/credential). Secret files are kept out of the sent context.",
     "notice.attach.selectEditor": "Select a snippet in the editor to attach.",
     "notice.attach.noTerminal": "No active terminal. Open a terminal and select a snippet to attach.",
     "notice.attach.selectTerminal": "Select a snippet in the terminal to attach and try again.",
@@ -1369,6 +1372,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.summarize.drift": "El historial cambió durante el resumen — descarté el resumen para no perder nada. Ejecuta /resumir de nuevo.",
     "notice.attach.unreadable": "No se pudo leer {path} (¿binario?).",
     "notice.attach.binary": "No se pudo leer el archivo (probablemente binario). Soportado: texto.",
+    "notice.attach.sensitive": "No adjunté {path}: parece un archivo de secretos (.env/clave/credencial). Los archivos de secretos quedan fuera del contexto enviado.",
     "notice.attach.selectEditor": "Selecciona un fragmento en el editor para adjuntar.",
     "notice.attach.noTerminal": "Ninguna terminal activa. Abre una terminal y selecciona un fragmento para adjuntar.",
     "notice.attach.selectTerminal": "Selecciona un fragmento en la terminal para adjuntar e inténtalo de nuevo.",
