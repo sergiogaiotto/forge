@@ -219,6 +219,26 @@ function collectTables(stripped: string, d: Int32Array, ctes: Set<string>): { ta
   return { tables, aliases };
 }
 
+// CTAS / SELECT-INTO: um `SELECT … INTO <alvo>` no TOP LEVEL (d=0) GRAVA — cria uma tabela (T-SQL/Postgres/
+// Sybase `SELECT … INTO nova_tabela`) ou escreve um arquivo (MySQL `INTO OUTFILE/DUMPFILE`). O verbo líder é
+// SELECT, então o classificador o dava como LEITURA e a governança de execução rodava o CREATE numa conexão
+// READONLY (achado do survey). Distingue da atribuição a VARIÁVEL do MySQL (`INTO @var`, que não grava no
+// banco); `:bind`/PL-var não casam o regex (ficam leitura); `INTO` em subquery/função (d>0) é ignorado. Puro.
+function selectIntoIsWrite(stripped: string, d: Int32Array): boolean {
+  // `\s*` (não `\s+`): identificador quotado é AUTO-DELIMITADO, então `INTO"foo"` (sem espaço) é CTAS válido
+  // no Postgres/Oracle (o `\bINTO\b` já garante a fronteira p/ um alvo BARE, que sempre tem separador). O alvo
+  // bare usa \p{L} (com /u): nomes de tabela podem começar com letra NÃO-ASCII (T-SQL) — crítico em pt-BR
+  // (`índice`, `últimos_precos`) e geral (Cyrillic/CJK); sem isto o INTO era perdido e o CREATE rodava readonly.
+  const re = /\bINTO\b\s*(@|"[^"]+"|`[^`]+`|\[[^\]]+\]|#{1,2}[\p{L}\p{N}_]|[\p{L}_][\p{L}\p{N}\p{M}_$]*)/giu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stripped))) {
+    if (d[m.index] !== 0) continue; // INTO dentro de subquery/função não é o alvo do statement
+    if (m[1] === "@") return false; // MySQL variável de usuário (INTO @var) — não grava no banco
+    return true; // tabela (incl. #temp do T-SQL, nome Unicode) ou OUTFILE/DUMPFILE → escrita
+  }
+  return false;
+}
+
 // Classifica todos os statements de um conteúdo SQL (já sem Jinja, se dbt). Nunca lança: entrada
 // impossível de analisar rende `kind: "other"` — fail-open, como os demais gates do FORGE.
 export function classifySql(content: string): SqlStatement[] {
@@ -237,7 +257,10 @@ export function classifySql(content: string): SqlStatement[] {
     // Uma data-modifying CTE torna o statement uma ESCRITA mesmo que o SELECT externo o mascare. O
     // `kind` reportado prioriza o verbo mais "forte" para o rótulo do modal e da auditoria.
     const writeCte = bodyKinds.find((k) => WRITE_KINDS.has(k));
-    const kind: StatementKind = WRITE_KINDS.has(outerKind) ? outerKind : (writeCte ?? outerKind);
+    let kind: StatementKind = WRITE_KINDS.has(outerKind) ? outerKind : (writeCte ?? outerKind);
+    // CTAS / SELECT-INTO: um SELECT com `INTO <tabela>` (ou OUTFILE) no top level ESCREVE → create. Sem isto,
+    // o verbo líder SELECT o daria como leitura e a governança executaria o CREATE numa conexão readonly.
+    if (kind === "select" && selectIntoIsWrite(st, d)) kind = "create";
     const cteSet = new Set(ctes);
     const { tables, aliases } = collectTables(st, d, cteSet);
     let hasTopLevelWhere = false;
