@@ -197,6 +197,31 @@ test("hexagonal TS: domínio importando adapters é VIOLAÇÃO (import relativo)
   assert.deepEqual(v[0].imports, ["adapters.db"]);
 });
 
+test("hexagonal TS: arquivo .mjs/.cjs (ESM/CJS) ENTRA no gate de arquitetura (antes o codeRe pulava)", () => {
+  // Achado do survey: o codeRe /\.[tj]sx?$/i não cobria .mjs/.cjs → num projeto todo-ESM o gate INTEIRO
+  // era pulado (hasCode=false no ProjectGateRunner). Aqui: domínio .mjs importando adapters É violação.
+  const files = [
+    { path: "src/domain/order.mjs", content: "import { Session } from '../adapters/db.mjs';\nexport class Order {}" },
+    { path: "src/adapters/db.mjs", content: "export class Session {}" },
+  ];
+  const v = findLayerViolations(files, "hexagonal", "typescript");
+  assert.equal(v.length, 1, ".mjs é verificado pela arquitetura");
+  assert.equal(v[0].path, "src/domain/order.mjs");
+  assert.deepEqual(v[0].imports, ["adapters.db"]);
+});
+
+test("hexagonal TS: import EXTENSIONLESS resolve p/ arquivo .mjs (CODE_EXT cobre ESM); .cjs também é verificado", () => {
+  // require('../adapters/db') SEM extensão deve resolver p/ db.mjs — o CODE_EXT agora strippa .mjs/.cjs, senão
+  // a chave do arquivo ficaria 'adapters.db.mjs' e o import 'adapters.db' não casaria (falso-negativo).
+  const files = [
+    { path: "src/domain/order.cjs", content: "const { Session } = require('../adapters/db');\nmodule.exports = {};" },
+    { path: "src/adapters/db.mjs", content: "export class Session {}" },
+  ];
+  const v = findLayerViolations(files, "hexagonal", "typescript");
+  assert.equal(v.length, 1, "o require extensionless resolve p/ db.mjs → violação detectada");
+  assert.equal(v[0].path, "src/domain/order.cjs");
+});
+
 test("hexagonal TS: adapter importando domínio é PERMITIDO; use_cases idem", () => {
   const files = [
     { path: "src/domain/order.ts", content: "export class Order {}" },
