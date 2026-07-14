@@ -8,20 +8,35 @@ import { WarehouseKind } from "./types";
 
 const MAX_PROFILE_COLUMNS = 12;
 
-function q(ident: string, kind: WarehouseKind): string {
-  if (!/^[\w.$]+$/.test(ident)) return ident; // já qualificado/quotado — não mexe
-  return kind === "bigquery" ? `\`${ident}\`` : ident;
+// SEGURANÇA: o nome de tabela vem do usuário (/paridade) e as colunas do índice de schema, e ambos eram
+// interpolados CRUS no SQL do perfil — injeção (o `q` antigo devolvia CRU o que não casava seu regex, ex.:
+// `t; DROP TABLE x; --`), agravada pelo skipMask=true da paridade (uma injeção de LEITURA exfiltraria linhas
+// de PII SEM máscara). ALLOWLIST estrita (fail-closed): aceita só cadeia pontilhada de identificadores SIMPLES
+// (letra/dígito/_/$ + Unicode — nomes acentuados pt-BR / Cyrillic / CJK são válidos); rejeita `;`, `(`, aspa,
+// espaço, comentário → null. Bare no não-BQ (preserva o case-folding do dialeto); BQ recebe backtick (o valor
+// validado não tem crase, então não há como escapar do quoting). Identificadores JÁ-quotados NÃO são aceitos
+// (o /paridade nem passa tabela com espaço — parseParityArgs quebra por whitespace). Puro.
+const SAFE_IDENT = /^[\p{L}_][\p{L}\p{N}\p{M}_$]*(?:\.[\p{L}_][\p{L}\p{N}\p{M}_$]*)*$/u;
+function safeIdent(ident: string, kind: WarehouseKind): string | null {
+  const raw = (ident ?? "").trim();
+  if (!SAFE_IDENT.test(raw)) return null;
+  return kind === "bigquery" ? `\`${raw}\`` : raw; // raw validado: sem crase/aspa interna → o quoting é seguro
 }
 
-// Perfil de UMA tabela: uma linha por métrica (metrica,coluna,valor) via UNION ALL — formato
-// uniforme entre dialetos e trivial de comparar.
+// Perfil de UMA tabela: uma linha por métrica (metrica,coluna,valor) via UNION ALL — formato uniforme entre
+// dialetos e trivial de comparar. Tabela com nome inseguro → LANÇA (fail-closed: o /paridade não roda um SQL
+// injetável); coluna insegura → é PULADA (perfila as demais). O rótulo da coluna vai num literal com a aspa
+// escapada (defesa dupla; o safeIdent já garante que não há aspa).
 export function profileSql(kind: WarehouseKind, table: string, columns: string[]): string {
-  const cols = columns.slice(0, MAX_PROFILE_COLUMNS);
-  const t = q(table, kind);
+  const t = safeIdent(table, kind);
+  if (t === null) throw new Error(`Nome de tabela inválido para perfil de paridade: ${JSON.stringify(table)}`);
   const parts: string[] = [`SELECT 'count' AS metrica, '*' AS coluna, CAST(COUNT(*) AS VARCHAR(64)) AS valor FROM ${t}`];
-  for (const c of cols) {
-    parts.push(`SELECT 'nao_nulos', '${c}', CAST(COUNT(${c}) AS VARCHAR(64)) FROM ${t}`);
-    parts.push(`SELECT 'distintos', '${c}', CAST(COUNT(DISTINCT ${c}) AS VARCHAR(64)) FROM ${t}`);
+  for (const c of columns.slice(0, MAX_PROFILE_COLUMNS)) {
+    const qc = safeIdent(c, kind);
+    if (qc === null) continue; // coluna com nome inseguro → pula (nunca interpola cru)
+    const label = String(c).replace(/'/g, "''");
+    parts.push(`SELECT 'nao_nulos', '${label}', CAST(COUNT(${qc}) AS VARCHAR(64)) FROM ${t}`);
+    parts.push(`SELECT 'distintos', '${label}', CAST(COUNT(DISTINCT ${qc}) AS VARCHAR(64)) FROM ${t}`);
   }
   let sql = parts.join("\nUNION ALL\n");
   if (kind === "bigquery") sql = sql.replace(/VARCHAR\(64\)/g, "STRING");
