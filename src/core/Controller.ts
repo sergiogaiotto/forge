@@ -89,7 +89,8 @@ import { decideSqlRun } from "../warehouse/governance";
 import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { resolveExecutable } from "../warehouse/exec";
 import { getHostLocale, hostT } from "../i18n";
-import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
+import { columnsInventorySql, mergeIndexes, parseInventoryCsv, WarehouseSnapshot } from "../warehouse/schemaSnapshot";
+import { WarehouseSnapshotStore } from "../warehouse/WarehouseSnapshotStore";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
 import { maskDataSample, renderPiiCard, scanIndexForPii } from "../util/piiScan";
@@ -206,8 +207,19 @@ export class Controller {
   // Onda 3: serviço de warehouse (CLI tradicional + MCP) e snapshots de schema vivo por conexão —
   // persistidos no globalStorage e fundidos ao índice dbt no grounding (getGroundingIndex).
   private warehouseSvc: WarehouseService | null = null;
-  private whSnapshots = new Map<string, DbtIndex>();
-  private whSnapshotsLoaded = false;
+  // Estado (índice por conexão + load-once) + invariantes (filtro/parse-skip/capture/fail-open) dos
+  // snapshots de warehouse extraídos p/ WarehouseSnapshotStore (puro/testável; I/O de disco injetado —
+  // IRMÃO do dbtStore #212; getGroundingIndex funde os dois).
+  private readonly whStore = new WarehouseSnapshotStore({
+    storageDir: () => this.context.globalStorageUri.fsPath,
+    fs: {
+      readdir: (dir) => fs.readdir(dir),
+      readFile: (file) => fs.readFile(file, "utf8"),
+      mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => undefined),
+      writeFile: (file, content) => fs.writeFile(file, content, "utf8"),
+    },
+    log,
+  });
   private readonly runService: RunService;
   private readonly previewService: PreviewService;
   private readonly projectGateRunner: ProjectGateRunner;
@@ -2625,21 +2637,8 @@ export class Controller {
   // Índice de GROUNDING: manifest dbt + snapshots de warehouse vivos, fundidos — alimenta prompt,
   // gate semântico, /auditoria-pii e paridade. Snapshot persiste no globalStorage entre sessões.
   private async getGroundingIndex(): Promise<DbtIndex | undefined> {
-    if (!this.whSnapshotsLoaded) {
-      this.whSnapshotsLoaded = true;
-      try {
-        const dir = this.context.globalStorageUri.fsPath;
-        for (const f of await fs.readdir(dir).catch(() => [] as string[])) {
-          if (!/^wh-schema-.+\.json$/.test(f)) continue;
-          const snap = parseSnapshot(await fs.readFile(path.join(dir, f), "utf8"));
-          if (snap) this.whSnapshots.set(snap.connectionId, snapshotToIndex(snap));
-        }
-      } catch (err) {
-        log.warn("warehouse: snapshots não carregados (fail-open).", err);
-      }
-    }
     const dbt = await this.dbtStore.get();
-    const all = [...(dbt ? [dbt] : []), ...this.whSnapshots.values()];
+    const all = [...(dbt ? [dbt] : []), ...(await this.whStore.indexes())];
     if (all.length === 0) return undefined;
     return all.length === 1 ? all[0] : mergeIndexes(all);
   }
@@ -2934,14 +2933,7 @@ export class Controller {
           }
           const rows = parseInventoryCsv(r.output);
           const snap: WarehouseSnapshot = { connectionId: conn.id, kind: conn.kind, takenAt: new Date().toISOString(), rows };
-          const index = snapshotToIndex(snap);
-          this.whSnapshots.set(conn.id, index);
-          try {
-            await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true });
-            await fs.writeFile(path.join(this.context.globalStorageUri.fsPath, `wh-schema-${conn.id}.json`), serializeSnapshot(snap), "utf8");
-          } catch (err) {
-            log.warn("warehouse: snapshot não persistido (segue em memória).", err);
-          }
+          const index = await this.whStore.capture(snap);
           this.dataCard(hostT("card.schema.ok", { id: conn.id, tables: index.size(), columns: rows.length, rowCap: this.config.warehouse().rowCap }));
           return;
         }
