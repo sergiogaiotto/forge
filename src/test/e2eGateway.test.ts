@@ -405,3 +405,43 @@ test("E2E rate-limit da ativação: 2ª ativação do mesmo subject no mesmo min
     if (failed || process.env.FORGE_E2E_DEBUG) process.stderr.write(gw?.log() ?? "");
   }
 });
+
+test("E2E rate-limit do PROXY: por SUBJECT (não por token) — 2 sessões do mesmo subject DIVIDEM o cap, não multiplicam", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "forge-e2e-rlx-"));
+  const keysDir = path.join(tmp, "keys");
+  let gw: { base: string; stop: () => Promise<void>; log: () => string } | undefined;
+  let fake: FakeUpstream | undefined;
+  let failed = false;
+  try {
+    const kg = spawnSync(process.execPath, [ADMIN_CLI, "keygen", "--keys-dir", keysDir, "--json"], { encoding: "utf8" });
+    assert.equal(kg.status, 0, `keygen falhou: ${kg.stderr}`);
+    const lic = mint(keysDir, "rlproxy@claro.com");
+    fake = await startFakeUpstream();
+    // cap=3: as 2 ativações (bucket "activate:"+subject) cabem (2≤3); o proxy tem seu PRÓPRIO bucket de 3.
+    gw = await bootGateway(keysDir, fake.url, { RATE_LIMIT_PER_MIN: "3", MAX_SESSIONS: "1000" });
+    // ativa a MESMA licença 2× → 2 tokens DISTINTOS, MESMO subject (2 sessões/dispositivos)
+    const t1 = await activate(gw.base, lic);
+    const t2 = await activate(gw.base, lic);
+    assert.notEqual(t1, t2, "dois tokens de sessão distintos");
+    // marreta o proxy alternando os tokens. POR SUBJECT, os 200 são COMPARTILHADOS (~cap 3) entre os 2
+    // tokens; se fosse POR TOKEN (o bug) seriam ~2×cap = 6. O excesso vira 429.
+    const statuses: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const res = await proxyGen(gw.base, i % 2 === 0 ? t1 : t2);
+      await res.text().catch(() => {}); // drena o SSE/erro (não deixa conexão pendurada)
+      statuses.push(res.status);
+    }
+    const ok = statuses.filter((s) => s === 200).length;
+    const limited = statuses.filter((s) => s === 429).length;
+    assert.ok(ok <= 4, `per-subject: ~cap(3) 200s COMPARTILHADOS entre os 2 tokens (seria ~6 se por token); foram ${ok} [${statuses}]`);
+    assert.ok(limited >= 3, `o excesso do subject vira 429 (limite compartilhado); foram ${limited}/8`);
+  } catch (e) {
+    failed = true;
+    throw e;
+  } finally {
+    await gw?.stop();
+    await fake?.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (failed || process.env.FORGE_E2E_DEBUG) process.stderr.write(gw?.log() ?? "");
+  }
+});
