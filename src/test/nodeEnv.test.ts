@@ -23,7 +23,7 @@ test("buildGateTsconfig: JSON válido, tolerante a deps ausentes; JS/JSX no incl
   assert.equal(cfg.compilerOptions.strict, false); // reduz falso-positivo sem node_modules
   assert.equal(cfg.compilerOptions.allowJs, true, "parseia JS p/ pegar sintaxe (gate era no-op em .js)");
   assert.equal(cfg.compilerOptions.checkJs, false, "NÃO tipa JS (checkJs:true = ruído sem node_modules)");
-  assert.deepEqual(cfg.include, ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]);
+  assert.deepEqual(cfg.include, ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.mts", "**/*.cts"]);
 });
 
 // ---- Smoke TS: detecção do runner + resolução do entry -------------------------

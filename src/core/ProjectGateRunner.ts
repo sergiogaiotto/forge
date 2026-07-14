@@ -110,7 +110,10 @@ export class ProjectGateRunner {
     // tratamento honesto próprio (pulado no "Aplicar tudo" + aviso no cartão) — um SyntaxError por corte
     // não deve virar bloqueio de gate, e materializá-lo poluiria a resolução do conjunto.
     const props = [...task.proposals.values()].filter((e) => !e.proposal.cell && !e.proposal.partial);
-    const codeRe = language === "typescript" ? /\.[tj]sx?$/i : language === "go" ? /\.go$/i : language === "java" ? /\.java$/i : /\.py$/i;
+    // ESM/CJS entram: /\.[cm]?[tj]sx?$/i cobre .ts/.tsx/.js/.jsx E .mts/.cts/.mjs/.cjs — sem o [cm]?, um
+    // projeto todo-ESM tinha hasCode=false e o gate INTEIRO (SAST bloqueante + arquitetura + tsc) era pulado
+    // (achado do survey). Mesmo padrão do sastScan.CODE_RE e do include do buildGateTsconfig (#199).
+    const codeRe = language === "typescript" ? /\.[cm]?[tj]sx?$/i : language === "go" ? /\.go$/i : language === "java" ? /\.java$/i : /\.py$/i;
     const hasCode = props.some((e) => codeRe.test(e.proposal.filePath));
     if (!hasCode) return { summary: null, state: null }; // nada compilável na linguagem do projeto — gate não se aplica
     // Guarda os args para o "Re-verificar contrato" (re-rodar o gate sobre as MESMAS propostas depois

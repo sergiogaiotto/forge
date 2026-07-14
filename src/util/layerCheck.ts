@@ -46,7 +46,7 @@ function norm(p: string): string {
 // Camada de um caminho: o PRIMEIRO segmento (esq→dir) que casa um alias. Assim `domain/repositories.py`
 // é INNER (uma porta do domínio), não OUTER, apesar do nome "repositories" — o diretório-raiz manda.
 // Extensão de arquivo de código (Python OU TS/JS) — removida do último segmento antes de determinar a camada.
-const CODE_EXT = /\.(py|tsx?|jsx?)$/i;
+const CODE_EXT = /\.(py|[cm]?[tj]sx?)$/i; // .py e .ts/.tsx/.js/.jsx + ESM/CJS .mts/.cts/.mjs/.cjs
 
 function layerOf(path: string, inner: string[], outer: string[]): Layer {
   // SÓ os DIRETÓRIOS decidem a camada — nunca o basename do arquivo. Sem isto, um módulo de RAIZ cujo nome
@@ -200,7 +200,7 @@ export function findLayerViolations(files: { path: string; content: string }[], 
   // a camada — o análogo Java do prefixo de módulo do Go. Caminho SEPARADO, também.
   if (language === "java") return findJavaLayerViolations(files, inner, outer);
   const isTs = language === "typescript";
-  const codeRe = isTs ? /\.[tj]sx?$/i : /\.py$/i; // Python-only ou TS/JS — outras linguagens não têm gate ainda
+  const codeRe = isTs ? /\.[cm]?[tj]sx?$/i : /\.py$/i; // TS/JS + ESM/CJS (.mjs/.cjs/.mts/.cts) ou Python-only
   const parse = isTs ? parseImportsTs : parseImports;
   const code = files.filter((f) => codeRe.test(f.path));
 

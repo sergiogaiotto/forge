@@ -91,7 +91,7 @@ export function buildGateTsconfig(): string {
         resolveJsonModule: true,
         forceConsistentCasingInFileNames: false,
       },
-      include: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"],
+      include: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.mts", "**/*.cts"],
     },
     null,
     2

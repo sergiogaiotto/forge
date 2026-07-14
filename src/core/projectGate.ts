@@ -252,7 +252,7 @@ export function isTscSyntaxError(code: string): boolean {
 const TS_ASSET_EXT = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|json|jsonc|md|mdx|txt|csv|ya?ml|graphql|gql|woff2?|ttf|eot|otf|mp[34]|webm|wav|ogg|glb|gltf|wasm|html?|xml|pdf|node|vue|svelte|astro)$/i;
 
 // Extensões de CÓDIGO que o tsc resolveria para um specifier relativo extensionless (./B → ./B.ts, ./B/index.tsx…).
-const TS_CODE_EXT = ["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+const TS_CODE_EXT = ["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"];
 
 // Resolve um specifier RELATIVO (./B, ../util/x) a partir do arquivo importador e devolve os caminhos de
 // arquivo candidatos (normalizados) que o TS aceitaria — usado para NÃO bloquear um TS2307 cujo alvo EXISTE
