@@ -105,6 +105,46 @@ test("normIdent: tira aspas e baixa caixa por partes", () => {
   assert.equal(normIdent("`db`.tabela"), "db.tabela");
 });
 
+// SQL CTAS/SELECT-INTO: o verbo líder é SELECT, mas `SELECT … INTO <tabela>` CRIA a tabela (escrita). Sem
+// esta regra, a governança de execução rodava o CREATE numa conexão READONLY (achado do survey).
+test("classifySql: SELECT … INTO (CTAS) é ESCRITA (create), não leitura; INTO @var (variável) não", () => {
+  const ctas = classifySql("SELECT a, b INTO nova_tab FROM origem WHERE x = 1")[0];
+  assert.equal(ctas.kind, "create");
+  assert.equal(ctas.write, true, "SELECT INTO tabela grava (cria) → não pode rodar como leitura");
+  // #temp do T-SQL, WITH … SELECT INTO, e OUTFILE do MySQL (egresso a arquivo) também são escrita
+  assert.equal(classifySql("SELECT a INTO #tmp FROM t")[0].write, true);
+  assert.equal(classifySql("WITH c AS (SELECT 1 x) SELECT x INTO dest FROM c")[0].write, true);
+  assert.equal(classifySql("SELECT * INTO OUTFILE '/tmp/x.csv' FROM t")[0].write, true);
+  // MySQL `INTO @var` é atribuição a VARIÁVEL — não grava no banco → segue leitura
+  const varAssign = classifySql("SELECT COUNT(*) INTO @cnt FROM t")[0];
+  assert.equal(varAssign.kind, "select");
+  assert.equal(varAssign.write, false, "INTO @var é variável, não tabela — não é escrita");
+  // controles: SELECT normal e um SELECT sem INTO no top level seguem leitura (sem falso-positivo)
+  assert.equal(classifySql("SELECT a, b FROM t WHERE a > 1")[0].write, false);
+  assert.equal(classifySql("SELECT * FROM (SELECT a FROM t) s")[0].write, false);
+});
+
+// REGRESSÃO (caça adversarial ao vivo): buracos do 1º regex do CTAS, todos comprovados rodando o classificador.
+test("classifySql: SELECT INTO com nome Unicode / alvo quotado sem espaço / #digit são ESCRITA (não bypassável)", () => {
+  // nome de tabela NÃO-ASCII (T-SQL aceita) — CRÍTICO em pt-BR; o regex ASCII-only sem /u os perdia → CREATE em readonly
+  for (const sql of [
+    "SELECT * INTO índice FROM cotacoes", // acento latino
+    "SELECT id INTO últimos_precos FROM t",
+    "SELECT * INTO таблица FROM t", // cirílico
+    "SELECT * INTO 表 FROM t", // CJK
+    "SELECT * INTO índice.tbl FROM t", // schema qualificado com token Unicode
+    'SELECT 1 INTO"foo" FROM t', // alvo quotado SEM espaço (auto-delimitado — Postgres/Oracle)
+    "SELECT * INTO #1 FROM u", // #temp com dígito
+  ]) {
+    assert.equal(classifySql(sql)[0].write, true, `deveria ser escrita: ${sql}`);
+  }
+  // amplificador: batch "read; CTAS-unicode" — o statement do INTO precisa ser escrita (senão o batch inteiro roda auto)
+  const batch = classifySql("SELECT 1; SELECT * INTO índice FROM u");
+  assert.ok(batch.some((s) => s.write), "o CTAS escondido no batch é detectado como escrita");
+  // controle-chave: uma COLUNA/tabela com nome Unicode num SELECT normal NÃO pode virar escrita (falso-positivo)
+  assert.equal(classifySql("SELECT órgão, ação FROM cadastro c JOIN status s ON c.id = s.id")[0].write, false);
+});
+
 // ---------- antipatterns ----------
 
 function findRules(sql: string, opts: { isDbtModel?: boolean; hadJinja?: boolean } = {}): string[] {

@@ -22,6 +22,16 @@ test("governança: SELECT roda; escrita bloqueia em readonly (default) e confirm
   assert.equal(decideSqlRun("", ORA).verdict, "blocked");
 });
 
+test("governança: SELECT … INTO (CTAS) é ESCRITA → BLOQUEIA em readonly (não roda o CREATE como leitura)", () => {
+  // O bug do survey: SELECT INTO rodava "auto" numa conexão readonly, EXECUTANDO o CREATE. Agora write → blocked.
+  assert.equal(decideSqlRun("SELECT a, b INTO nova_tab FROM origem", ORA).verdict, "blocked");
+  assert.equal(decideSqlRun("SELECT * INTO OUTFILE '/tmp/x.csv' FROM t", ORA).verdict, "blocked");
+  // com readonly:false a escrita é permitida SÓ com confirmação humana (não auto)
+  assert.equal(decideSqlRun("SELECT a INTO nova_tab FROM t", { ...ORA, readonly: false }).verdict, "confirm");
+  // MySQL `INTO @var` (variável, não grava) segue leitura → auto (sem falso-positivo)
+  assert.equal(decideSqlRun("SELECT COUNT(*) INTO @cnt FROM t", ORA).verdict, "auto");
+});
+
 test("governança: DROP/TRUNCATE NUNCA executam, mesmo com readonly:false; não-classificável = escrita", () => {
   assert.equal(decideSqlRun("DROP TABLE t", { ...ORA, readonly: false }).verdict, "blocked");
   assert.equal(decideSqlRun("TRUNCATE TABLE t", { ...ORA, readonly: false }).verdict, "blocked");
