@@ -59,6 +59,7 @@ test("toDiagnosticRecord: generation.end MASCARA segredos no input/output", () =
     model: "gpt-oss-120b",
     input: "use a chave sk-ant-abc123def456ghi789 no cliente",
     output: "meu email é foo@bar.com e o token Bearer xyz.abc.def",
+    error: "provider recusou: token sk-proj-AbCdEfGhIjKlMnOpQr inválido", // erro LIVRE do provider — pode ecoar segredo
     usage: { inputTokens: 10, outputTokens: 20 },
     proposals: 2,
   };
@@ -68,6 +69,12 @@ test("toDiagnosticRecord: generation.end MASCARA segredos no input/output", () =
   assert.doesNotMatch(String(r.input), /sk-ant-abc123def456ghi789/); // segredo redigido (Anthropic — fonte unificada #8)
   assert.match(String(r.input), /«oculto»/); // placeholder da fonte unificada
   assert.doesNotMatch(String(r.output), /foo@bar\.com/); // PII redigida
+  // o ERROR também é redigido no bundle "sempre redigido" (antes ia cru — a assimetria do tema 3)
+  assert.doesNotMatch(String(r.error), /sk-proj-AbCdEfGhIjKlMnOpQr/);
+  assert.match(String(r.error), /«oculto»/);
+  // em 'full' o bundle LOCAL segue redigindo o error (log local ≠ egress remoto)
+  const full = toDiagnosticRecord(e, TS, "full");
+  assert.doesNotMatch(String(full.error), /sk-proj-AbCdEfGhIjKlMnOpQr/);
 });
 
 test("toDiagnosticRecord: metadata-only OMITE o conteúdo (input/output undefined)", () => {

@@ -108,7 +108,10 @@ export function buildIngestion(e: ObsEvent, o: BuildOpts): IngestionEvent[] {
             output: mask(e.output, o.capture),
             usage,
             level: e.error ? "ERROR" : "DEFAULT",
-            statusMessage: e.error,
+            // statusMessage é mensagem LIVRE do provider (pode ecoar prompt/connstring/token/stack) — passa pelo
+            // MESMO mask() do input/output: redigido em 'masked' (antes ia CRU aqui, enquanto input/output eram
+            // mascarados — a assimetria do tema 3), cru só em 'full' (opt-in do admin). O `level` já sinaliza o erro.
+            statusMessage: mask(e.error, o.capture),
             startTime: startIso,
             endTime: o.nowIso,
             metadata: { proposals: e.proposals, ...(cost ? { costCurrency: cost.currency } : {}) },

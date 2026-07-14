@@ -43,8 +43,10 @@ export function toDiagnosticRecord(e: ObsEvent, nowIso: string, capture: Capture
     case "phase.timing":
       return { ...base, taskId: e.taskId, phase: e.phase, durationMs: e.durationMs };
     case "generation.end":
-      // input/output envoltos em redactSecrets (como o systemPrompt): o bundle LOCAL é redigido mesmo em 'full'.
-      return { ...base, taskId: e.taskId, model: e.model, durationMs: e.durationMs, proposals: e.proposals, usage: e.usage, error: e.error, input: mask(redactSecrets(e.input), capture), output: mask(redactSecrets(e.output), capture) };
+      // input/output/ERROR envoltos em redactSecrets (como o systemPrompt): o bundle LOCAL é redigido mesmo em
+      // 'full'. O `error` é mensagem LIVRE do provider — pode ecoar o prompt, uma connection-string, um token de
+      // API ou um stack trace com dados; ia CRU no bundle "sempre redigido" (contradição). Agora redige como o resto.
+      return { ...base, taskId: e.taskId, model: e.model, durationMs: e.durationMs, proposals: e.proposals, usage: e.usage, error: e.error === undefined ? undefined : mask(redactSecrets(e.error), capture), input: mask(redactSecrets(e.input), capture), output: mask(redactSecrets(e.output), capture) };
     case "skill.activated":
       return { ...base, skill: e.skill };
     case "proposal.created":
