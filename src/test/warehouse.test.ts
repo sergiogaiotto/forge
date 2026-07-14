@@ -147,6 +147,24 @@ test("paridade: SQL por agregados (nenhuma linha sai), parse, comparação e car
   assert.ok(renderParityCard("a", "b", ok).includes("Paridade OK"));
 });
 
+test("paridade SEGURANÇA: profileSql rejeita injeção via TABELA e PULA coluna insegura (nunca interpola cru)", () => {
+  // a tabela vem do usuário (/paridade); nome com ';'/UNION/aspa/espaço/paren LANÇA (fail-closed), não injeta.
+  // Isto também fecha a exfil de PII: a paridade roda com skipMask=true, então uma injeção-de-leitura mostraria
+  // linhas SEM máscara — impossível agora que o SQL do perfil não é injetável.
+  for (const bad of ["t; DROP TABLE x; --", "t WHERE 1=0 UNION SELECT * FROM pii --", 't" ; DROP', "a b", "t(1)"]) {
+    assert.throws(() => profileSql("postgres", bad, ["id"]), /inv[áa]lido/i, `deveria rejeitar: ${bad}`);
+  }
+  // coluna (do índice de schema) insegura é PULADA; as válidas seguem perfiladas; o texto malicioso não vaza.
+  const sql = profileSql("postgres", "t", ["ok_col", "x) FROM segredos; DROP TABLE y; --", "outra"]);
+  assert.ok(!/DROP TABLE y|FROM segredos/.test(sql), "coluna maliciosa não aparece crua no SQL");
+  assert.ok(/COUNT\(ok_col\)/.test(sql) && /COUNT\(outra\)/.test(sql), "colunas válidas seguem perfiladas");
+  // válidos: BigQuery quota com backtick; não-BQ mantém bare (preserva case-folding); Unicode pt-BR é aceito.
+  assert.ok(profileSql("bigquery", "ds.tab", ["c"]).includes("`ds.tab`"));
+  assert.ok(profileSql("postgres", "vendas.pedidos", ["id"]).includes("FROM vendas.pedidos"));
+  const uni = profileSql("postgres", "órgão", ["índice"]);
+  assert.ok(uni.includes("FROM órgão") && uni.includes("COUNT(índice)"), "nome Unicode válido é aceito");
+});
+
 test("parseParityArgs: dois tokens, com conexao:tabela opcional", () => {
   const p = parseParityArgs("dw:vendas.pedidos bq:vendas.pedidos");
   assert.ok(!("error" in p));
