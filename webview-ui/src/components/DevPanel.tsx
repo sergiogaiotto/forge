@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
 import { getLocale, t, type MessageKey } from "../i18n";
-import { atMentionToken, filterMentions, replaceMention } from "../mentions";
+import { atMentionToken, filterMentions, mentionInsertText, replaceMention, splitMentionLabel } from "../mentions";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
@@ -418,16 +418,20 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [caret, setCaret] = useState(0);
   const [atSel, setAtSel] = useState(0);
   const [atDismissed, setAtDismissed] = useState(false);
-  const wsRequested = useRef(false);
+  const lastWsFetch = useRef(0);
   const mentionTok = atMentionToken(input, caret);
   const mentionItems = mentionTok ? filterMentions(state.workspaceFiles, mentionTok.query, 12) : [];
   const atOpen = !!mentionTok && !state.busy && !atDismissed && mentionItems.length > 0;
+  // Refetch do catálogo ao ABRIR o picker (debounce ~2s): arquivos criados/movidos/copiados aparecem sem
+  // recarregar a webview. Antes era buscado UMA vez e cacheado p/ sempre (once-guard) → staleness. O cache
+  // segue servindo o filtro instantâneo enquanto se digita; só re-varre na abertura (e no máx. 1×/2s).
   useEffect(() => {
-    if (mentionTok && state.workspaceFiles.length === 0 && !wsRequested.current) {
-      wsRequested.current = true;
-      post({ type: "context/listWorkspaceFiles" });
-    }
-  }, [mentionTok?.query, state.workspaceFiles.length]);
+    if (!mentionTok) return;
+    const now = Date.now();
+    if (now - lastWsFetch.current < 2000) return;
+    lastWsFetch.current = now;
+    post({ type: "context/listWorkspaceFiles" });
+  }, [!!mentionTok]);
   useEffect(() => {
     setAtSel(0);
     setAtDismissed(false); // digitou/moveu o caret → o popover volta
@@ -436,7 +440,9 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const chooseMention = (entry: WorkspaceEntry) => {
     post({ type: "context/addWorkspaceFile", path: entry.path, kind: entry.kind });
     if (mentionTok) {
-      const { text, caret: nc } = replaceMention(input, mentionTok, ""); // limpa o @token — o chip carrega o conteúdo
+      // Insere a referência inline `@caminho[/] ` no lugar do token (antes era apagado → a citação sumia do
+      // prompt). O anexo carrega o conteúdo; a referência deixa a frase coerente e o subdir inequívoco.
+      const { text, caret: nc } = replaceMention(input, mentionTok, mentionInsertText(entry));
       setInput(text);
       requestAnimationFrame(() => {
         const ta = taRef.current;
@@ -679,21 +685,26 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           {atOpen && (
             // Menção "@": popover de arquivos/pastas do workspace (↑↓ navega, Enter/Tab anexa, Esc fecha).
             <div className="slash-pop mention-pop">
-              {mentionItems.map((entry, i) => (
-                <div
-                  key={entry.path}
-                  className={`slash-item${i === atSel ? " sel" : ""}`}
-                  onMouseEnter={() => setAtSel(i)}
-                  onMouseDown={(e) => {
-                    e.preventDefault(); // não rouba o foco do textarea
-                    chooseMention(entry);
-                  }}
-                >
-                  <Icon name={entry.kind === "folder" ? "folder" : "file"} size={13} />
-                  <span className="slash-label">{entry.path.split("/").pop()}</span>
-                  <span className="slash-hint">{entry.path}</span>
-                </div>
-              ))}
+              {mentionItems.map((entry, i) => {
+                // basename FORTE + prefixo de diretório ESMAECIDO — subdir legível e inequívoco (o basename
+                // sozinho é ambíguo quando há homônimos em pastas diferentes).
+                const { dir, base } = splitMentionLabel(entry.path);
+                return (
+                  <div
+                    key={entry.path}
+                    className={`slash-item${i === atSel ? " sel" : ""}`}
+                    onMouseEnter={() => setAtSel(i)}
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // não rouba o foco do textarea
+                      chooseMention(entry);
+                    }}
+                  >
+                    <Icon name={entry.kind === "folder" ? "folder" : "file"} size={13} />
+                    <span className="slash-label">{base}</span>
+                    {dir && <span className="slash-hint">{dir}</span>}
+                  </div>
+                );
+              })}
             </div>
           )}
           {slashOpen && (
