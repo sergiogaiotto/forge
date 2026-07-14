@@ -1,7 +1,7 @@
 // Orçamento dinâmico de contexto: divide a janela do modelo entre SAÍDA (reservada para o código
 // gerado) e ENTRADA (system prompt + histórico + query), em TOKENS. Substitui o tokenBudget fixo de
 // 24000 (em chars) que subutilizava a janela de 128k do gpt-oss em ~6x e cortava no meio de uma skill.
-import { ModelMeta } from "../api/modelCatalog";
+import { ModelMeta, minInputReserve, safetyMargin } from "../api/modelCatalog";
 
 export interface ContextBudgetPlan {
   contextWindow: number;
@@ -10,22 +10,21 @@ export interface ContextBudgetPlan {
   safetyMargin: number;
 }
 
-// 10% de folga sobre a janela: a estimativa de tokens é heurística e o tokenizer real (BPE) quebra
-// acentos/pt-BR em mais tokens do que a estimativa por densidade — subestimar custaria um HTTP 400 do
-// gateway por estourar a janela. Superestimar só deixa um pouco de espaço ocioso.
-const SAFETY = 0.1;
-const MIN_INPUT = 1024;
+// A margem de folga (safetyMargin) e a reserva mínima de entrada (minInputReserve) vêm da política ÚNICA em
+// modelCatalog — a MESMA que o clampOutputToServed usa ao rebaixar o teto de saída, para os dois concordarem
+// (senão a soma saída+entrada+margem estouraria a janela → HTTP 400, ou a entrada colapsaria).
 
 // `windowOverride` (> 0) reconcilia a janela do MODELO (catálogo) com o limite REAL do SERVIDOR: o
 // gateway HubGPU/vLLM pode servir com --max-model-len menor que a capacidade do modelo. Sem isso, o
 // orçamento confiaria nos 128k do catálogo e estouraria (400) se o servidor servir, p.ex., 32k.
 export function deriveBudget(meta: ModelMeta, outputReserve: number, windowOverride = 0): ContextBudgetPlan {
   const window = windowOverride > 0 ? Math.min(meta.contextWindow, windowOverride) : meta.contextWindow;
-  const margin = Math.ceil(window * SAFETY);
-  // A saída reservada nunca pode engolir a janela inteira — garante um piso de entrada.
-  const reserve = Math.min(Math.max(0, outputReserve), Math.max(0, window - margin - MIN_INPUT));
+  const margin = safetyMargin(window);
+  const minInput = minInputReserve(window); // piso PROPORCIONAL (≥30%) — não colapsa a 1024 em janela pequena
+  // A saída reservada nunca pode engolir a janela inteira — garante o piso de entrada.
+  const reserve = Math.min(Math.max(0, outputReserve), Math.max(0, window - margin - minInput));
   // Clamp a window-margin garante que a soma (saída + entrada + margem) nunca exceda a janela, mesmo
-  // em janelas minúsculas teóricas onde o piso MIN_INPUT excederia o espaço disponível.
-  const inputBudget = Math.min(window - margin, Math.max(MIN_INPUT, window - reserve - margin));
+  // em janelas minúsculas teóricas onde o piso minInput excederia o espaço disponível.
+  const inputBudget = Math.min(window - margin, Math.max(minInput, window - reserve - margin));
   return { contextWindow: window, outputReserve: reserve, inputBudget, safetyMargin: margin };
 }

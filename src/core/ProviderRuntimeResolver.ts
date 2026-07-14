@@ -1,8 +1,6 @@
 import { clampOutputToServed, getModelMeta, resolveMaxOutput } from "../api/modelCatalog";
 import { ProviderRuntimeConfig } from "../api/types";
 
-const OUTPUT_INPUT_RESERVE = 4096; // reserva de INPUT ao clampar o output contra a janela servida
-
 // Resolve os parâmetros de RUNTIME do provider a partir de (type, baseUrl, modelId): a janela de contexto
 // EFETIVA e o TETO de output, contra a janela SERVIDA pelo gateway. Extraído do Controller (god-object):
 // encapsula o CACHE da janela servida (por type::baseUrl::modelId — gateways diferentes servem janelas
@@ -44,11 +42,12 @@ export class ProviderRuntimeResolver {
   }
 
   // Teto de output EFETIVO: sessão > config do admin > catálogo, com CLAMP contra a janela servida menos a
-  // reserva de input (evita o footgun de um valor que o gateway recusaria com HTTP 400). `sessionMaxOutput`
-  // 0 = sem escolha por-sessão (a config do admin vence).
+  // reserva de input PROPORCIONAL + margem (evita o footgun de um valor que o gateway recusaria com HTTP 400
+  // E o colapso da entrada). A reserva vem da política única em clampOutputToServed (a mesma do deriveBudget).
+  // `sessionMaxOutput` 0 = sem escolha por-sessão (a config do admin vence).
   resolveOutputTokens(type: ProviderRuntimeConfig["type"], baseUrl: string | undefined, modelId: string, sessionMaxOutput: number): number {
     const meta = getModelMeta(type, modelId);
     const requested = sessionMaxOutput > 0 ? sessionMaxOutput : this.deps.maxOutput();
-    return clampOutputToServed(resolveMaxOutput(requested, meta), meta, this.effectiveContextWindow(type, baseUrl, modelId), OUTPUT_INPUT_RESERVE);
+    return clampOutputToServed(resolveMaxOutput(requested, meta), meta, this.effectiveContextWindow(type, baseUrl, modelId));
   }
 }
