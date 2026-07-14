@@ -13,14 +13,33 @@ export interface StrippedSql {
   unterminated: boolean;
 }
 
+export interface StripOpts {
+  // Honrar `\'` como aspa ESCAPADA (MySQL/BigQuery/Spark)? `false` = backslash é LITERAL (Oracle/Postgres/
+  // DuckDB com standard_conforming_strings=on, o default deles): então `'x\'` FECHA a string no 2º `'` e o
+  // que vem depois (`; UPDATE …`) aflora como um SEGUNDO statement. Isto é FAIL-CLOSED para a governança —
+  // sem, uma escrita escondida atrás de `\'` numa conexão readonly seria vista como uma única string dentro
+  // de um SELECT e rodaria como leitura (achado do survey pós-#217). Default `true` = retrocompat da análise
+  // do gate (dialeto-agnóstica, sem execução); a GOVERNANÇA de execução passa o valor real por dialeto.
+  backslashEscapes?: boolean;
+}
+
+// Dialetos que escapam aspa com backslash (`\'`). Os demais (Oracle/Postgres/DuckDB, ANSI/SQL-92) tratam
+// `\` como caractere LITERAL. Saber isto é essencial para a governança de execução: sem, uma escrita atrás
+// de `\'` numa conexão readonly passaria como leitura. `undefined`/desconhecido → false (fail-closed). Puro.
+const BACKSLASH_ESCAPE_DIALECTS = new Set(["mysql", "bigquery", "spark", "hive", "presto", "trino"]);
+export function dialectUsesBackslashEscapes(kind: string | undefined): boolean {
+  return kind !== undefined && BACKSLASH_ESCAPE_DIALECTS.has(kind.toLowerCase());
+}
+
 // Substitui comentários (`--`, `/* */`, `#` NÃO — em MySQL `#` comenta, mas em Snowflake/BQ é parte de
 // identificadores; fica de fora por segurança) e literais de string (aspas simples com escape `''` E
 // `\'` — MySQL/BigQuery/Spark usam backslash; aceitar ambos é seguro para uma camada heurística,
 // dollar-quoting $tag$...$tag$ do Postgres) por espaços. Aspas duplas/backticks/colchetes delimitam
 // IDENTIFICADORES — o conteúdo é mantido, EXCETO `;`/`(`/`)` (viram espaço para não corromper o split
 // de statements e o mapa de profundidade). Quebras de linha nos trechos apagados são preservadas.
-export function stripSqlNoiseEx(sql: string): StrippedSql {
+export function stripSqlNoiseEx(sql: string, opts: StripOpts = {}): StrippedSql {
   const src = sql ?? "";
+  const backslashEscapes = opts.backslashEscapes !== false; // default true (retrocompat do gate)
   const out = src.split("");
   const n = src.length;
   let i = 0;
@@ -52,8 +71,8 @@ export function stripSqlNoiseEx(sql: string): StrippedSql {
       let j = i + 1;
       let closed = false;
       while (j < n) {
-        if (src[j] === "\\") {
-          j += 2; // \' (MySQL/BigQuery/Spark) — escape por backslash
+        if (backslashEscapes && src[j] === "\\") {
+          j += 2; // \' (MySQL/BigQuery/Spark) — escape por backslash (só quando o dialeto o usa)
           continue;
         }
         if (src[j] === "'" && src[j + 1] === "'") {

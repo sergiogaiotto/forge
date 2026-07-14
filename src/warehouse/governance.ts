@@ -5,6 +5,7 @@
 // (string não-terminada) é tratado como escrita: análise parcial nunca ganha benefício da dúvida
 // para EXECUTAR (o inverso do gate de proposta, onde análise parcial não pode BLOQUEAR). PURO.
 import { classifySql } from "../sql/classify";
+import { dialectUsesBackslashEscapes } from "../sql/lex";
 
 export type RunVerdict = "auto" | "confirm" | "blocked";
 
@@ -14,8 +15,13 @@ export interface RunDecision {
   kinds: string[]; // tipos de statement encontrados (para o modal e a auditoria)
 }
 
-export function decideSqlRun(sql: string, conn: { readonly?: boolean }): RunDecision {
-  const stmts = classifySql(sql);
+export function decideSqlRun(sql: string, conn: { readonly?: boolean; kind?: string }): RunDecision {
+  // Dialect-aware por SEGURANÇA: só os dialetos que escapam com backslash (BigQuery, dos suportados)
+  // consomem `\'` como escape. Em Oracle/Postgres/DuckDB (backslash literal), `SELECT … WHERE x='v\' ;
+  // UPDATE …; --'` FECHA a string no `\'` → o UPDATE escondido aflora como escrita e é bloqueado, em vez
+  // de rodar como leitura numa conexão readonly (achado do survey pós-#217, irmão do CTAS #208). Dialeto
+  // desconhecido → fail-closed (não honra backslash).
+  const stmts = classifySql(sql, { backslashEscapes: dialectUsesBackslashEscapes(conn.kind) });
   const kinds = [...new Set(stmts.map((s) => s.kind))];
   const isReadonly = conn.readonly !== false; // default: somente leitura
 
