@@ -113,22 +113,60 @@ const SAMPLE_MASKS: RegExp[] = [
 // Usado quando o CSV tem cabeçalho conhecido — casamento por posição de coluna.
 const SENSITIVE_HEADER = /\b(cpf|cnpj|rg|telefone|celular|fone|phone|cartao|card|pan|senha|password|token|email)\b/i;
 
+// Divide UMA linha CSV em campos respeitando aspas RFC4180: vírgula dentro de "…" NÃO separa, e "" é uma aspa
+// literal. O split(",") ingênuo quebrava `"Silva, João"` em 2 células → as colunas DESLOCAVAM e a coluna
+// sensível (ex.: cpf nu, que os regex acima não pegam sem formatação) caía fora do índice mascarado → PII NUA
+// vazava. Preserva o texto CRU de cada campo (com aspas) para rejuntar mantendo os não-mascarados. Puro.
+function splitCsvRow(line: string): string[] {
+  const fields: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '""';
+        i++;
+      } else if (ch === '"') {
+        cur += '"';
+        inQ = false;
+      } else cur += ch;
+    } else if (ch === '"') {
+      cur += '"';
+      inQ = true;
+    } else if (ch === ",") {
+      fields.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  fields.push(cur);
+  return fields;
+}
+
+// Valor "nu" de um campo CSV (tira as aspas externas e desdobra "" → ") — para os testes de sensibilidade/vazio.
+function csvValue(field: string): string {
+  const t = field.trim();
+  return /^".*"$/s.test(t) ? t.slice(1, -1).replace(/""/g, '"') : t;
+}
+
 // Mascara valores com CARA de dado pessoal numa amostra (CSV/texto) ANTES de exibir/anexar. Além dos
 // padrões formatados, mascara a COLUNA inteira quando o cabeçalho do CSV a nomeia como sensível
 // (pega CPF/telefone nus sem falso-positivo em contagens).
 export function maskDataSample(text: string): string {
   let out = text ?? "";
   for (const re of SAMPLE_MASKS) out = out.replace(re, "▇▇▇");
-  // mascaramento por coluna: se a 1ª linha é cabeçalho e alguma coluna é sensível, apaga os valores dela
+  // mascaramento por coluna: se a 1ª linha é cabeçalho e alguma coluna é sensível, apaga os valores dela.
+  // Campos são separados por RFC4180 (splitCsvRow) — não por split(",") ingênuo, que desalinhava as colunas
+  // quando um valor tinha vírgula-entre-aspas e deixava a coluna sensível NUA passar.
   const lines = out.split(/\r?\n/);
   if (lines.length >= 2 && lines[0].includes(",")) {
-    const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+    const headers = splitCsvRow(lines[0]).map(csvValue);
     const sensitiveIdx = headers.map((h, i) => (SENSITIVE_HEADER.test(h) ? i : -1)).filter((i) => i >= 0);
     if (sensitiveIdx.length > 0) {
       for (let r = 1; r < lines.length; r++) {
         if (!lines[r].includes(",")) continue;
-        const cells = lines[r].split(",");
-        for (const i of sensitiveIdx) if (i < cells.length && cells[i].trim()) cells[i] = "▇▇▇";
+        const cells = splitCsvRow(lines[r]);
+        for (const i of sensitiveIdx) if (i < cells.length && csvValue(cells[i])) cells[i] = "▇▇▇";
         lines[r] = cells.join(",");
       }
       out = lines.join("\n");

@@ -289,6 +289,19 @@ test("REGRESSÃO: máscara não corrompe agregados (count nu preservado); mascar
   assert.ok(byCol.includes(",500") && byCol.includes(",600"), "coluna não-sensível intacta");
 });
 
+test("REGRESSÃO (LGPD): máscara por coluna usa parser RFC4180 — vírgula-entre-aspas não desalinha nem vaza PII nua", () => {
+  // 'nome' tem vírgula DENTRO de aspas; o split(",") ingênuo quebrava a linha e deslocava as colunas → o CPF
+  // NU (idx 1, que os regex não pegam sem formatação) caía no idx errado e VAZAVA. Com RFC4180, alinha e mascara.
+  const csv = 'nome,cpf,cidade\n"Silva, João",11122233344,"São Paulo, SP"\n"Souza, Ana",99988877766,Rio';
+  const m = maskDataSample(csv);
+  assert.ok(!/11122233344|99988877766/.test(m), "o CPF nu na coluna sensível NÃO vaza (o bug do split ingênuo)");
+  assert.ok(m.includes('"Silva, João"') && m.includes('"São Paulo, SP"'), "campos quotados com vírgula preservados (não mascarados nem quebrados)");
+  assert.ok(m.includes(",Rio"), "coluna não-sensível sem aspas intacta");
+  // "" (aspa escapada) dentro de um campo quotado não confunde o parser
+  const esc = maskDataSample('obs,email\n"diz ""oi""",ana@x.io');
+  assert.ok(!esc.includes("ana@x.io") && esc.includes('"diz ""oi"""'), "aspa escapada preservada; email mascarado");
+});
+
 test("REGRESSÃO: sanitizeWarehouseOutput garante cap+máscara (contrato do caminho MCP)", () => {
   const r = sanitizeWarehouseOutput("h\n1,ana@x.com\n2,b@y.com\n3,c@z.com", 1, false);
   assert.ok(r.truncated);
