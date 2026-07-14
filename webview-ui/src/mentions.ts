@@ -35,10 +35,41 @@ export function replaceMention(text: string, token: MentionToken, replacement: s
   return { text: head + replacement + tail, caret: head.length + replacement.length };
 }
 
+// Texto inserido no composer ao escolher uma menção: `@caminho` (ou `@caminho/` p/ pasta) + um espaço FINAL
+// que FECHA o token (não reabre o picker) e mantém a frase coerente. Antes o token era APAGADO — a citação
+// sumia do prompt. Agora o anexo (`### Anexo: <mesmo caminho>`) casa 1:1 com esta referência inline, e o
+// caminho relativo torna a citação de subdiretório inequívoca. Puro.
+export function mentionInsertText(entry: WorkspaceEntry): string {
+  return `@${entry.path}${entry.kind === "folder" ? "/" : ""} `;
+}
+
+// Separa o caminho relativo em prefixo de diretório (esmaecido na linha do picker) e basename (forte), para
+// que citações em subdiretório fiquem legíveis e inequívocas. `dir` inclui a "/" final, ou "" na raiz. Puro.
+export function splitMentionLabel(path: string): { dir: string; base: string } {
+  const p = path ?? "";
+  const i = p.lastIndexOf("/");
+  return i === -1 ? { dir: "", base: p } : { dir: p.slice(0, i + 1), base: p.slice(i + 1) };
+}
+
 function isSubsequence(haystack: string, needle: string): boolean {
   let i = 0;
   for (let j = 0; j < haystack.length && i < needle.length; j++) if (haystack[j] === needle[i]) i++;
   return i === needle.length;
+}
+
+// Casamento por SEGMENTO de caminho: cada parte de `q` (dividida por "/") aparece, em ordem, como substring
+// de um segmento do path — `core/cont` casa `src/core/Controller.ts`. Deixa citar subdiretório digitando o
+// caminho, mesmo sem o substring literal contíguo. Puro. (q e path já vêm em minúsculas do filterMentions.)
+function segmentsMatch(path: string, q: string): boolean {
+  const qs = q.split("/").filter(Boolean);
+  const ps = path.split("/");
+  let pi = 0;
+  for (const seg of qs) {
+    while (pi < ps.length && !ps[pi].includes(seg)) pi++;
+    if (pi >= ps.length) return false;
+    pi++;
+  }
+  return true;
 }
 
 // Filtra/ranqueia o catálogo do workspace pelo query. Prioriza: match exato do basename > basename começa >
@@ -56,6 +87,7 @@ export function filterMentions(items: WorkspaceEntry[], query: string, limit = 1
     else if (base.startsWith(q)) score = 80;
     else if (base.includes(q)) score = 60;
     else if (p.includes(q)) score = 40;
+    else if (q.includes("/") && segmentsMatch(p, q)) score = 30; // caminho digitado: `core/cont` → src/core/Controller.ts
     else if (isSubsequence(p, q)) score = 20;
     if (score >= 0) scored.push({ e, score });
   }

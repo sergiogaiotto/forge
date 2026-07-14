@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { WorkspaceEntry } from "../shared/protocol";
-import { atMentionToken, filterMentions, replaceMention } from "../../webview-ui/src/mentions";
+import { atMentionToken, filterMentions, mentionInsertText, replaceMention, splitMentionLabel } from "../../webview-ui/src/mentions";
 
 test("atMentionToken: dispara no @ que inicia token (início ou após espaço), com o caret dentro", () => {
   assert.deepEqual(atMentionToken("@", 1), { query: "", start: 0 });
@@ -75,4 +75,25 @@ test("filterMentions: fuzzy por subsequência quando não há match direto", () 
   assert.ok(r.includes("src/adapters/db.ts"));
   // sem nenhum match → vazio
   assert.deepEqual(filterMentions(files, "zzzzz", 12), []);
+});
+
+test("filterMentions: ranking por SEGMENTO — `adapters/db` casa src/adapters/db.ts (caminho digitado)", () => {
+  const r = filterMentions(files, "adapters/db", 12).map((e) => e.path);
+  assert.ok(r.includes("src/adapters/db.ts"), "segmentos casam em ordem, sem substring literal contíguo");
+  // um caminho parcial não-contíguo que NÃO casa os segmentos em ordem não entra por este tier
+  assert.ok(!filterMentions(files, "domain/db", 12).map((e) => e.path).includes("src/adapters/db.ts"));
+});
+
+test("mentionInsertText: arquivo vira `@caminho ` e pasta `@caminho/ ` (espaço final fecha o token)", () => {
+  assert.equal(mentionInsertText({ path: "src/core/Controller.ts", kind: "file" }), "@src/core/Controller.ts ");
+  assert.equal(mentionInsertText({ path: "webview-ui/src", kind: "folder" }), "@webview-ui/src/ ");
+  // a inserção, reparseada no fim, NÃO reabre o picker (o espaço final fecha o token)
+  const inserted = mentionInsertText({ path: "a/b.ts", kind: "file" });
+  assert.equal(atMentionToken(inserted, inserted.length), null);
+});
+
+test("splitMentionLabel: separa diretório (esmaecido) do basename (forte)", () => {
+  assert.deepEqual(splitMentionLabel("src/core/Controller.ts"), { dir: "src/core/", base: "Controller.ts" });
+  assert.deepEqual(splitMentionLabel("README.md"), { dir: "", base: "README.md" });
+  assert.deepEqual(splitMentionLabel("webview-ui/src"), { dir: "webview-ui/", base: "src" });
 });
