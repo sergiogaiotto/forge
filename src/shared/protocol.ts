@@ -300,9 +300,14 @@ export type ExtToWebview =
   // balão do assistente — diferente do `notice`, que é um toast efêmero (some em segundos).
   | { type: "stream/notice"; taskId: string; level: "warn" | "info"; message: string }
   | { type: "context/attachments"; items: { id: string; label: string; bytes: number; kind: "workspace" | "upload" | "selection" | "search" }[] }
-  // Menção "@": o catálogo de arquivos/pastas do workspace para o picker inline (enviado uma vez, cacheado
-  // e filtrado no webview). `path` é relativo ao workspace, com barras pra frente.
-  | { type: "context/workspaceFiles"; items: WorkspaceEntry[] }
+  // Menção "@": o catálogo de arquivos/pastas do workspace para o picker inline (re-enviado ao abrir o picker
+  // e em mudanças de arquivo via watcher; cacheado e filtrado no webview). `path` é relativo ao workspace, com
+  // barras pra frente. `truncated`: o catálogo bateu o teto (repo grande) → o webview complementa com
+  // search-on-type (context/searchWorkspaceFiles) para achar arquivos fora do teto.
+  | { type: "context/workspaceFiles"; items: WorkspaceEntry[]; truncated: boolean }
+  // Menção "@": resultado do search-on-type do host (repo grande/truncado). `query` ecoa o pedido para o
+  // webview casar com o token atual (respostas fora de ordem/obsoletas são descartadas).
+  | { type: "context/workspaceFilesResult"; query: string; items: WorkspaceEntry[] }
   | { type: "validation/result"; proposalId: string; results: ValidatorResult[]; gateOk: boolean; running: boolean }
   | { type: "proposal/applied"; proposalId: string }
   | { type: "proposal/discarded"; proposalId: string }
@@ -481,8 +486,12 @@ export type WebviewToExt =
   | { type: "cell/run"; proposalId: string }
   | { type: "review/changes" }
   | { type: "context/pickWorkspaceFile" }
-  // Menção "@": pede o catálogo do workspace (host responde com context/workspaceFiles). Idempotente/cacheado.
+  // Menção "@": pede o catálogo do workspace (host responde com context/workspaceFiles). Re-pedido ao abrir o
+  // picker (frescor de movidos/copiados); o host também re-posta sozinho via FileSystemWatcher.
   | { type: "context/listWorkspaceFiles" }
+  // Menção "@": busca server-side por `query` quando o catálogo veio truncado (repo grande). Host responde
+  // com context/workspaceFilesResult. Só disparado pelo webview quando truncated=true e há query.
+  | { type: "context/searchWorkspaceFiles"; query: string }
   // Menção "@": anexa um arquivo (conteúdo) ou uma PASTA (listagem dos arquivos) do workspace por caminho.
   | { type: "context/addWorkspaceFile"; path: string; kind: "file" | "folder" }
   | { type: "context/pickLocalFile" }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { WorkspaceEntry } from "../shared/protocol";
-import { atMentionToken, filterMentions, mentionInsertText, replaceMention, splitMentionLabel } from "../../webview-ui/src/mentions";
+import { atMentionToken, dedupeMentions, filterMentions, mentionInsertText, replaceMention, splitMentionLabel } from "../../webview-ui/src/mentions";
 
 test("atMentionToken: dispara no @ que inicia token (início ou após espaço), com o caret dentro", () => {
   assert.deepEqual(atMentionToken("@", 1), { query: "", start: 0 });
@@ -96,4 +96,18 @@ test("splitMentionLabel: separa diretório (esmaecido) do basename (forte)", () 
   assert.deepEqual(splitMentionLabel("src/core/Controller.ts"), { dir: "src/core/", base: "Controller.ts" });
   assert.deepEqual(splitMentionLabel("README.md"), { dir: "", base: "README.md" });
   assert.deepEqual(splitMentionLabel("webview-ui/src"), { dir: "webview-ui/", base: "src" });
+});
+
+test("dedupeMentions: funde cache + search-on-type sem duplicar caminho (mantém a 1ª, preserva ordem)", () => {
+  const cache: WorkspaceEntry[] = [
+    { path: "src/a.ts", kind: "file" },
+    { path: "src", kind: "folder" },
+  ];
+  const search: WorkspaceEntry[] = [
+    { path: "src/a.ts", kind: "file" }, // duplicado do cache
+    { path: "deep/nested/b.ts", kind: "file" }, // fora do teto → só no search
+  ];
+  const merged = dedupeMentions([...cache, ...search]).map((e) => e.path);
+  assert.deepEqual(merged, ["src/a.ts", "src", "deep/nested/b.ts"], "sem duplicado, ordem preservada, item novo do search entra");
+  assert.deepEqual(dedupeMentions([]), []);
 });

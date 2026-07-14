@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
 import { getLocale, t, type MessageKey } from "../i18n";
-import { atMentionToken, filterMentions, mentionInsertText, replaceMention, splitMentionLabel } from "../mentions";
+import { atMentionToken, dedupeMentions, filterMentions, mentionInsertText, replaceMention, splitMentionLabel } from "../mentions";
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
@@ -420,7 +420,13 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   const [atDismissed, setAtDismissed] = useState(false);
   const lastWsFetch = useRef(0);
   const mentionTok = atMentionToken(input, caret);
-  const mentionItems = mentionTok ? filterMentions(state.workspaceFiles, mentionTok.query, 12) : [];
+  // Repo grande (catálogo truncado): funde o cache com o resultado do search-on-type do host PARA O QUERY
+  // ATUAL (respostas obsoletas de outro query são ignoradas). Repo normal: 100% cache, sem fusão.
+  const mentionCatalog =
+    state.wsFilesTruncated && state.wsSearch && state.wsSearch.query === mentionTok?.query
+      ? dedupeMentions([...state.workspaceFiles, ...state.wsSearch.items])
+      : state.workspaceFiles;
+  const mentionItems = mentionTok ? filterMentions(mentionCatalog, mentionTok.query, 12) : [];
   const atOpen = !!mentionTok && !state.busy && !atDismissed && mentionItems.length > 0;
   // Refetch do catálogo ao ABRIR o picker (debounce ~2s): arquivos criados/movidos/copiados aparecem sem
   // recarregar a webview. Antes era buscado UMA vez e cacheado p/ sempre (once-guard) → staleness. O cache
@@ -432,6 +438,14 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
     lastWsFetch.current = now;
     post({ type: "context/listWorkspaceFiles" });
   }, [!!mentionTok]);
+  // Search-on-type: SÓ em repo truncado (grande) e com query — busca no host o que está fora do teto do
+  // catálogo (debounce 200ms). Repo normal (não truncado) nunca dispara → mantém o zero-round-trip por tecla.
+  useEffect(() => {
+    if (!mentionTok || !state.wsFilesTruncated || !mentionTok.query) return;
+    const q = mentionTok.query;
+    const h = setTimeout(() => post({ type: "context/searchWorkspaceFiles", query: q }), 200);
+    return () => clearTimeout(h);
+  }, [mentionTok?.query, state.wsFilesTruncated]);
   useEffect(() => {
     setAtSel(0);
     setAtDismissed(false); // digitou/moveu o caret → o popover volta
