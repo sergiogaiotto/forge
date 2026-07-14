@@ -194,6 +194,11 @@ export class Controller {
   // (puro, testável). O onChange re-posta os chips na webview quando a lista muda.
   private readonly attachments = new AttachmentStore(() => this.postAttachments());
   private currentTask: Task | undefined;
+  // Guard de concorrência de GERAÇÃO: startTask/reviewChanges (e derivados: testes de aceitação, blueprint→
+  // chat, projeto) rodam por MINUTOS (stream + até 2 auto-reparos). currentTask não serve de sinal (nunca é
+  // limpo — a próxima geração o sobrescreve, órfanando a anterior + FinOps duplo + streams interleaved). Este
+  // flag (idiom do runService.isBusy do runTests) rejeita uma 2ª geração enquanto uma está em voo.
+  private generating = false;
   // FinOps (#12) + usage da sessão: tokens acumulados, custo estimado e o aviso-único do teto — estado +
   // lógica (acumular/gate/reset) extraídos p/ SessionBudget (puro, testável); o post da notice fica aqui.
   private readonly budget = new SessionBudget("R$");
@@ -2031,7 +2036,28 @@ export class Controller {
     return n >= 1 ? n.toFixed(2) : n.toFixed(4); // custo por sessão costuma ser fração; 4 casas quando <1
   }
 
+  // Entrada pública de geração: guard de concorrência (rejeita uma 2ª geração enquanto uma está em voo),
+  // depois delega ao corpo. O try/finally garante que o flag SEMPRE zera (inclusive se o corpo lançar) —
+  // senão uma exceção travaria TODA geração futura (pior que o bug original).
   async startTask(
+    text: string,
+    mode: "normal" | "tdd" | "project" = "normal",
+    project?: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework; files?: BlueprintFile[] }
+  ): Promise<void> {
+    if (!text.trim()) return;
+    if (this.generating) {
+      this.post({ type: "notice", level: "info", message: hostT("notice.generation.busy") });
+      return;
+    }
+    this.generating = true;
+    try {
+      await this.startTaskInner(text, mode, project);
+    } finally {
+      this.generating = false;
+    }
+  }
+
+  private async startTaskInner(
     text: string,
     mode: "normal" | "tdd" | "project" = "normal",
     project?: { language: ProjectLanguage; architecture: ProjectArchitecture; ui?: ProjectUI; framework?: ProjectFramework; files?: BlueprintFile[] }
@@ -3997,6 +4023,19 @@ export class Controller {
   }
 
   async reviewChanges(): Promise<void> {
+    if (this.generating) {
+      this.post({ type: "notice", level: "info", message: hostT("notice.generation.busy") });
+      return;
+    }
+    this.generating = true;
+    try {
+      await this.reviewChangesInner();
+    } finally {
+      this.generating = false;
+    }
+  }
+
+  private async reviewChangesInner(): Promise<void> {
     if (!(await this.ensureSession())) {
       this.post({ type: "notice", level: "error", message: hostT("notice.review.license") });
       return;

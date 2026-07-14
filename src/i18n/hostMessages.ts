@@ -148,6 +148,7 @@ export type HostMessageKey =
   // Testes/ambiente
   | "notice.tests.disabled"
   | "notice.run.busy"
+  | "notice.generation.busy"
   | "notice.tests.runDisabled"
   | "notice.tests.cancelled"
   | "notice.tests.busyLater"
@@ -574,6 +575,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.search.failed": "Busca falhou: {error}",
     "notice.tests.disabled": "Testes desabilitados (forge.test.enabled = false).",
     "notice.run.busy": "Há uma execução em andamento (ex.: preparar ambiente). Aguarde ou cancele.",
+    "notice.generation.busy": "Uma geração já está em andamento. Aguarde ela terminar ou cancele antes de iniciar outra.",
     "notice.tests.runDisabled": "pytest ausente e a execução de comandos está desabilitada (forge.run.enabled) — instale manualmente no venv.",
     "notice.tests.cancelled": "Testes cancelados: pytest ausente no ambiente.",
     "notice.tests.busyLater": "Há uma execução em andamento — rode os testes de novo quando ela terminar.",
@@ -982,6 +984,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.search.failed": "Search failed: {error}",
     "notice.tests.disabled": "Tests disabled (forge.test.enabled = false).",
     "notice.run.busy": "There is a run in progress (e.g., prepare environment). Wait or cancel.",
+    "notice.generation.busy": "A generation is already in progress. Wait for it to finish or cancel before starting another.",
     "notice.tests.runDisabled": "pytest missing and command execution is disabled (forge.run.enabled) — install it manually in the venv.",
     "notice.tests.cancelled": "Tests cancelled: pytest missing from the environment.",
     "notice.tests.busyLater": "There is a run in progress — run the tests again when it finishes.",
@@ -1390,6 +1393,7 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.search.failed": "La búsqueda falló: {error}",
     "notice.tests.disabled": "Pruebas deshabilitadas (forge.test.enabled = false).",
     "notice.run.busy": "Hay una ejecución en curso (ej.: preparar entorno). Espera o cancela.",
+    "notice.generation.busy": "Ya hay una generación en curso. Espera a que termine o cancélala antes de iniciar otra.",
     "notice.tests.runDisabled": "pytest ausente y la ejecución de comandos está deshabilitada (forge.run.enabled) — instálalo manualmente en el venv.",
     "notice.tests.cancelled": "Pruebas canceladas: pytest ausente en el entorno.",
     "notice.tests.busyLater": "Hay una ejecución en curso — ejecuta las pruebas de nuevo cuando termine.",
