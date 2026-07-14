@@ -19,14 +19,25 @@ export interface AssembleOutput {
   activatedSkillNames: string[];
 }
 
-// Trunca um texto a um teto aproximado de tokens (≈ chars/4), cortando na última quebra de linha para
-// não partir uma função/bloco no meio. Usado só para a seção elástica de RAG.
+// Trunca um texto garantindo estimateTokens(resultado) <= maxTokens, cortando na última quebra de linha
+// para não partir uma função/bloco no meio. Usa a MESMA medição (estimateTokens) do orçamento em vez do
+// "chars*4" cego: código denso tem menos chars/token, então chars*4 devolvia um texto com MUITO mais que
+// maxTokens tokens e estourava o inputBudget → HTTP 400 do gateway (o footgun que o #203 fechou; achado do
+// survey pós-#217). Busca binária pelo maior prefixo dentro do teto (estimateTokens é não-decrescente no
+// comprimento — mede a densidade real em vez de assumi-la). Prosa (≈ chars/4) sai igual ao anterior.
 function truncateToTokens(text: string, maxTokens: number): string {
-  const maxChars = Math.max(0, maxTokens) * 4;
-  if (text.length <= maxChars) return text;
-  const cut = text.slice(0, maxChars);
+  if (maxTokens <= 0) return "";
+  if (estimateTokens(text) <= maxTokens) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2); // ceil de (lo+hi)/2 → progride (mid > lo)
+    if (estimateTokens(text.slice(0, mid)) <= maxTokens) lo = mid;
+    else hi = mid - 1;
+  }
+  const cut = text.slice(0, lo);
   const nl = cut.lastIndexOf("\n");
-  return nl > maxChars * 0.5 ? cut.slice(0, nl) : cut; // só recua até a linha se não perder metade
+  return nl > lo * 0.5 ? cut.slice(0, nl) : cut; // só recua até a linha se não perder metade
 }
 
 // Inclui o histórico das mensagens MAIS RECENTES até caber no orçamento (em tokens). Resolve a lacuna

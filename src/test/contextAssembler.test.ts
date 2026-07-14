@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextAssembler } from "../skills/ContextAssembler";
+import { estimateTokens } from "../util/tokenEstimate";
 import { SkillMeta } from "../skills/types";
 
 function skill(name: string, description: string): SkillMeta {
@@ -68,6 +69,39 @@ test("orçamento de entrada: histórico antigo é descartado, mantendo o mais re
   assert.ok(out.messages.length < history.length + 1, "histórico deve ser podado");
   assert.equal(out.messages[out.messages.length - 1].content, "Q");
   assert.match(out.messages[out.messages.length - 2].content, /MSG_49/); // a mais recente sobrevive
+});
+
+test("orçamento de entrada: RAG token-DENSO (código) NÃO estoura o teto — corta por medição, não chars/4 (footgun HTTP-400)", () => {
+  const a = new ContextAssembler();
+  // Código denso em símbolos: estimateTokens usa pieces*0.95, então a densidade é ~1 char/token (4× o que
+  // "chars/4" assumia). O bug: truncateToTokens cortava por chars*4 → devolvia ~4× o teto em tokens →
+  // input+output+margem passava da janela servida → HTTP 400 (o footgun que o #203 fechou).
+  const denseCode = "a=b(c,d);".repeat(2000); // ~18k chars ≈ ~18k tokens estimados
+  const budget = 400;
+  const out = a.assemble({
+    basePrompt: "BASE",
+    discoverySkills: [],
+    activatedSkills: [],
+    retrievedContext: denseCode,
+    history: [],
+    query: "Q",
+    inputBudgetTokens: budget,
+  });
+  const spTokens = estimateTokens(out.systemPrompt);
+  assert.ok(spTokens <= budget, `systemPrompt (${spTokens} tok) deve caber no orçamento (${budget}) — o bug antigo daria ~4×`);
+  assert.match(out.systemPrompt, /BASE/); // o pinned sobrevive
+  assert.match(out.systemPrompt, /truncado por orçamento/); // o RAG foi truncado, não omitido
+});
+
+test("truncateToTokens (via assemble): prosa segue ~igual (sem regressão) — densidade ~4 chars/token", () => {
+  const a = new ContextAssembler();
+  const prose = "palavra ".repeat(4000); // prosa: densidade ~chars/4
+  const budget = 300;
+  const out = a.assemble({ basePrompt: "BASE", discoverySkills: [], activatedSkills: [], retrievedContext: prose, history: [], query: "Q", inputBudgetTokens: budget });
+  const spTokens = estimateTokens(out.systemPrompt);
+  assert.ok(spTokens <= budget, `prosa também respeita o teto (${spTokens} <= ${budget})`);
+  // e a prosa não é cortada agressivamente demais: aproveita perto do orçamento disponível
+  assert.ok(spTokens > budget * 0.5, `prosa aproveita o orçamento (${spTokens} > ${budget * 0.5})`);
 });
 
 test("omits empty sections", () => {
