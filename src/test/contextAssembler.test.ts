@@ -104,6 +104,47 @@ test("truncateToTokens (via assemble): prosa segue ~igual (sem regressão) — d
   assert.ok(spTokens > budget * 0.5, `prosa aproveita o orçamento (${spTokens} > ${budget * 0.5})`);
 });
 
+test("activatedSkillNames: só as skills EMITIDAS no prompt (a dropada por orçamento NÃO é reportada)", () => {
+  const a = new ContextAssembler();
+  const bigBody = "conteudo ".repeat(500); // ~1125 tokens cada — 3 delas não cabem num orçamento apertado
+  const out = a.assemble({
+    basePrompt: "BASE",
+    discoverySkills: [],
+    activatedSkills: [
+      { meta: skill("skill-A", "descA"), body: bigBody },
+      { meta: skill("skill-B", "descB"), body: bigBody },
+      { meta: skill("skill-C", "descC"), body: bigBody },
+    ],
+    retrievedContext: "",
+    history: [],
+    query: "Q",
+    inputBudgetTokens: 1550, // cabe base + ~1.5 skills → skill-C é dropada (antes ainda era anunciada à UI/obs/trace)
+  });
+  // INVARIANTE central: toda skill reportada como ATIVA tem de estar no systemPrompt.
+  for (const name of out.activatedSkillNames) {
+    assert.match(out.systemPrompt, new RegExp(name), `skill reportada '${name}' deve estar no prompt`);
+  }
+  assert.ok(out.activatedSkillNames.length >= 1 && out.activatedSkillNames.length < 3, "algumas skills couberam, nem as 3");
+  assert.ok(out.activatedSkillNames.includes("skill-A"), "a 1ª skill (emitida) é reportada");
+  assert.ok(!out.activatedSkillNames.includes("skill-C"), "a skill DROPADA por orçamento NÃO é reportada");
+});
+
+test("activatedSkillNames: todas reportadas quando cabem (sem regressão)", () => {
+  const a = new ContextAssembler();
+  const out = a.assemble({
+    basePrompt: "BASE",
+    discoverySkills: [],
+    activatedSkills: [
+      { meta: skill("s1", "d1"), body: "corpo 1" },
+      { meta: skill("s2", "d2"), body: "corpo 2" },
+    ],
+    retrievedContext: "",
+    history: [],
+    query: "Q", // sem inputBudgetTokens → orçamento infinito, tudo cabe
+  });
+  assert.deepEqual(out.activatedSkillNames, ["s1", "s2"]);
+});
+
 test("omits empty sections", () => {
   const a = new ContextAssembler();
   const out = a.assemble({

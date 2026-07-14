@@ -71,7 +71,7 @@ export class ContextAssembler {
     const reserveQuery = estimateTokens(input.query) + 8;
     const reserveHistory = input.history.length > 0 ? 256 : 0; // piso para manter o turno mais recente
 
-    type Section = { text: string; pinned: boolean };
+    type Section = { text: string; pinned: boolean; skillName?: string };
     const candidates: Section[] = [{ text: input.basePrompt, pinned: true }];
 
     if (input.projectProfile && input.projectProfile.trim().length > 0) {
@@ -87,7 +87,7 @@ export class ContextAssembler {
       candidates.push({ text: `# Skills disponíveis (discovery)\n${lines}`, pinned: false });
     }
     for (const { meta, body } of input.activatedSkills) {
-      candidates.push({ text: `# Skill ativada: ${meta.name}\n${body.trim()}`, pinned: false });
+      candidates.push({ text: `# Skill ativada: ${meta.name}\n${body.trim()}`, pinned: false, skillName: meta.name });
     }
     if (input.retrievedContext.trim().length > 0) {
       candidates.push({ text: `# Contexto do código recuperado\n${input.retrievedContext.trim()}`, pinned: false });
@@ -97,18 +97,24 @@ export class ContextAssembler {
     // espaço útil) e o restante é omitido. Reserva espaço para a query e para o histórico mínimo.
     const cap = budget - reserveQuery - reserveHistory;
     const out: string[] = [];
+    // Só as skills cujo corpo REALMENTE entrou no prompt (cheias OU truncadas) são "ativas": antes retornava
+    // TODAS as input.activatedSkills, então uma skill DROPADA pelo orçamento ainda era anunciada à UI
+    // (stream/skill), à obs (skill.activated) e aos headers do trace — o modelo nunca a viu (achado do survey).
+    const emittedSkills: string[] = [];
     let used = 0;
     for (const c of candidates) {
       const cost = estimateTokens(c.text) + 2;
       if (c.pinned || used + cost <= cap) {
         out.push(c.text);
         used += cost;
+        if (c.skillName) emittedSkills.push(c.skillName);
         continue;
       }
       const room = cap - used;
       if (room > 256) {
         out.push(`${truncateToTokens(c.text, room - 8)}\n[contexto truncado por orçamento]`);
         used = cap;
+        if (c.skillName) emittedSkills.push(c.skillName); // truncada = parcialmente presente (header + início) → ainda ativa
       }
       break;
     }
@@ -122,7 +128,7 @@ export class ContextAssembler {
     return {
       systemPrompt,
       messages,
-      activatedSkillNames: input.activatedSkills.map((a) => a.meta.name),
+      activatedSkillNames: emittedSkills,
     };
   }
 }
