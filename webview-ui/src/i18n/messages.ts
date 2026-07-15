@@ -162,6 +162,11 @@ export type MessageKey =
   | "sb.ragSemanticTitle"
   | "sb.ragLexicalTitle"
   | "sb.ragIndexing"
+  | "sb.llmOk"
+  | "sb.llmOkTitle"
+  | "sb.llmDown"
+  | "sb.llmDownTitle"
+  | "empty.providerDown"
   | "sb.effortTitle"
   | "sb.effort"
   | "sb.maxOutTitle"
@@ -499,6 +504,11 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "sb.ragIndexingTitle": "Indexando o codebase…",
     "sb.ragSemanticTitle": "Busca semântica · {model} · {files} arquivos",
     "sb.ragLexicalTitle": "BM25 lexical (sem embeddings) · {files} arquivos",
+    "sb.llmOk": "LLM ✓",
+    "sb.llmOkTitle": "Provedor alcançável · {latency} ms · clique para re-testar",
+    "sb.llmDown": "LLM inacessível",
+    "sb.llmDownTitle": "O endpoint do provedor não respondeu: {error} · clique para re-testar (re-tenta sozinho a cada 60s)",
+    "empty.providerDown": "Provedor LLM inacessível — verifique a VPN/rede. A geração vai falhar até a rota voltar.",
     "sb.ragIndexing": "RAG indexando…",
     "sb.effortTitle": "Esforço de raciocínio do gpt-oss — clique para alternar (baixo → médio → alto). Esforço maior raciocina mais e eleva o timeout automaticamente.",
     "sb.effort": "esforço: {level}",
@@ -825,6 +835,11 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "sb.ragIndexingTitle": "Indexing the codebase…",
     "sb.ragSemanticTitle": "Semantic search · {model} · {files} files",
     "sb.ragLexicalTitle": "Lexical BM25 (no embeddings) · {files} files",
+    "sb.llmOk": "LLM ✓",
+    "sb.llmOkTitle": "Provider reachable · {latency} ms · click to re-check",
+    "sb.llmDown": "LLM unreachable",
+    "sb.llmDownTitle": "Provider endpoint did not respond: {error} · click to re-check (auto-retries every 60s)",
+    "empty.providerDown": "LLM provider unreachable — check your VPN/network. Generation will fail until the route is back.",
     "sb.ragIndexing": "RAG indexing…",
     "sb.effortTitle": "gpt-oss reasoning effort — click to cycle (low → medium → high). Higher effort reasons more and raises the timeout automatically.",
     "sb.effort": "effort: {level}",
@@ -1151,6 +1166,11 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "sb.ragIndexingTitle": "Indexando el codebase…",
     "sb.ragSemanticTitle": "Búsqueda semántica · {model} · {files} archivos",
     "sb.ragLexicalTitle": "BM25 léxico (sin embeddings) · {files} archivos",
+    "sb.llmOk": "LLM ✓",
+    "sb.llmOkTitle": "Proveedor accesible · {latency} ms · clic para re-verificar",
+    "sb.llmDown": "LLM inaccesible",
+    "sb.llmDownTitle": "El endpoint del proveedor no respondió: {error} · clic para re-verificar (reintenta solo cada 60s)",
+    "empty.providerDown": "Proveedor LLM inaccesible — verifica tu VPN/red. La generación fallará hasta que vuelva la ruta.",
     "sb.ragIndexing": "RAG indexando…",
     "sb.effortTitle": "Esfuerzo de razonamiento del gpt-oss — clic para alternar (bajo → medio → alto). Más esfuerzo razona más y eleva el timeout automáticamente.",
     "sb.effort": "esfuerzo: {level}",
