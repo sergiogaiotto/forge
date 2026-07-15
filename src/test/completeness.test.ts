@@ -203,3 +203,59 @@ test("pickMaxContinuations: Modo Projeto (com plano) usa o teto maior; sem plano
   assert.equal(pickMaxContinuations(["a.py"]), PROJECT_MAX_CONTINUATIONS, "com plano → teto de projeto");
   assert.ok(PROJECT_MAX_CONTINUATIONS > MAX_CONTINUATIONS, "o teto de projeto é MAIOR (financia o salvamento)");
 });
+
+// ---- emenda de cercas (F-STITCH: achado ao vivo no rig MDM) -----------------------------------
+
+test("stitchContinuation: parte anterior termina em ```` SEM \n + continuação começando com cerca de abertura → insere \n (não funde as cercas)", async () => {
+  const { parseFileBlocks } = await import("../util/fileBlocks");
+  const prev = `${F}forge-file path=a.html\n<p>a</p>\n${F}`; // fecha SEM newline final (modelo pode parar aqui)
+  const cont = `${F}forge-file path=b.py\nx = 1\n${F}\n`; // clean-room: começa direto com cerca de abertura
+  const out = stitchContinuation(prev, cont);
+  assert.ok(!out.includes("````````"), "as cercas não podem se fundir numa linha de 8 backticks");
+  const blocks = parseFileBlocks(out);
+  assert.deepEqual(blocks.map((b) => b.path).sort(), ["a.html", "b.py"], "os DOIS blocos sobrevivem ao parse");
+  assert.ok(!blocks.some((b) => b.content.includes("forge-file")), "nenhum bloco engole o outro");
+});
+
+test("stitchContinuation: retomada MID-LINE de arquivo cortado segue COLADA (sem \n espúrio)", () => {
+  const prev = `${F}forge-file path=a.py\nvalor = calc`; // cortado no meio do identificador
+  const cont = "ular_total()\n";
+  assert.equal(stitchContinuation(prev, cont), `${F}forge-file path=a.py\nvalor = calcular_total()\n`);
+});
+
+test("stitchContinuation: overlap continua vencendo (dedupe intacto com o guard novo)", () => {
+  const prev = "abcdefghijklmnopqrstuvwxyz";
+  const cont = "nopqrstuvwxyz0123456789";
+  assert.equal(stitchContinuation(prev, cont), "abcdefghijklmnopqrstuvwxyz0123456789");
+});
+
+test("resilientGenerate: clean-room que emenda em ```` sem \n entrega TODOS os arquivos do plano (regressão do engolimento)", async () => {
+  const { resilientGenerate } = await import("../util/completeness");
+  const { parseFileBlocks } = await import("../util/fileBlocks");
+  const expected = ["a.py", "b.html", "c.py", "d.py"];
+  const parts = [
+    // parte 1: a.py e b.html completos, mas o texto termina EXATAMENTE no ```` (sem \n) e o
+    // provider para LIMPO deixando c.py e d.py faltando → dispara o clean-room.
+    { text: `${F}forge-file path=a.py\nx = 1\n${F}\n\n${F}forge-file path=b.html\n<p>b</p>\n${F}`, truncated: false },
+    // parte 2 (clean-room): os faltantes, começando DIRETO com a cerca de abertura.
+    { text: `${F}forge-file path=c.py\ny = 2\n${F}\n\n${F}forge-file path=d.py\nz = 3\n${F}\n`, truncated: false },
+  ];
+  let call = 0;
+  const gen = await resilientGenerate(
+    [{ role: "user", content: "gere o plano" }],
+    async () => parts[Math.min(call++, parts.length - 1)],
+    {
+      maxContinuations: 6,
+      anchorChars: 8000,
+      buildContinuation: (p) => `continue ${p}`,
+      buildTailContinuation: () => "continue a cauda",
+      buildMissingFilesContinuation: (missing) => `faltam: ${missing.join(", ")}`,
+      expectedPaths: expected,
+    }
+  );
+  assert.equal(gen.truncated, false, "não pode 'desistir' — os faltantes chegaram na 1ª continuação");
+  const paths = parseFileBlocks(gen.full).map((b) => b.path).sort();
+  assert.deepEqual(paths, ["a.py", "b.html", "c.py", "d.py"], "TODOS os blocos parseiam individualmente");
+  const bHtml = parseFileBlocks(gen.full).find((b) => b.path === "b.html");
+  assert.ok(bHtml && !bHtml.content.includes("forge-file"), "b.html não engole c.py/d.py dentro do conteúdo");
+});

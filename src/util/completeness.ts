@@ -196,8 +196,22 @@ export function stitchContinuation(prev: string, cont: string): string {
       return prev + cont.slice(k);
     }
   }
+  // Emenda de CERCAS (achado ao vivo no rig MDM): quando a continuação COMEÇA com uma cerca de
+  // ABERTURA de bloco (````forge-file/forge-cell — caso típico do clean-room e da continuação de
+  // cauda) e o acumulado NÃO termina em quebra de linha (o modelo pode terminar a parte anterior
+  // exatamente no ```` de fechamento, sem \n), a concatenação direta funde fechamento+abertura numa
+  // única linha de 8+ backticks. O parser então exige cerca >= 8 para fechar e ENGOLE os blocos
+  // seguintes DENTRO do arquivo anterior — aplicado corrompido, sem flag de parcial. O "\n" aqui é
+  // seguro: cerca de abertura só tem efeito no início de linha, e a retomada mid-line de arquivo
+  // cortado nunca começa com cerca de abertura legítima colada à linha anterior.
+  if (!prev.endsWith("\n") && OPENING_FENCE_AT_START.test(cont)) {
+    return prev + "\n" + cont;
+  }
   return prev + cont;
 }
+
+// Cerca de abertura de bloco forge no INÍCIO da continuação (3+ backticks + linguagem do protocolo).
+const OPENING_FENCE_AT_START = new RegExp(`^\`{3,}(?:${FORGE_FILE_BLOCK_LANG}|${FORGE_CELL_BLOCK_LANG})\\b`);
 
 // Índice de início da 1ª cerca de bloco forge-file OU forge-cell no texto; -1 se não houver. Delimita o
 // PREÂMBULO (prosa antes do 1º bloco, onde o vazamento de análise do gpt-oss aparece) do PAYLOAD (o
