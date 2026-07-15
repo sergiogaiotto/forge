@@ -9,6 +9,7 @@ import { DEFAULT_TIMEOUT_SECONDS, localizedProviderPresets } from "../api/preset
 import { buildAuthHeaders, ProviderRuntimeConfig } from "../api/types";
 import { ChatMessage } from "../api/types";
 import { probeServedContextWindow } from "../util/servedWindow";
+import { probeProviderHealth, ProviderHealth, HEALTH_RETRY_MS, HEALTH_GREEN_RECHECK_MS } from "../util/providerHealth";
 import { ManagedConfig } from "../config/ManagedConfig";
 import { estimateCost } from "../api/pricing";
 import { LicenseClient } from "../license/LicenseClient";
@@ -236,6 +237,12 @@ export class Controller {
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   private poster: ((msg: ExtToWebview) => void) | undefined;
+  // Saúde do endpoint do provider (badge do rodapé). null = sem baseUrl sondável ou nunca sondado.
+  private providerHealth: ProviderHealth | null = null;
+  private healthTimer: ReturnType<typeof setTimeout> | undefined;
+  // Invalida sondas EM VOO quando o mundo muda (salvar provider / política de egress): sem isto o
+  // veredito do endpoint ANTIGO (até 4s atrasado) sobrescrevia o estado novo (achado da revisão).
+  private healthEpoch = 0;
   // Pedido pendente de abrir um modal do webview (Índice/Perfil) via comando de paleta — vai no estado
   // (ForgeState.uiPanel) com seq monotônico; limpo quando o webview confirma (`ui/panelConsumed`).
   private uiPanel: { panel: "inspect" | "profile"; seq: number } | undefined;
@@ -344,6 +351,11 @@ export class Controller {
         this.egress.update(this.config.egressPolicy());
         this.registry.load(this.config.mcpCatalog());
         this.applyOutputLanguage(); // forge.outputLanguage pode mudar em runtime
+        // Config mudou (inclui a política de egress): o veredito de saúde do provider pode ter
+        // virado nos dois sentidos (host des/bloqueado). Invalida sondas em voo e re-sonda já —
+        // é também o caminho de recuperação do estado egress-bloqueado (que não agenda retry).
+        this.resetProviderHealth();
+        void this.refreshProviderHealth();
         void this.postState();
       })
     );
@@ -369,6 +381,9 @@ export class Controller {
     this.context.subscriptions.push({ dispose: () => { clearInterval(obsTimer); void this.obs.flush(); } });
     // Indexação do codebase em background — não bloqueia a ativação.
     void this.rag.build();
+    // Sonda inicial de saúde do provider (não bloqueia a ativação); o timer de re-sonda morre com a extensão.
+    void this.refreshProviderHealth();
+    this.context.subscriptions.push({ dispose: () => this.resetProviderHealth() });
     log.info(`FORGE inicializado. Licença ${this.sessionToken ? "ativa" : "ausente"}; ${this.skills.length} skills.`);
   }
 
@@ -1430,6 +1445,7 @@ export class Controller {
       stage,
       license,
       provider,
+      providerHealth: this.providerHealth,
       network: { internalOnly: !policy.allowExternal, allowedHosts: policy.allowedHosts },
       observability: { traceActive: this.config.gatewayUrl() !== "", managedByAdmin: true, login: osLogin() },
       identity,
@@ -1528,6 +1544,15 @@ export class Controller {
   async handleMessage(msg: WebviewToExt): Promise<void> {
     switch (msg.type) {
       case "ready":
+        await this.postState();
+        // Painel (re)aberto: re-sonda a saúde se a última leitura estiver velha — sem isto o badge
+        // ficava verde-fóssil depois de a VPN cair com o painel fechado. 15s de folga anti-spam.
+        void this.refreshProviderHealth(15_000);
+        break;
+      case "provider/checkHealth":
+        // Recheck manual (clique no badge): re-sonda e SEMPRE re-emite (atualiza latência/checkedAt
+        // mesmo sem mudança de veredito — o clique merece resposta visível).
+        await this.refreshProviderHealth();
         await this.postState();
         break;
       case "license/submit":
@@ -1825,7 +1850,11 @@ export class Controller {
     };
     await this.context.globalState.update(GS_PROVIDER, persisted);
     this.post({ type: "notice", level: "info", message: hostT("notice.provider.configured") });
+    // Endpoint pode ter mudado: a saúde antiga é de OUTRO provider — invalida sondas em voo
+    // (epoch), some com o badge já e re-sonda o novo em background.
+    this.resetProviderHealth();
     await this.postState();
+    void this.refreshProviderHealth();
   }
 
   // Troca o esforço de raciocínio (low/medium/high) pelo seletor do rodapé. Persiste e re-emite o
@@ -1896,6 +1925,59 @@ export class Controller {
     const nominal = getModelMeta(cfg.type, cfg.modelId).contextWindow;
     if (served && served > 0 && served < nominal) {
       log.info(`Janela servida detectada: ${served} tokens (catálogo ${nominal}) — reconciliando o orçamento para evitar HTTP 400.`);
+    }
+  }
+
+  // Sonda a SAÚDE do endpoint do provider e publica no estado (badge do rodapé). Sem isto o painel
+  // dizia "Pronto para gerar" com o gateway morto — o dev só descobria com a geração explodindo
+  // (e o RAG caindo para lexical em silêncio no OUTPUT). Ganchos verde→vermelho: ativação, "ready",
+  // VISIBILIDADE do painel (retainContextWhenHidden mantém a SPA viva — o "ready" não re-dispara ao
+  // esconder/mostrar; achado da revisão), salvar provider, recheck manual, mudança de config, e o
+  // batimento lento de verde (HEALTH_GREEN_RECHECK_MS — pega o verde-fóssil com a janela aberta).
+  // Vermelho→verde: re-sonda curta (HEALTH_RETRY_MS) — a VPN volta e o badge se recupera sozinho.
+  // PÚBLICO: o WebviewProvider chama no onDidChangeVisibility.
+  async refreshProviderHealth(minIntervalMs = 0): Promise<void> {
+    const p = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
+    if (!p) return;
+    if (minIntervalMs > 0 && this.providerHealth && Date.now() - this.providerHealth.checkedAt < minIntervalMs) return;
+    const epoch = this.healthEpoch;
+    const apiKey = (await this.secrets.get(SecretsStore.providerApiKey("default"))) ?? "not-needed";
+    const headers = buildAuthHeaders({ type: p.type, modelId: p.modelId, baseUrl: p.baseUrl, apiKey, authHeader: p.authHeader, timeoutSeconds: 0 });
+    const health = await probeProviderHealth(p.baseUrl, headers, this.egress);
+    // Corrida de sonda em voo: se o provider/política mudou durante o await (até 4s), este veredito
+    // é do MUNDO ANTIGO — descarta (o reset já re-sondou o novo).
+    if (epoch !== this.healthEpoch) return;
+    const changed = health?.ok !== this.providerHealth?.ok;
+    this.providerHealth = health;
+    this.scheduleNextHealthProbe(health);
+    // Só re-emite o estado quando o VEREDITO muda (ok↔falha) — evita re-render por sonda repetida.
+    if (changed) await this.postState();
+  }
+
+  // Cadeia de UM timer: vermelho re-sonda rápido (recupera sozinho quando a rede volta); verde
+  // re-sonda devagar (1 GET leve a cada 5 min — sem isto o badge verde fossilizava com a VPN caindo
+  // de janela aberta). Egress-bloqueado NÃO agenda: é config, não rede — o onChange de config
+  // re-sonda na hora certa (senão seria um warn "Egress NEGADO" no log a cada 60s, para sempre).
+  private scheduleNextHealthProbe(health: ProviderHealth | null): void {
+    if (this.healthTimer) {
+      clearTimeout(this.healthTimer);
+      this.healthTimer = undefined;
+    }
+    if (!health || health.blocked) return;
+    this.healthTimer = setTimeout(() => {
+      this.healthTimer = undefined;
+      void this.refreshProviderHealth();
+    }, health.ok ? HEALTH_GREEN_RECHECK_MS : HEALTH_RETRY_MS);
+  }
+
+  // Reset síncrono: invalida sondas em voo (epoch), some com o badge e para o timer. Usado quando
+  // o provider é salvo ou a config/política muda — a re-sonda do MUNDO NOVO vem logo em seguida.
+  private resetProviderHealth(): void {
+    this.healthEpoch++;
+    this.providerHealth = null;
+    if (this.healthTimer) {
+      clearTimeout(this.healthTimer);
+      this.healthTimer = undefined;
     }
   }
 

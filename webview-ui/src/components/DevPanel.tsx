@@ -79,6 +79,10 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   // Framework web do projeto PYTHON (FastAPI/Flask/Litestar): "auto" = o modelo decide.
   const [projFw, setProjFw] = useState<ProjectFramework>("auto");
   const [attachMenu, setAttachMenu] = useState(false);
+  // Recheck manual da saúde do provider: feedback visível (ícone gira) enquanto a sonda não volta —
+  // sem isto um clique com veredito inalterado parecia morto. Limpa quando o checkedAt novo chega.
+  const [healthChecking, setHealthChecking] = useState(false);
+  useEffect(() => setHealthChecking(false), [state.forge?.providerHealth?.checkedAt]);
   const [showProfile, setShowProfile] = useState(false);
   const [showCharter, setShowCharter] = useState(false);
   const [showInspect, setShowInspect] = useState(false);
@@ -623,6 +627,12 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
               <div style={{ marginTop: 14, fontSize: 11, color: "#6f6f6f" }}>
                 {t("empty.counts", { skills: enabledSkills, mcp: enabledMcp.length })}
               </div>
+              {/* Provider morto: avisa ANTES do brief — não depois da geração explodir. */}
+              {forge.providerHealth && !forge.providerHealth.ok && (
+                <div style={{ marginTop: 12, color: "#e5534b", fontSize: 12, display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+                  <Icon name="alert-triangle" size={13} /> {t("empty.providerDown")}
+                </div>
+              )}
             </div>
           )}
           {state.messages.map((m) =>
@@ -909,6 +919,32 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           <div className="sb-item" style={{ color: "#8aa0b8" }}>
             <Icon name="network" size={13} /> {t("ob.internalNetwork")}
           </div>
+        )}
+        {/* Saúde do ENDPOINT do provider (sonda GET /models no host). Sem isto o rodapé só tinha
+            rótulos estáticos e o painel dizia "Pronto para gerar" com o gateway morto. Clique =
+            recheck (ícone gira até a sonda voltar). Vermelho sem `error` = resposta 5xx (LB vivo,
+            upstream morto) — o tooltip mostra o status HTTP. */}
+        {forge.providerHealth && (
+          <button
+            className="sb-item sb-btn"
+            style={{ color: forge.providerHealth.ok ? "#7bbf6a" : "#e5534b" }}
+            title={
+              forge.providerHealth.ok
+                ? t("sb.llmOkTitle", { latency: forge.providerHealth.latencyMs ?? 0 })
+                : t("sb.llmDownTitle", {
+                    error:
+                      forge.providerHealth.error ??
+                      (forge.providerHealth.status ? `HTTP ${forge.providerHealth.status}` : "?"),
+                  })
+            }
+            onClick={() => {
+              setHealthChecking(true);
+              post({ type: "provider/checkHealth" });
+            }}
+          >
+            <Icon name="server-bolt" size={13} className={healthChecking ? "spin" : ""} />{" "}
+            {forge.providerHealth.ok ? t("sb.llmOk") : t("sb.llmDown")}
+          </button>
         )}
         {forge.rag.enabled && (
           <div

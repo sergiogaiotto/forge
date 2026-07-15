@@ -223,10 +223,23 @@ export interface ProfileView {
   rules: string[];
 }
 
+// Saúde do endpoint do provider (GET {baseUrl}/models). `ok` = respondeu HTTP com status < 500
+// (401/404 = rota viva; 5xx = upstream morto atrás do LB). ausente/null = provider sem baseUrl
+// sondável (SaaS gerido) ou ainda não sondado. `blocked` = egress negou o host (config, não rede).
+export interface ProviderHealthView {
+  ok: boolean;
+  status?: number;
+  latencyMs?: number;
+  error?: string;
+  blocked?: boolean;
+  checkedAt: number;
+}
+
 export interface ForgeState {
   stage: "onboarding-license" | "onboarding-provider" | "ready" | "blocked";
   license: LicenseView;
   provider: ProviderView;
+  providerHealth?: ProviderHealthView | null;
   network: { internalOnly: boolean; allowedHosts: string[] };
   observability: { traceActive: boolean; managedByAdmin: boolean; login: string };
   identity: { email: string | null; emailRequired: boolean; source: "license" | "manual" | "none" };
@@ -422,6 +435,8 @@ export type WebviewToExt =
   | { type: "provider/setMaxOutput"; maxTokens: number }
   | { type: "provider/setOutputLanguage"; lang: "auto" | "pt-BR" | "en" }
   | { type: "provider/openSettings" }
+  // Recheck manual da saúde do provider (clique no badge do rodapé).
+  | { type: "provider/checkHealth" }
   | { type: "embeddings/test" }
   | { type: "chat/send"; text: string; tdd?: boolean }
   // /limpar: zera o histórico e os anexos DO HOST (o "Nova conversa" da webview limpa só a UI).

@@ -25,7 +25,18 @@ export class ForgeViewProvider implements vscode.WebviewViewProvider {
       void webview.postMessage(msg);
     });
 
-    view.onDidDispose(() => this.controller.setPoster(() => undefined));
+    // retainContextWhenHidden mantém a SPA viva: o "ready" do webview NÃO re-dispara ao esconder/
+    // mostrar a view — o gancho de re-sonda da saúde do provider precisa do evento de VISIBILIDADE
+    // real (achado da revisão adversarial: sem isto o badge ficava verde-fóssil ao reabrir o painel
+    // depois de a VPN cair). A folga de 15s no host evita spam de sonda em alternâncias rápidas.
+    const visibility = view.onDidChangeVisibility(() => {
+      if (view.visible) void this.controller.refreshProviderHealth(15_000);
+    });
+
+    view.onDidDispose(() => {
+      visibility.dispose();
+      this.controller.setPoster(() => undefined);
+    });
 
     webview.onDidReceiveMessage(async (raw: WebviewToExt) => {
       try {
