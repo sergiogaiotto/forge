@@ -1,4 +1,4 @@
-import { FORGE_CELL_BLOCK_LANG, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
+import { FORGE_CELL_BLOCK_LANG, FORGE_FENCE, FORGE_FILE_BLOCK_LANG } from "../shared/protocol";
 import { findClosingFence, findOpeningFence, scanFencedBlocks } from "./fences";
 
 export interface FileBlock {
@@ -15,6 +15,7 @@ export interface PartialFileBlock {
 interface ScannedBlock extends PartialFileBlock {
   start: number; // índice do início da cerca de abertura
   end: number; // índice logo após o bloco (após a cerca de fechamento, ou fim do texto se aberto)
+  fenceLen: number; // número de crases da abertura
 }
 
 // Span final (com offsets) de um bloco que vira proposta. `end` delimita o que será removido da prosa
@@ -26,6 +27,7 @@ interface FinalBlock extends FileBlock {
 
 // Uma linha "só cerca": apenas crases (>=3) seguidas de espaços/tabs/CR. Tolera \r (CRLF).
 const BARE_FENCE_RE = /^(`{3,})[ \t\r]*$/;
+const STANDARD_FENCE_LEN = FORGE_FENCE.length;
 
 // Scanner de blocos forge-file para os caminhos de STREAMING (preview ao vivo e remoção da cerca crua
 // enquanto o modelo gera). Delega ao scanner genérico de cercas (ver fences.ts) e extrai o `path=`.
@@ -36,6 +38,7 @@ function scanFileBlocks(text: string): ScannedBlock[] {
     closed: f.closed,
     start: f.start,
     end: f.end,
+    fenceLen: f.fenceLen,
   }));
 }
 
@@ -73,6 +76,50 @@ function hasRealBody(content: string): boolean {
   return content.split("\n").some((l) => l.trim() !== "" && !BARE_FENCE_RE.test(l));
 }
 
+// Arquivos de prosa podem ter cercas markdown internas. Neles, uma cerca de 4 crases dentro de um bloco
+// externo de 5 pode ser conteúdo legítimo; em arquivos de código, uma linha só com crases é praticamente
+// sempre tentativa de fechamento do protocolo.
+function isProseLikePath(path: string): boolean {
+  return /\.(md|markdown|mdx|rst|txt|adoc)$/i.test(path);
+}
+
+function acceptsLooseClosingFence(path: string, openingFenceLen: number, candidateFenceLen: number): boolean {
+  if (candidateFenceLen >= openingFenceLen) return true; // compat: abriu 3 e fechou 4, etc.
+  // Caso real do gpt-oss: abriu com 5 crases por engano e fechou com as 4 crases do protocolo.
+  return (
+    openingFenceLen > STANDARD_FENCE_LEN &&
+    candidateFenceLen === openingFenceLen - 1 &&
+    candidateFenceLen >= STANDARD_FENCE_LEN &&
+    !isProseLikePath(path)
+  );
+}
+
+function recoverOpenBody(
+  path: string,
+  content: string,
+  fenceLen: number
+): { body: string; closeEndOffset: number; closed: boolean } {
+  let body = content;
+  let closeEndOffset = content.length; // fronteira (próximo bloco ou EOF)
+  let closed = false;
+  let pos = 0;
+  for (;;) {
+    const nl = content.indexOf("\n", pos);
+    const lineEnd = nl === -1 ? content.length : nl;
+    const m = content.slice(pos, lineEnd).match(BARE_FENCE_RE);
+    if (m && acceptsLooseClosingFence(path, fenceLen, m[1].length)) {
+      body = content.slice(0, pos);
+      closeEndOffset = nl === -1 ? lineEnd : nl + 1; // consome a linha da cerca (e seu \n)
+      closed = true;
+      break;
+    }
+    if (nl === -1) break;
+    pos = nl + 1;
+  }
+
+  return { body: body.replace(/\r?\n$/, ""), closeEndOffset, closed };
+}
+
 // Recupera um bloco forge-file que o modelo ABRIU mas não fechou com a contagem de crases certa
 // (esqueceu o fechamento, ou abriu 3 / fechou 4). `content` já vem LIMITADO à fronteira do bloco
 // (próximo bloco ou fim do texto), então a recuperação nunca engole o bloco seguinte. CONSERVADORA:
@@ -81,7 +128,9 @@ function hasRealBody(content: string): boolean {
 //    arquivo existente);
 //  - se houver uma cerca "solta" de fechamento (linha só de crases com >= a contagem de ABERTURA),
 //    corta ali: delimita o arquivo e devolve o resto à prosa. Cercas internas mais CURTAS ficam no
-//    conteúdo (mesma garantia das 4 crases). Sem cerca solta, recupera todo o `content` limitado.
+//    conteúdo (mesma garantia das 4 crases). Exceção defensiva: em arquivos de código, também aceita
+//    o caso 5→4 do gpt-oss (abriu com 5 por engano, fechou com as 4 do protocolo). Sem cerca solta,
+//    recupera todo o `content` limitado.
 function recoverOpen(
   path: string,
   content: string,
@@ -91,23 +140,9 @@ function recoverOpen(
 ): FinalBlock | null {
   if (path.length === 0) return null;
 
-  let body = content;
-  let end = contentStart + content.length; // fronteira (próximo bloco ou EOF)
-  let pos = 0;
-  for (;;) {
-    const nl = content.indexOf("\n", pos);
-    const lineEnd = nl === -1 ? content.length : nl;
-    const m = content.slice(pos, lineEnd).match(BARE_FENCE_RE);
-    if (m && m[1].length >= fenceLen) {
-      body = content.slice(0, pos);
-      end = contentStart + (nl === -1 ? lineEnd : nl + 1); // consome a linha da cerca (e seu \n)
-      break;
-    }
-    if (nl === -1) break;
-    pos = nl + 1;
-  }
-
-  body = body.replace(/\r?\n$/, ""); // tira a quebra final (antes da cerca solta ou da fronteira)
+  const recovered = recoverOpenBody(path, content, fenceLen);
+  const body = recovered.body;
+  const end = contentStart + recovered.closeEndOffset;
   if (!hasRealBody(body)) return null;
   return { path, content: body, start, end };
 }
@@ -162,7 +197,14 @@ export function parseFileBlocks(text: string): FileBlock[] {
 export function parsePartialFileBlocks(text: string): PartialFileBlock[] {
   return scanFileBlocks(text)
     .filter(isValidBlock)
-    .map(({ path, content, closed }) => ({ path, content, closed }));
+    .map(({ path, content, closed, fenceLen }) => {
+      if (closed || !path) return { path, content, closed };
+      const recovered = recoverOpenBody(path, content, fenceLen);
+      if (recovered.closed && hasRealBody(recovered.body)) {
+        return { path, content: recovered.body, closed: true };
+      }
+      return { path, content, closed };
+    });
 }
 
 // Caminhos dos blocos forge-file JÁ FECHADOS no texto (com path). O Modo Projeto usa isto durante o

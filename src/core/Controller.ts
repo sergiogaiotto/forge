@@ -31,7 +31,8 @@ import { planTemplateFiles, toIdentifierSlug } from "../skills/templates";
 import { gatePassed, SkillValidator } from "../skills/SkillValidator";
 import { getModelMeta } from "../api/modelCatalog";
 import { mapImportsToPackages, mergeRequirements, parsePinnedRequirements, reconcileRequirements, renderRequirements, scanPythonImports } from "../util/pythonDeps";
-import { buildBanditInstall, buildMypyInstall, buildPytestInstall, buildPytestProbe, buildRuffInstall, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, resolveTestCommand } from "../util/pythonEnv";
+import { buildBanditInstall, buildIpykernelInstall, buildIpykernelProbe, buildMypyInstall, buildPythonDiagnosticsCommand, buildPytestInstall, buildPytestProbe, buildRuffInstall, buildVenvActivationCommand, buildVenvSetupCommand, chooseTestCommand, findVenvPython, isPytestCommand, pythonRunPreflightAction, resolveTestCommand } from "../util/pythonEnv";
+import { parseNotebookCells } from "../util/cellBlocks";
 import { redactSecrets } from "../util/redact";
 import { ObsEvent } from "../obs/types";
 import { estimateTokens, estimateTokensOf } from "../util/tokenEstimate";
@@ -44,6 +45,7 @@ import {
   CharterKey,
   CHARTER_KEYS,
   CharterSections,
+  DataCommand,
   DEFAULT_REASONING_EFFORT,
   MAX_OUTPUT_PRESETS,
   maxOutputLabel,
@@ -68,7 +70,7 @@ import {
 import { EmailIdentity, isEmail, osLogin, resolveEmailIdentity } from "../util/identity";
 import { log } from "../util/logger";
 import { exec, execFile } from "node:child_process";
-import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext, setOutputLanguage } from "./systemPrompt";
+import { buildAcceptanceTestsRequest, buildBasePrompt, buildBlueprintRetryRequest, buildBlueprintSystemPrompt, buildCharterContinuationPrompt, buildCharterSystemPrompt, buildProjectFromBlueprintPrompt, buildProjectPrompt, buildProjectRepairPrompt, buildReadmeRequest, buildReviewPrompt, buildSummarizeSystemPrompt, buildTddPrompt, ProjectPromptContext, setOutputLanguage } from "./systemPrompt";
 import { contractGateDecision, contractUnverified, GateCheckResult, isTscSyntaxError, mypyUnavailable, normGatePath, parseCompileallErrors, parseGofmtErrors, parseGoBuildErrors, parseMypyErrors, parseTscErrors, ProjectGateSummary, requiresContractConfirmation, summarizeGate, syntheticInitDirs, tscErrorsToMap, tscUnavailable } from "./projectGate";
 import { buildGateTsconfig, findWorkspaceTscJs } from "../util/nodeEnv";
 import { normRepairPath, selectRepairTargets } from "./projectRepair";
@@ -83,9 +85,12 @@ import { DbtIndexStore } from "../dbt/DbtIndexStore";
 import { analyzeSqlProposal, sqlEvidenceForReview } from "../sql/engine";
 import { renderFindings } from "../sql/antipatterns";
 import { classifySql } from "../sql/classify";
+import { catalogToIndex, mergeSqlCatalog, parseDdlCatalog, parseSqlCatalog, renderCatalogSummary } from "../sql/catalog";
+import { findDialectRisks, resolveSqlDialect } from "../sql/dialect";
 import { stripJinja } from "../sql/jinja";
 import { renderLineage, selectLineage } from "../sql/lineage";
 import { WarehouseService } from "../warehouse/WarehouseService";
+import { EmbeddedDuckDbManager } from "../warehouse/EmbeddedDuckDb";
 import { decideSqlRun } from "../warehouse/governance";
 import { renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { resolveExecutable } from "../warehouse/exec";
@@ -94,6 +99,12 @@ import { columnsInventorySql, mergeIndexes, parseInventoryCsv, WarehouseSnapshot
 import { WarehouseSnapshotStore } from "../warehouse/WarehouseSnapshotStore";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
+import {
+  parseQueryPlan,
+  queryPlanEvidence,
+  renderQueryPlanCockpit,
+  renderQueryPlanComparison,
+} from "../warehouse/queryPlan";
 import { maskDataSample, renderPiiCard, scanIndexForPii } from "../util/piiScan";
 import { buildMentionCatalog, compileSearchPattern, isSearchablePath, renderFilesCard, renderSearchCard, renderTodoCard, searchInFiles, SearchMatch, SEARCH_MAX_FILE_BYTES, SEARCH_MAX_FILES, SEARCH_MAX_MATCHES, SEARCH_TIME_BUDGET_MS, TODO_PATTERN } from "../workspace/browse";
 import { SqlRunResult, WarehouseConnection } from "../warehouse/types";
@@ -105,6 +116,8 @@ import { extractFinalChannel, stitchHarmonyParts, stripHarmony } from "../util/h
 import { charterProbablyCut } from "../util/charterCut";
 import { classifyProjectIntent, forcesHexagonalBackend } from "../util/projectIntent";
 import { isFrontendRequest } from "../util/frontendIntent";
+import { isDashboardRequest } from "../util/dashboardIntent";
+import { extractEnvVariableNames, mergeEnvExample, mergeGitignore, recommendedGitignoreEntries } from "../util/workspaceArtifacts";
 import { parseImageDataUrl, parseTesseractLangs, pickOcrLangs, resolveTesseractCmd, tesseractCandidates } from "../util/ocr";
 import { safeWorkspacePath } from "../util/safePath";
 import { extractReferencedPaths, isSensitiveFile, looksLikePrivateKey } from "../util/errorRefs";
@@ -145,6 +158,7 @@ interface ProviderPersisted {
   label?: string;
   reasoningEffort?: ReasoningEffort;
   maxOutput?: number; // teto de saída escolhido por sessão (seletor/paleta); 0/ausente = auto/catálogo
+  apiKeyConfigured?: boolean; // marcador não-secreto; o valor real fica só no SecretStorage
 }
 
 export class Controller {
@@ -245,8 +259,11 @@ export class Controller {
   private healthEpoch = 0;
   // Pedido pendente de abrir um modal do webview (Índice/Perfil) via comando de paleta — vai no estado
   // (ForgeState.uiPanel) com seq monotônico; limpo quando o webview confirma (`ui/panelConsumed`).
-  private uiPanel: { panel: "inspect" | "profile"; seq: number } | undefined;
+  private uiPanel: { panel: "inspect" | "profile" | "provider"; seq: number } | undefined;
   private uiPanelSeq = 0;
+  // Override curto usado por comandos novos em workspaces multi-root. Fica ativo apenas durante a
+  // operacao escolhida e e restaurado no finally; o restante do FORGE continua usando a primeira raiz.
+  private actionWorkspaceRoot: string | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.secrets = new SecretsStore(context.secrets);
@@ -327,10 +344,7 @@ export class Controller {
       onResult: (r) => this.obs.record({ type: "run.result", filePath: r.filePath, label: r.label, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs }),
       openPreview: (relPath) => void this.previewService.openPreview(relPath),
       // O "Executar" de .py usa o python do venv do projeto (mesmo ambiente do Preparar/Testes).
-      venvPython: () => {
-        const ws = this.workspaceRoot();
-        return ws ? findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV) : undefined;
-      },
+      venvPython: () => this.projectVenvPython(),
     });
     context.subscriptions.push(this.runService);
     // Gate de projeto extraído (compilação/contrato/arquitetura/DoD/segurança/smoke). DI tight; o `obs` vai
@@ -479,7 +493,38 @@ export class Controller {
   }
 
   private workspaceRoot(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    return this.actionWorkspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  private async pickActionWorkspaceRoot(): Promise<string | undefined> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.env") });
+      return undefined;
+    }
+    if (folders.length === 1) return folders[0].uri.fsPath;
+
+    const active = vscode.window.activeTextEditor
+      ? vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)
+      : undefined;
+    const items = [...folders]
+      .sort((a, b) => (a === active ? -1 : b === active ? 1 : a.name.localeCompare(b.name)))
+      .map((folder) => ({
+        label: folder.name,
+        description: folder.uri.fsPath,
+        root: folder.uri.fsPath,
+      }));
+    return (await vscode.window.showQuickPick(items, { placeHolder: hostT("dialog.workspace.pickProject") }))?.root;
+  }
+
+  private async withActionWorkspace<T>(root: string, run: () => Promise<T>): Promise<T> {
+    const previous = this.actionWorkspaceRoot;
+    this.actionWorkspaceRoot = root;
+    try {
+      return await run();
+    } finally {
+      this.actionWorkspaceRoot = previous;
+    }
   }
 
   // Remove temp dirs órfãos deixados por um host encerrado antes do finally: `.forge/val-*` (validação)
@@ -1532,6 +1577,7 @@ export class Controller {
       supportsReasoningEffort: supports,
       maxOutput: p.maxOutput ?? 0,
       outputLanguage: this.config.outputLanguage(), // idioma de SAÍDA (seletor no rodapé)
+      apiKeyConfigured: p.apiKeyConfigured,
     };
   }
 
@@ -1641,6 +1687,15 @@ export class Controller {
       case "env/prepare":
         await this.prepareEnv();
         break;
+      case "notebook/prepare":
+        await this.prepareNotebookKernel();
+        break;
+      case "env/activate":
+        await this.activateVenv();
+        break;
+      case "docs/readme":
+        await this.generateReadme();
+        break;
       case "project/regate":
         await this.reRunProjectGate();
         break;
@@ -1672,7 +1727,7 @@ export class Controller {
         await this.copyProposal(msg.proposalId);
         break;
       case "run/file":
-        await this.runService.runFile(msg.filePath, msg.proposalId);
+        await this.runFileWithEnvPreflight(msg.filePath, msg.proposalId);
         break;
       case "preview/open":
         await this.previewService.openPreview(msg.filePath);
@@ -1831,22 +1886,29 @@ export class Controller {
   // ---- provedor --------------------------------------------------------------
 
   async setupProvider(setup: ProviderSetup): Promise<void> {
+    const incomingApiKey = setup.apiKey?.trim();
     if (setup.apiKey !== undefined) {
-      await this.secrets.set(SecretsStore.providerApiKey("default"), setup.apiKey);
+      await this.secrets.set(SecretsStore.providerApiKey("default"), incomingApiKey || "not-needed");
     }
     const existing = this.context.globalState.get<ProviderPersisted>(GS_PROVIDER);
+    const modelId = setup.modelId.trim();
+    const baseUrl = setup.baseUrl?.trim();
     const persisted: ProviderPersisted = {
       type: setup.type,
-      modelId: setup.modelId,
-      baseUrl: setup.baseUrl,
+      modelId,
+      baseUrl,
       authHeader: setup.authHeader,
       timeoutSeconds: setup.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS,
-      label: `${setup.type === "openai-compatible" ? "HubGPU/compat" : setup.type} · ${setup.modelId}`,
+      label: `${setup.type === "openai-compatible" ? "HubGPU/compat" : setup.type} · ${modelId}`,
       // preserva o esforço já escolhido pelo usuário num re-setup; senão usa o default.
       reasoningEffort: setup.reasoningEffort ?? existing?.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
       // idem para o teto de saída do seletor: um re-setup (trocar baseUrl/re-salvar) não pode APAGAR a
       // escolha do usuário. Só é resetado quando o MODELO muda (outro modelo pode ter janela diferente).
-      maxOutput: setup.modelId === existing?.modelId ? existing?.maxOutput : undefined,
+      maxOutput: modelId === existing?.modelId ? existing?.maxOutput : undefined,
+      apiKeyConfigured:
+        setup.apiKey !== undefined
+          ? !!incomingApiKey && incomingApiKey !== "not-needed"
+          : existing?.apiKeyConfigured,
     };
     await this.context.globalState.update(GS_PROVIDER, persisted);
     this.post({ type: "notice", level: "info", message: hostT("notice.provider.configured") });
@@ -1899,7 +1961,7 @@ export class Controller {
   // recebe o pedido no handshake ready→postState mesmo no cold start / fim do onboarding (quando o
   // listener ainda não montou). O extension.ts revela a view antes (focusView). O webview abre o modal
   // uma única vez (compara o seq) e confirma via `ui/panelConsumed`, que limpa o pedido aqui.
-  openWebviewPanel(panel: "inspect" | "profile"): void {
+  openWebviewPanel(panel: "inspect" | "profile" | "provider"): void {
     this.uiPanel = { panel, seq: ++this.uiPanelSeq };
     void this.postState();
   }
@@ -2170,6 +2232,12 @@ export class Controller {
     });
     const discovery = selector.selectForDiscovery(this.skills, text);
     let toActivate = selector.selectForActivation(discovery, text);
+    // Dashboard atravessa React/HTML/Streamlit/Dash. A intencao vem da mensagem do dev;
+    // anexos sao fontes de dados nao confiaveis e nunca controlam a ativacao de skills.
+    if (mode !== "tdd" && isDashboardRequest(text)) {
+      const dashboard = this.skills.find((s) => s.enabled && s.name === "claro-dashboard-ui");
+      if (dashboard) toActivate = [dashboard, ...toActivate.filter((s) => s.name !== dashboard.name)];
+    }
     // Família frontend (F-10/F-14..F-21): um pedido curto de UI de cliente ("todo app em html com tailwind")
     // não passa o limiar léxico de ativação → a skill de a11y não entra e os defeitos voltam. Quando a
     // heurística (porta-negativa de dados-que-cita-web + porta-positiva de UI de cliente) detecta frontend,
@@ -2569,6 +2637,9 @@ export class Controller {
   }
 
   private workspaceName(): string {
+    if (this.actionWorkspaceRoot) {
+      return vscode.workspace.workspaceFolders?.find((f) => f.uri.fsPath === this.actionWorkspaceRoot)?.name ?? path.basename(this.actionWorkspaceRoot);
+    }
     return vscode.workspace.workspaceFolders?.[0]?.name ?? "workspace";
   }
 
@@ -2744,10 +2815,15 @@ export class Controller {
         () => this.config.warehouse(),
         () => this.workspaceRoot(),
         (action, subject, sqlPreview) => this.permissions.confirm({ kind: "sql.write", action, subject, scope: "write", detail: sqlPreview }, { confirmLabel: "Executar escrita" }),
-        (action, subject) => this.permissions.note({ kind: "sql.write", action, subject, scope: "write" }, "blocked", "policy")
+        (action, subject) => this.permissions.note({ kind: "sql.write", action, subject, scope: "write" }, "blocked", "policy"),
+        new EmbeddedDuckDbManager(path.join(this.context.extensionPath, "dist", "duckdb-worker.js"))
       );
     }
     return this.warehouseSvc;
+  }
+
+  async dispose(): Promise<void> {
+    await this.warehouseSvc?.dispose();
   }
 
   // Índice de GROUNDING: manifest dbt + snapshots de warehouse vivos, fundidos — alimenta prompt,
@@ -2755,6 +2831,14 @@ export class Controller {
   private async getGroundingIndex(): Promise<DbtIndex | undefined> {
     const dbt = await this.dbtStore.get();
     const all = [...(dbt ? [dbt] : []), ...(await this.whStore.indexes())];
+    const ws = this.workspaceRoot();
+    if (ws) {
+      const catalogText = await this.readOptionalUtf8(path.join(ws, ".forge", "sql", "catalog.json"));
+      if (catalogText) {
+        const catalog = parseSqlCatalog(catalogText);
+        if (catalog.tables.length > 0) all.push(catalogToIndex(catalog));
+      }
+    }
     if (all.length === 0) return undefined;
     return all.length === 1 ? all[0] : mergeIndexes(all);
   }
@@ -2791,6 +2875,96 @@ export class Controller {
 
   private dataCard(markdown: string): void {
     this.post({ type: "data/card", markdown });
+  }
+
+  async runDataCommandFromPalette(cmd: DataCommand, args?: string): Promise<void> {
+    const root = await this.pickActionWorkspaceRoot();
+    if (!root) return;
+    await this.withActionWorkspace(root, () => this.dispatchDataCommand(cmd, args));
+  }
+
+  private activeSql(): { sql: string; fileName: string; relPath: string } | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !/\.sql$/i.test(editor.document.fileName)) return undefined;
+    const sql = editor.selection && !editor.selection.isEmpty
+      ? editor.document.getText(editor.selection)
+      : editor.document.getText();
+    const root = this.workspaceRoot();
+    return {
+      sql,
+      fileName: editor.document.fileName,
+      relPath: root
+        ? path.relative(root, editor.document.uri.fsPath).split(path.sep).join("/")
+        : path.basename(editor.document.fileName),
+    };
+  }
+
+  private validationDialect(args: string | undefined, fileName: string, sql: string) {
+    const explicitId = args?.trim();
+    const configuredDefault = this.config.warehouse().defaultId;
+    const conn = explicitId
+      ? this.warehouse().resolve(explicitId)
+      : configuredDefault
+        ? this.warehouse().resolve(configuredDefault)
+        : undefined;
+    return {
+      conn,
+      resolution: resolveSqlDialect({
+        configured: this.config.sqlDialect(),
+        connectionKind: conn?.kind,
+        fileName,
+        sql,
+      }),
+    };
+  }
+
+  private async schemaFile(args?: string): Promise<string | undefined> {
+    const root = this.workspaceRoot();
+    const raw = args?.trim().replace(/^@/, "").replace(/^["']|["']$/g, "");
+    if (raw && root) {
+      const candidate = safeWorkspacePath(root, raw);
+      if (!candidate) {
+        this.dataCard(`### Importar schema\n\nO arquivo \`${mdSafe(raw)}\` precisa estar dentro do workspace.`);
+        return undefined;
+      }
+      const real = await fs.realpath(candidate).catch(() => "");
+      if (!real || !safeWorkspacePath(root, path.relative(root, real))) {
+        this.dataCard(`### Importar schema\n\nO arquivo \`${mdSafe(raw)}\` não pôde ser lido com segurança.`);
+        return undefined;
+      }
+      return real;
+    }
+    const editor = vscode.window.activeTextEditor;
+    if (editor && /\.sql$/i.test(editor.document.fileName)) return editor.document.uri.fsPath;
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: "Importar schema SQL",
+      filters: { "SQL e DDL": ["sql", "ddl"], Texto: ["txt"] },
+    });
+    return picked?.[0]?.fsPath;
+  }
+
+  private renderSqlValidation(file: string, dialect: ReturnType<typeof resolveSqlDialect>, sql: string, results: ReturnType<typeof analyzeSqlProposal>): string {
+    const risks = findDialectRisks(sql, dialect.dialect);
+    const lines = [
+      "### Validação SQL",
+      "",
+      `**Arquivo:** \`${mdSafe(file)}\`  `,
+      `**Dialeto:** \`${dialect.dialect}\` (${dialect.source}, confiança ${dialect.confidence})`,
+      "",
+    ];
+    for (const result of results) {
+      const status = result.status === "ok" ? "OK" : result.status === "failed" ? "Atenção" : "Não executado";
+      lines.push(`#### ${status} · ${result.label}`);
+      if (result.output) lines.push("", result.output);
+      else if (result.reason) lines.push("", result.reason);
+      lines.push("");
+    }
+    if (risks.length > 0) {
+      lines.push("#### Compatibilidade do dialeto", "", ...risks.map((risk) => `- **${risk.rule}:** ${risk.message}`), "");
+    }
+    if (results.length === 0 && risks.length === 0) lines.push("Nenhum verificador foi habilitado para este arquivo.");
+    return lines.join("\n");
   }
 
   // Spawn seguro do git no workspace. Camadas de defesa (achados da revisão adversarial):
@@ -2966,9 +3140,308 @@ export class Controller {
   }
 
   // Despacho dos comandos de dados da paleta (Ondas 3/4). Tudo fail-open: erro vira card explicativo.
-  async dispatchDataCommand(cmd: string, args?: string): Promise<void> {
+  async dispatchDataCommand(cmd: DataCommand, args?: string): Promise<void> {
     try {
       switch (cmd) {
+        case "sql-lab": {
+          if (!vscode.workspace.isTrusted) {
+            this.dataCard("### FORGE SQL Lab\n\nConfie no workspace para iniciar o motor SQL local.");
+            return;
+          }
+          const root = this.workspaceRoot();
+          const conn = this.warehouse().localLabConnection();
+          if (!root || !conn) {
+            this.dataCard("### FORGE SQL Lab\n\nAbra uma pasta e habilite `forge.sqlLab.enabled`.");
+            return;
+          }
+          const sqlDir = path.join(root, ".forge", "sql");
+          const labFile = path.join(sqlDir, "lab.sql");
+          await fs.mkdir(sqlDir, { recursive: true });
+          if (!existsSync(path.join(sqlDir, ".gitignore"))) {
+            await fs.writeFile(path.join(sqlDir, ".gitignore"), "lab.duckdb\nlab.duckdb.*\ntmp/\n", "utf8");
+          }
+          if (!existsSync(labFile)) {
+            await fs.writeFile(
+              labFile,
+              "SELECT version() AS duckdb_version,\n       current_database() AS database_name;\n",
+              "utf8"
+            );
+          }
+          const test = await this.warehouse().testConnection(conn);
+          await this.openWorkspaceFile(labFile);
+          this.dataCard(
+            "refused" in test
+              ? `### FORGE SQL Lab\n\nFalha ao iniciar: ${test.refused}`
+              : renderResultCard("FORGE SQL Lab pronto", test.command, test.output, {
+                  ok: test.ok,
+                  truncated: test.truncated,
+                  durationMs: test.durationMs,
+                  rowCap: 5,
+                })
+          );
+          return;
+        }
+        case "importar-schema": {
+          if (!vscode.workspace.isTrusted) {
+            this.dataCard("### Importar schema\n\nConfie no workspace para criar o catálogo local.");
+            return;
+          }
+          const root = this.workspaceRoot();
+          if (!root) {
+            this.dataCard("### Importar schema\n\nAbra uma pasta no VSCode.");
+            return;
+          }
+          const sourcePath = await this.schemaFile(args);
+          if (!sourcePath) return;
+          const stat = await fs.stat(sourcePath);
+          if (!stat.isFile() || stat.size > 2 * 1024 * 1024) {
+            this.dataCard("### Importar schema\n\nO arquivo deve ser texto e ter no máximo 2 MB.");
+            return;
+          }
+          const sql = await fs.readFile(sourcePath, "utf8");
+          if (sql.includes("\u0000")) {
+            this.dataCard("### Importar schema\n\nO arquivo parece binário e não foi importado.");
+            return;
+          }
+          const dialect = resolveSqlDialect({
+            configured: this.config.sqlDialect(),
+            fileName: sourcePath,
+            sql,
+          });
+          const rel = path.relative(root, sourcePath);
+          const inside = rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+          const sourceLabel = inside ? rel.split(path.sep).join("/") : path.basename(sourcePath);
+          const sourceId = crypto.createHash("sha256").update(sourcePath.toLowerCase()).digest("hex").slice(0, 16);
+          const incoming = parseDdlCatalog({
+            sql,
+            sourceId,
+            label: sourceLabel,
+            dialect: dialect.dialect,
+            path: inside ? sourceLabel : undefined,
+          });
+          if (incoming.tables.length === 0) {
+            this.dataCard(`### Importar schema\n\nNenhum \`CREATE TABLE\` foi reconhecido em \`${mdSafe(sourceLabel)}\`.`);
+            return;
+          }
+          const catalogPath = path.join(root, ".forge", "sql", "catalog.json");
+          const current = parseSqlCatalog((await this.readOptionalUtf8(catalogPath)) ?? "");
+          const catalog = mergeSqlCatalog(current, incoming);
+          await fs.mkdir(path.dirname(catalogPath), { recursive: true });
+          await fs.writeFile(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8");
+          this.dataCard([
+            "### Schema importado",
+            "",
+            `**Fonte:** \`${mdSafe(sourceLabel)}\`  `,
+            `**Dialeto:** \`${dialect.dialect}\` (${dialect.source}, confiança ${dialect.confidence})  `,
+            `**Catálogo:** \`.forge/sql/catalog.json\``,
+            "",
+            renderCatalogSummary(incoming),
+            "",
+            "O catálogo já participa do grounding, da validação semântica e do tuning SQL.",
+          ].join("\n"));
+          return;
+        }
+        case "validar-sql": {
+          const active = this.activeSql();
+          if (!active) {
+            this.dataCard(hostT("card.sql.openFile"));
+            return;
+          }
+          const { resolution } = this.validationDialect(args, active.fileName, active.sql);
+          const results = analyzeSqlProposal(active.relPath, active.sql, {
+            mode: this.config.sqlGate(),
+            index: await this.getGroundingIndex(),
+          });
+          this.dataCard(this.renderSqlValidation(active.relPath, resolution, active.sql, results));
+          return;
+        }
+        case "plano-sql": {
+          if (!vscode.workspace.isTrusted) {
+            this.dataCard("### Plano SQL\n\nConfie no workspace para consultar o plano do banco.");
+            return;
+          }
+          const active = this.activeSql();
+          if (!active) {
+            this.dataCard(hostT("card.sql.openFile"));
+            return;
+          }
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard(hostT("card.cost.none"));
+            return;
+          }
+          const result = await this.warehouse().costPreview(conn.id, active.sql);
+          this.dataCard(
+            "refused" in result
+              ? `### Plano SQL · \`${mdSafe(conn.id)}\`\n\n${result.refused}`
+              : result.ok
+                ? renderQueryPlanCockpit(conn.id, parseQueryPlan(conn.kind, result.output, "estimate"), result.output, {
+                    command: result.command,
+                    durationMs: result.durationMs,
+                  })
+                : renderResultCard(`Plano SQL · ${conn.id}`, result.command, result.output, {
+                    ok: false,
+                    truncated: result.truncated,
+                    durationMs: result.durationMs,
+                    rowCap: 2_000,
+                  })
+          );
+          return;
+        }
+        case "analisar-sql": {
+          if (!vscode.workspace.isTrusted) {
+            this.dataCard("### Análise SQL observada\n\nConfie no workspace para executar e medir a consulta.");
+            return;
+          }
+          const active = this.activeSql();
+          if (!active) {
+            this.dataCard(hostT("card.sql.openFile"));
+            return;
+          }
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard(hostT("card.cost.none"));
+            return;
+          }
+          const allowed = await this.permissions.confirm(
+            {
+              kind: "sql.analyze",
+              action: hostT("dialog.sqlAnalyze.confirm", { id: conn.id }),
+              subject: conn.id,
+              scope: "read",
+              detail: active.sql,
+            },
+            { confirmLabel: hostT("dialog.sqlAnalyze.confirmBtn") }
+          );
+          if (!allowed) {
+            this.dataCard(`### Análise SQL observada · \`${mdSafe(conn.id)}\`\n\nExecução cancelada pelo Dev.`);
+            return;
+          }
+          const result = await this.warehouse().observedPlan(conn.id, active.sql);
+          this.dataCard(
+            "refused" in result
+              ? `### Análise SQL observada · \`${mdSafe(conn.id)}\`\n\n${result.refused}`
+              : result.ok
+                ? renderQueryPlanCockpit(conn.id, parseQueryPlan(conn.kind, result.output, "observed"), result.output, {
+                    command: result.command,
+                    durationMs: result.durationMs,
+                  })
+                : renderResultCard(`Análise SQL observada · ${conn.id}`, result.command, result.output, {
+                    ok: false,
+                    truncated: result.truncated,
+                    durationMs: result.durationMs,
+                    rowCap: 2_000,
+                  })
+          );
+          return;
+        }
+        case "comparar-sql": {
+          if (!vscode.workspace.isTrusted) {
+            this.dataCard("### Comparação SQL\n\nConfie no workspace para consultar os planos do banco.");
+            return;
+          }
+          const active = this.activeSql();
+          if (!active) {
+            this.dataCard(hostT("card.sql.openFile"));
+            return;
+          }
+          if (!/\.tuned\.sql$/i.test(active.relPath)) {
+            this.dataCard("### Comparação SQL\n\nAbra o arquivo `*.tuned.sql` gerado pelo FORGE. O arquivo original deve estar ao lado, sem o sufixo `.tuned`.");
+            return;
+          }
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard(hostT("card.cost.none"));
+            return;
+          }
+          const root = this.workspaceRoot();
+          const originalRel = active.relPath.replace(/\.tuned\.sql$/i, ".sql");
+          const originalAbs = root ? safeWorkspacePath(root, originalRel) : null;
+          if (!originalAbs) {
+            this.dataCard(`### Comparação SQL\n\nNão foi possível resolver o original \`${mdSafe(originalRel)}\` dentro do workspace.`);
+            return;
+          }
+          let originalSql: string;
+          try {
+            originalSql = await fs.readFile(originalAbs, "utf8");
+          } catch {
+            this.dataCard(`### Comparação SQL\n\nO arquivo original \`${mdSafe(originalRel)}\` não foi encontrado.`);
+            return;
+          }
+          const beforeResult = await this.warehouse().costPreview(conn.id, originalSql);
+          if ("refused" in beforeResult || !beforeResult.ok) {
+            this.dataCard(`### Comparação SQL · \`${mdSafe(conn.id)}\`\n\nFalha no plano original: ${"refused" in beforeResult ? beforeResult.refused : beforeResult.output}`);
+            return;
+          }
+          const afterResult = await this.warehouse().costPreview(conn.id, active.sql);
+          if ("refused" in afterResult || !afterResult.ok) {
+            this.dataCard(`### Comparação SQL · \`${mdSafe(conn.id)}\`\n\nFalha no plano tuned: ${"refused" in afterResult ? afterResult.refused : afterResult.output}`);
+            return;
+          }
+          const before = parseQueryPlan(conn.kind, beforeResult.output, "estimate");
+          const after = parseQueryPlan(conn.kind, afterResult.output, "estimate");
+          this.dataCard(renderQueryPlanComparison(conn.id, originalRel, active.relPath, before, after));
+          return;
+        }
+        case "tunar-sql": {
+          if (!vscode.workspace.isTrusted) {
+            this.dataCard("### Tuning SQL\n\nConfie no workspace para consultar o plano do banco.");
+            return;
+          }
+          const active = this.activeSql();
+          if (!active) {
+            this.dataCard(hostT("card.sql.openFile"));
+            return;
+          }
+          const conn = this.warehouse().resolve(args?.trim() || undefined);
+          if (!conn) {
+            this.dataCard(hostT("card.cost.none"));
+            return;
+          }
+          const plan = await this.warehouse().costPreview(conn.id, active.sql);
+          if ("refused" in plan || !plan.ok) {
+            this.dataCard(`### Tuning SQL · \`${mdSafe(conn.id)}\`\n\n${"refused" in plan ? plan.refused : plan.output}`);
+            return;
+          }
+          const insight = parseQueryPlan(conn.kind, plan.output, "estimate");
+          const { resolution } = this.validationDialect(conn.id, active.fileName, active.sql);
+          const index = await this.getGroundingIndex();
+          const schema = index ? renderSchemaContext(index, active.sql, 12) : "(nenhum catálogo de schema disponível)";
+          const ext = path.extname(active.relPath);
+          const outputPath = `${active.relPath.slice(0, -ext.length)}.tuned${ext || ".sql"}`;
+          const prompt = [
+            "Atue como especialista sênior em performance SQL.",
+            `Otimize a consulta abaixo para ${resolution.dialect}${conn.version ? ` ${conn.version}` : ""}, usando somente evidências do plano e do schema.`,
+            `Arquivo original: ${active.relPath}`,
+            `Entregue a proposta em um bloco forge-file com path="${outputPath}".`,
+            "",
+            "Garantias obrigatórias:",
+            "- Preserve exatamente a semântica, a granularidade, as colunas e os tipos de saída.",
+            "- Não execute nem proponha DDL automaticamente. Sugestões de índice ficam separadas e justificadas.",
+            "- Explique cada mudança com evidência do plano e indique confiança alta, média ou baixa.",
+            "- Quando faltar estatística ou informação do banco, declare a limitação. Não invente cardinalidades.",
+            "- Não afirme que ficou mais rápida apenas pela reescrita. Oriente executar `/comparar-sql` e, quando permitido, `/analisar-sql`.",
+            "",
+            "SQL original:",
+            "```sql",
+            active.sql,
+            "```",
+            "",
+            `Plano real de ${conn.id}:`,
+            "```text",
+            plan.output.slice(0, 14_000),
+            "```",
+            "",
+            "Evidência estruturada extraída deterministicamente pelo FORGE:",
+            "```json",
+            queryPlanEvidence(insight),
+            "```",
+            "",
+            schema,
+          ].join("\n");
+          await this.startTask(prompt, "normal");
+          return;
+        }
         case "conexoes": {
           const conns = this.warehouse().connections();
           if (conns.length === 0) {
@@ -3018,7 +3491,21 @@ export class Controller {
             // prévia de custo da CONSULTA ativa (dry-run/EXPLAIN) — antes de rodar
             const sql = editor.selection && !editor.selection.isEmpty ? editor.document.getText(editor.selection) : editor.document.getText();
             const r = await this.warehouse().costPreview(conn.id, sql);
-            this.dataCard("refused" in r ? hostT("card.cost.previewFrame", { id: conn.id, message: r.refused }) : renderResultCard(hostT("card.cost.previewTitle", { id: conn.id }), r.command, r.output, { ok: r.ok, truncated: r.truncated, durationMs: r.durationMs, rowCap: 500 }));
+            this.dataCard(
+              "refused" in r
+                ? hostT("card.cost.previewFrame", { id: conn.id, message: r.refused })
+                : r.ok
+                  ? renderQueryPlanCockpit(conn.id, parseQueryPlan(conn.kind, r.output, "estimate"), r.output, {
+                      command: r.command,
+                      durationMs: r.durationMs,
+                    })
+                  : renderResultCard(hostT("card.cost.previewTitle", { id: conn.id }), r.command, r.output, {
+                      ok: false,
+                      truncated: r.truncated,
+                      durationMs: r.durationMs,
+                      rowCap: 2_000,
+                    })
+            );
             return;
           }
           // sem .sql ativo: relatório FinOps (top consultas por custo, últimos 7 dias)
@@ -3186,16 +3673,41 @@ export class Controller {
     if (nbEditor) {
       const nb = nbEditor.notebook;
       const rel = this.workspaceRoot() ? path.relative(this.workspaceRoot()!, nb.uri.fsPath) : nb.uri.fsPath;
+      let serializedCells: ReturnType<typeof parseNotebookCells> = [];
+      if (nb.uri.scheme === "file") {
+        try {
+          serializedCells = parseNotebookCells(await fs.readFile(nb.uri.fsPath, "utf8"));
+        } catch {
+          /* notebook novo ou ainda não salvo: índice continua sendo o fallback */
+        }
+      }
       const cells = nb
         .getCells()
         .map((c) => {
           const kind = c.kind === vscode.NotebookCellKind.Markup ? "markdown" : "code";
           const src = c.document.getText();
           const preview = src.length > 600 ? src.slice(0, 600) + "\n# … (truncado)" : src;
-          return `[${c.index}] (${kind})\n${preview}`;
+          const metadata = c.metadata as Record<string, unknown>;
+          const serialized = serializedCells[c.index];
+          const cellId =
+            typeof metadata.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(metadata.id)
+              ? metadata.id
+              : serialized?.id;
+          const metadataTags = Array.isArray(metadata.tags)
+            ? metadata.tags.filter((tag): tag is string => typeof tag === "string")
+            : serialized?.tags ?? [];
+          const attrs = [
+            cellId ? `cellId=${cellId}` : undefined,
+            `kind=${kind}`,
+            `language=${c.document.languageId}`,
+            metadataTags.length > 0 ? `tags=${metadataTags.join(",")}` : undefined,
+          ].filter(Boolean);
+          return `[${c.index}] ${attrs.join(" ")}\n${preview}`;
         })
         .join("\n\n");
-      parts.push(`Notebook aberto: ${rel} (${nb.cellCount} células; use op=replace index=N ou op=add after=N):\n${cells}`);
+      parts.push(
+        `Notebook aberto: ${rel} (${nb.cellCount} células; prefira op=replace cellId=ID, use index=N como fallback, ou op=add after=N; declare kind=code|markdown):\n${cells}`
+      );
       // Redação antes do egress: o contexto (chunks de RAG, células) vai ao gateway (possivelmente externo)
       // e o dev não escolheu anexá-lo — mascara segredos (chaves/tokens/senhas) que estejam nesses trechos.
       return redactSecrets(parts.join("\n\n"));
@@ -3725,14 +4237,46 @@ export class Controller {
     await vscode.window.showNotebookDocument(nb, { preview: false });
 
     const cell = entry.proposal.cell!;
-    const cellData = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, entry.proposal.modified, "python");
     const edit = new vscode.WorkspaceEdit();
     let targetIndex: number;
-    if (cell.op === "replace" && cell.index !== undefined && cell.index < nb.cellCount) {
-      targetIndex = cell.index;
+    if (cell.op === "replace") {
+      targetIndex = -1;
+      if (cell.cellId) {
+        targetIndex = nb
+          .getCells()
+          .findIndex((current) => (current.metadata as Record<string, unknown>).id === cell.cellId);
+        if (targetIndex < 0) {
+          try {
+            targetIndex = parseNotebookCells(await fs.readFile(uri.fsPath, "utf8")).findIndex(
+              (current) => current.id === cell.cellId
+            );
+          } catch {
+            targetIndex = -1;
+          }
+        }
+      }
+      if (targetIndex < 0 && cell.index !== undefined && cell.index < nb.cellCount) targetIndex = cell.index;
+      if (targetIndex < 0 || targetIndex >= nb.cellCount) {
+        this.post({ type: "notice", level: "error", message: hostT("notice.cell.applyFailed") });
+        return false;
+      }
+      const current = nb.cellAt(targetIndex);
+      if (current.document.getText() !== entry.proposal.original) {
+        this.post({ type: "notice", level: "warn", message: hostT("notice.cell.changed") });
+        return false;
+      }
+      const kind = cell.kind === "markdown" ? vscode.NotebookCellKind.Markup : vscode.NotebookCellKind.Code;
+      const cellData = new vscode.NotebookCellData(kind, entry.proposal.modified, cell.language);
+      cellData.metadata = {
+        ...current.metadata,
+        ...(cell.tags ? { tags: cell.tags } : {}),
+      };
       edit.set(uri, [vscode.NotebookEdit.replaceCells(new vscode.NotebookRange(targetIndex, targetIndex + 1), [cellData])]);
     } else {
       targetIndex = cell.after !== undefined ? Math.min(cell.after + 1, nb.cellCount) : nb.cellCount;
+      const kind = cell.kind === "markdown" ? vscode.NotebookCellKind.Markup : vscode.NotebookCellKind.Code;
+      const cellData = new vscode.NotebookCellData(kind, entry.proposal.modified, cell.language);
+      if (cell.tags) cellData.metadata = { tags: cell.tags };
       edit.set(uri, [vscode.NotebookEdit.insertCells(targetIndex, [cellData])]);
     }
     const applied = await vscode.workspace.applyEdit(edit);
@@ -3752,9 +4296,23 @@ export class Controller {
       this.post({ type: "notice", level: "warn", message: hostT("notice.cell.applyFirst") });
       return;
     }
+    if (entry.proposal.cell.kind === "markdown") {
+      this.post({ type: "notice", level: "info", message: hostT("notice.cell.markdownNoRun") });
+      return;
+    }
     const ws = this.workspaceRoot();
-    const uri = vscode.Uri.file(path.join(ws!, entry.proposal.filePath));
+    if (!ws) {
+      this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.env") });
+      return;
+    }
+    const abs = safeWorkspacePath(ws, entry.proposal.filePath);
+    if (!abs) {
+      this.post({ type: "notice", level: "error", message: hostT("notice.invalidPath", { path: entry.proposal.filePath }) });
+      return;
+    }
+    const uri = vscode.Uri.file(abs);
     const index = entry.cellIndex;
+    if (!(await this.ensureNotebookKernelForRun(ws))) return;
     try {
       await vscode.commands.executeCommand("notebook.cell.execute", { start: index, end: index + 1 }, uri);
     } catch (err) {
@@ -3815,7 +4373,7 @@ export class Controller {
     }
     await editor.document.save();
     const rel = path.relative(ws, editor.document.uri.fsPath).split(path.sep).join("/");
-    await this.runService.runFile(rel);
+    await this.runFileWithEnvPreflight(rel);
     await vscode.commands.executeCommand("forge.sidebar.focus");
   }
 
@@ -3825,8 +4383,68 @@ export class Controller {
     const entry = this.currentTask?.getProposal(proposalId);
     const applied = await this.applyProposal(proposalId, opts);
     if (applied && entry && !entry.proposal.cell) {
-      await this.runService.runFile(entry.proposal.filePath, proposalId);
+      await this.runFileWithEnvPreflight(entry.proposal.filePath, proposalId);
     }
+  }
+
+  private projectVenvPython(ws = this.workspaceRoot()): string | undefined {
+    return ws ? findVenvPython(ws, process.platform === "win32", existsSync) : undefined;
+  }
+
+  private async runFileWithEnvPreflight(relPath: string, proposalId?: string): Promise<void> {
+    if (!(await this.ensurePythonEnvironmentForRun(relPath))) return;
+    await this.runService.runFile(relPath, proposalId);
+  }
+
+  private async ensurePythonEnvironmentForRun(relPath: string): Promise<boolean> {
+    const ws = this.workspaceRoot();
+    // Deixa o RunService emitir os avisos canônicos para pasta ausente, execução desabilitada e busy.
+    if (!ws || !this.config.run().enabled || this.runService.isBusy()) return true;
+
+    const action = pythonRunPreflightAction({
+      filePath: relPath,
+      hasProjectVenv: !!this.projectVenvPython(ws),
+      hasRequirements: existsSync(path.join(ws, "requirements.txt")),
+      policy: this.config.env().prepareOnRun,
+    });
+    if (action === "none") return true;
+
+    const permission = {
+      kind: "env.dependency" as const,
+      action: `Criar .venv, instalar requirements.txt e executar ${relPath}`,
+      subject: "requirements.txt",
+      scope: "write" as const,
+      detail: relPath,
+    };
+    if (action === "ask") {
+      const prepareAndRun = hostT("dialog.env.prepareAndRun");
+      const runWithoutPrepare = hostT("dialog.env.runWithoutPrepare");
+      const picked = await vscode.window.showInformationMessage(
+        hostT("dialog.env.prepareForRun", { file: relPath }),
+        { modal: true },
+        prepareAndRun,
+        runWithoutPrepare,
+        hostT("dialog.cancel")
+      );
+      if (picked === runWithoutPrepare) {
+        this.permissions.note(permission, "denied", "dialog");
+        return true;
+      }
+      if (picked !== prepareAndRun) {
+        this.permissions.note(permission, "denied", "dialog");
+        return false;
+      }
+      this.permissions.note(permission, "approved", "dialog");
+    } else {
+      this.permissions.note(permission, "auto", "auto");
+    }
+
+    const prepared = await this.prepareEnv();
+    if (!prepared || !this.projectVenvPython(ws)) {
+      this.post({ type: "notice", level: "error", message: hostT("notice.env.venvFailed") });
+      return false;
+    }
+    return true;
   }
 
   // Grava o arquivo E abre o preview — num único handler, garantindo a ordem (o preview lê o arquivo
@@ -3859,14 +4477,13 @@ export class Controller {
       return;
     }
     const runner = new Runner(ws);
-    const isWin = process.platform === "win32";
     // Comando ciente da STACK: default intocado num projeto Node (vitest/jest) COM script `test`
     // real vira `npm test` — antes rodava pytest do nada e falhava. Override do admin sempre vence.
     const stack = await this.detectWorkspaceStack();
     const chosen = chooseTestCommand(testCfg.command, "pytest -q", stack.tests, await this.hasNpmTestScript(ws));
     // PRÉ-FLIGHT (família pytest): proba o pytest no ambiente onde os testes VÃO RODAR — com venv,
     // o interpretador do venv; sem venv, o binário `pytest` do PATH (o mesmo que será executado).
-    let venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+    let venvPython = this.projectVenvPython(ws);
     if (isPytestCommand(chosen)) {
       const probe = await runner.runRaw(buildPytestProbe(venvPython), 20_000);
       if (!probe.ok) {
@@ -3898,9 +4515,9 @@ export class Controller {
         if (!venvPython) {
           // SEM venv: cria o ambiente COMPLETO (venv + dependências do código) — um .venv só com
           // pytest rodaria a suíte num interpretador pelado (ModuleNotFoundError geral).
-          await this.prepareEnv();
-          venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
-          if (!venvPython) {
+          const prepared = await this.prepareEnv();
+          venvPython = this.projectVenvPython(ws);
+          if (!prepared || !venvPython) {
             this.post({ type: "notice", level: "error", message: hostT("notice.env.venvFailed") });
             return;
           }
@@ -3942,11 +4559,11 @@ export class Controller {
   //   NENHUM manifesto → detecta os imports do código, GERA o requirements.txt e instala (antes
   //     desistia com um aviso — agora o ambiente nasce do zero).
   // Streaming pelo spawn (cmd.exe/sh), então o `&&` funciona mesmo com o terminal em PowerShell.
-  async prepareEnv(): Promise<void> {
+  async prepareEnv(): Promise<boolean> {
     const ws = this.workspaceRoot();
     if (!ws) {
       this.post({ type: "notice", level: "error", message: hostT("notice.openFolder.env") });
-      return;
+      return false;
     }
     const reqPath = path.join(ws, "requirements.txt");
     const hasReq = existsSync(reqPath);
@@ -4016,11 +4633,339 @@ export class Controller {
       }
     }
     const isWin = process.platform === "win32";
-    const venvPython = findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV);
+    const venvPython = this.projectVenvPython(ws);
     const command = buildVenvSetupCommand({ isWindows: isWin, venvPython, install });
     // Timeout próprio (forge.env.timeoutSeconds, default 900s): pip install pesado em cache frio
     // passa fácil dos 120s do run normal — matar no meio deixa o venv meio-populado.
-    await this.runService.runCommand(hostT("run.label.env"), command, this.config.env().timeoutSeconds * 1000);
+    const result = await this.runService.runCommand(hostT("run.label.env"), command, this.config.env().timeoutSeconds * 1000);
+    return result.started && result.ok && !!this.projectVenvPython(ws);
+  }
+
+  private missingNotebookExtensions(): { id: string; label: string }[] {
+    return [
+      { id: "ms-python.python", label: "Python" },
+      { id: "ms-toolsai.jupyter", label: "Jupyter" },
+    ].filter((extension) => !vscode.extensions.getExtension(extension.id));
+  }
+
+  private async ensureNotebookExtensions(): Promise<boolean> {
+    const missing = this.missingNotebookExtensions();
+    if (missing.length === 0) return true;
+
+    const install = hostT("dialog.notebook.installBtn");
+    const picked = await vscode.window.showWarningMessage(
+      hostT("dialog.notebook.installExtensions", { extensions: missing.map((item) => item.label).join(", ") }),
+      { modal: true },
+      install,
+      hostT("dialog.cancel")
+    );
+    if (picked !== install) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.notebook.extensionMissing") });
+      return false;
+    }
+    try {
+      for (const extension of missing) {
+        await vscode.commands.executeCommand("workbench.extensions.installExtension", extension.id);
+      }
+    } catch (error) {
+      log.warn(`Falha ao instalar extensões de notebook: ${(error as Error).message}`);
+      this.post({ type: "notice", level: "error", message: hostT("notice.notebook.installFailed") });
+      return false;
+    }
+    if (this.missingNotebookExtensions().length > 0) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.notebook.extensionMissing") });
+      return false;
+    }
+    return true;
+  }
+
+  async prepareNotebookKernel(workspaceOverride?: string): Promise<boolean> {
+    if (!vscode.workspace.isTrusted) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.workspace.trustRequired") });
+      return false;
+    }
+    const ws = workspaceOverride ?? (await this.pickActionWorkspaceRoot());
+    if (!ws) return false;
+
+    let python = this.projectVenvPython(ws);
+    if (!python) {
+      const prepared = await this.withActionWorkspace(ws, () => this.prepareEnv());
+      python = this.projectVenvPython(ws);
+      if (!prepared || !python) {
+        this.post({ type: "notice", level: "error", message: hostT("notice.env.venvFailed") });
+        return false;
+      }
+    }
+
+    const runner = new Runner(ws);
+    const probe = await runner.runRaw(buildIpykernelProbe(python), 30_000);
+    if (!probe.ok) {
+      this.permissions.note(
+        {
+          kind: "env.dependency",
+          action: "Instalar ipykernel no ambiente do projeto",
+          subject: path.relative(ws, python).replace(/\\/g, "/"),
+          scope: "write",
+          detail: "ipykernel",
+        },
+        "approved",
+        "webview"
+      );
+      const installed = await this.runService.runCommand(
+        hostT("run.label.ipykernelInstall"),
+        buildIpykernelInstall(python),
+        this.config.env().timeoutSeconds * 1000
+      );
+      if (!installed.started || !installed.ok) {
+        this.post({ type: "notice", level: "error", message: hostT("notice.notebook.ipykernelFailed") });
+        return false;
+      }
+    }
+
+    const rel = path.relative(ws, python).replace(/\\/g, "/");
+    try {
+      await vscode.workspace
+        .getConfiguration("python", vscode.Uri.file(ws))
+        .update("defaultInterpreterPath", rel.startsWith(".") ? rel : `./${rel}`, vscode.ConfigurationTarget.WorkspaceFolder);
+    } catch (error) {
+      log.warn(`Não foi possível definir o interpretador do notebook: ${(error as Error).message}`);
+    }
+
+    if (!(await this.ensureNotebookExtensions())) return false;
+    this.post({ type: "notice", level: "info", message: hostT("notice.notebook.prepared", { path: rel }) });
+
+    if (vscode.window.activeNotebookEditor) {
+      try {
+        await vscode.commands.executeCommand("notebook.selectKernel");
+      } catch (error) {
+        log.warn(`Não foi possível abrir a seleção de kernel: ${(error as Error).message}`);
+        this.post({ type: "notice", level: "warn", message: hostT("notice.notebook.selectKernelFailed") });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async ensureNotebookKernelForRun(ws: string): Promise<boolean> {
+    const python = this.projectVenvPython(ws);
+    const hasIpykernel = python
+      ? (await new Runner(ws).runRaw(buildIpykernelProbe(python), 30_000)).ok
+      : false;
+    if (python && hasIpykernel && this.missingNotebookExtensions().length === 0) return true;
+
+    const prepare = hostT("dialog.notebook.prepareBtn");
+    const picked = await vscode.window.showInformationMessage(
+      hostT("dialog.notebook.prepareForRun"),
+      { modal: true },
+      prepare,
+      hostT("dialog.cancel")
+    );
+    if (picked !== prepare) return false;
+    return this.prepareNotebookKernel(ws);
+  }
+
+  private async projectVenvForAction(ws: string): Promise<{ ws: string; python: string } | undefined> {
+    let python = this.projectVenvPython(ws);
+    if (python) return { ws, python };
+
+    const prepare = hostT("dialog.env.prepareBtn");
+    const picked = await vscode.window.showInformationMessage(hostT("dialog.env.activateMissing"), prepare);
+    if (picked !== prepare || !(await this.withActionWorkspace(ws, () => this.prepareEnv()))) return undefined;
+    python = this.projectVenvPython(ws);
+    return python ? { ws, python } : undefined;
+  }
+
+  // Abre um terminal dedicado ja apontando para o venv e tambem executa o script de ativacao correto
+  // para o shell. VIRTUAL_ENV/PATH sao a rede de seguranca quando o PowerShell bloqueia Activate.ps1.
+  async activateVenv(): Promise<boolean> {
+    if (!vscode.workspace.isTrusted) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.workspace.trustRequired") });
+      return false;
+    }
+    const ws = await this.pickActionWorkspaceRoot();
+    if (!ws) return false;
+    const env = await this.projectVenvForAction(ws);
+    if (!env) return false;
+
+    const root = path.dirname(path.dirname(env.python));
+    const bin = path.dirname(env.python);
+    const terminalName = "FORGE (.venv)";
+    let terminal = vscode.window.terminals.find((t) => t.name === terminalName && t.exitStatus === undefined);
+    if (!terminal) {
+      terminal = vscode.window.createTerminal({
+        name: terminalName,
+        cwd: env.ws,
+        env: {
+          VIRTUAL_ENV: root,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          PYTHONHOME: null,
+        },
+        iconPath: new vscode.ThemeIcon("terminal"),
+      });
+    }
+    terminal.show(false);
+    terminal.sendText(
+      buildVenvActivationCommand({
+        venvPython: env.python,
+        shellPath: vscode.env.shell,
+        isWindows: process.platform === "win32",
+      })
+    );
+
+    const rel = path.relative(env.ws, env.python).replace(/\\/g, "/");
+    try {
+      await vscode.workspace
+        .getConfiguration("python", vscode.Uri.file(env.ws))
+        .update("defaultInterpreterPath", rel.startsWith(".") ? rel : `./${rel}`, vscode.ConfigurationTarget.WorkspaceFolder);
+    } catch (error) {
+      log.warn(`Nao foi possivel definir python.defaultInterpreterPath: ${(error as Error).message}`);
+    }
+    this.post({ type: "notice", level: "info", message: hostT("notice.env.activated", { path: rel }) });
+    return true;
+  }
+
+  async diagnosePythonEnv(): Promise<void> {
+    if (!vscode.workspace.isTrusted) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.workspace.trustRequired") });
+      return;
+    }
+    const ws = await this.pickActionWorkspaceRoot();
+    if (!ws) return;
+    const env = await this.projectVenvForAction(ws);
+    if (!env) return;
+    await this.runService.runCommand(
+      hostT("run.label.envDiagnostics"),
+      buildPythonDiagnosticsCommand(env.python),
+      Math.min(this.config.run().timeoutSeconds, 120) * 1000
+    );
+  }
+
+  // README usa o fluxo normal de geracao: aparece como proposta revisavel e, se existir, como diff.
+  async generateReadme(): Promise<void> {
+    const ws = await this.pickActionWorkspaceRoot();
+    if (!ws) return;
+    try {
+      await this.withActionWorkspace(ws, async () => {
+        this.post({ type: "notice", level: "info", message: hostT("notice.readme.generating") });
+        await this.rag.build();
+        await this.startTask(buildReadmeRequest(this.workspaceName(), existsSync(path.join(ws, "README.md"))), "normal");
+      });
+    } finally {
+      // O indice global volta a representar a raiz padrao depois da operacao multi-root.
+      void this.rag.build();
+    }
+  }
+
+  private async openWorkspaceFile(absPath: string): Promise<void> {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absPath));
+    await vscode.window.showTextDocument(doc, { preview: false });
+  }
+
+  private async readOptionalUtf8(absPath: string): Promise<string | undefined> {
+    try {
+      const value = await fs.readFile(absPath, "utf8");
+      return value.includes("\u0000") ? undefined : value;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async writeWorkspaceArtifact(absPath: string, content: string): Promise<boolean> {
+    if (!vscode.workspace.isTrusted) {
+      this.post({ type: "notice", level: "warn", message: hostT("notice.workspace.trustRequired") });
+      return false;
+    }
+    try {
+      await fs.writeFile(absPath, content, "utf8");
+      await this.openWorkspaceFile(absPath);
+      return true;
+    } catch (error) {
+      this.post({
+        type: "notice",
+        level: "error",
+        message: hostT("notice.artifact.failed", { path: path.basename(absPath), error: (error as Error).message }),
+      });
+      return false;
+    }
+  }
+
+  // Mescla somente NOMES de variaveis. Arquivos .env reais ficam fora da varredura para que valores
+  // secretos nunca sejam copiados por acidente para o exemplo versionavel.
+  async createEnvExample(): Promise<void> {
+    const ws = await this.pickActionWorkspaceRoot();
+    if (!ws) return;
+    const uris = await vscode.workspace.findFiles(
+      "**/*.{py,js,jsx,ts,tsx,mjs,cjs,java,cs,go,rs,rb,php,yaml,yml,toml}",
+      "{**/node_modules/**,**/.git/**,**/.venv/**,**/venv/**,**/dist/**,**/build/**,**/.env,**/.env.*,**/.env/**}",
+      500
+    );
+    const sources: string[] = [];
+    for (const uri of uris) {
+      const rel = path.relative(ws, uri.fsPath);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      try {
+        const stat = await fs.stat(uri.fsPath);
+        if (stat.size > 256_000) continue;
+        sources.push(await fs.readFile(uri.fsPath, "utf8"));
+      } catch {
+        /* arquivo mudou durante a varredura */
+      }
+    }
+
+    const target = path.join(ws, ".env.example");
+    const existing = await this.readOptionalUtf8(target);
+    if (existsSync(target) && existing === undefined) {
+      this.post({ type: "notice", level: "error", message: hostT("notice.artifact.notUtf8", { path: ".env.example" }) });
+      return;
+    }
+    const merged = mergeEnvExample(existing, extractEnvVariableNames(sources));
+    if (merged.added.length === 0) {
+      if (existing !== undefined) await this.openWorkspaceFile(target);
+      this.post({
+        type: "notice",
+        level: "info",
+        message: existing === undefined ? hostT("notice.envExample.none") : hostT("notice.envExample.unchanged"),
+      });
+      return;
+    }
+    if (await this.writeWorkspaceArtifact(target, merged.content)) {
+      this.post({ type: "notice", level: "info", message: hostT("notice.envExample.updated", { count: merged.added.length }) });
+    }
+  }
+
+  async updateGitignore(): Promise<void> {
+    const ws = await this.pickActionWorkspaceRoot();
+    if (!ws) return;
+    const stack = {
+      python:
+        existsSync(path.join(ws, "pyproject.toml")) ||
+        existsSync(path.join(ws, "requirements.txt")) ||
+        existsSync(path.join(ws, ".venv")),
+      node: existsSync(path.join(ws, "package.json")),
+      java:
+        existsSync(path.join(ws, "pom.xml")) ||
+        existsSync(path.join(ws, "build.gradle")) ||
+        existsSync(path.join(ws, "build.gradle.kts")),
+      dotnet: (await vscode.workspace.findFiles("**/*.{csproj,fsproj,vbproj}", "**/{bin,obj}/**", 1)).some((uri) => {
+        const rel = path.relative(ws, uri.fsPath);
+        return !rel.startsWith("..") && !path.isAbsolute(rel);
+      }),
+    };
+    const target = path.join(ws, ".gitignore");
+    const existing = await this.readOptionalUtf8(target);
+    if (existsSync(target) && existing === undefined) {
+      this.post({ type: "notice", level: "error", message: hostT("notice.artifact.notUtf8", { path: ".gitignore" }) });
+      return;
+    }
+    const merged = mergeGitignore(existing, recommendedGitignoreEntries(stack));
+    if (merged.added.length === 0) {
+      if (existing !== undefined) await this.openWorkspaceFile(target);
+      this.post({ type: "notice", level: "info", message: hostT("notice.gitignore.unchanged") });
+      return;
+    }
+    if (await this.writeWorkspaceArtifact(target, merged.content)) {
+      this.post({ type: "notice", level: "info", message: hostT("notice.gitignore.updated", { count: merged.added.length }) });
+    }
   }
 
   // O package.json da raiz tem um script `test` REAL? (gate do fallback `npm test` — sem o script,

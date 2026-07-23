@@ -16,8 +16,9 @@ import { classifySql } from "../sql/classify";
 import { dialectUsesBackslashEscapes } from "../sql/lex";
 import { buildSpawn, resolveExecutable, unsafeField } from "./exec";
 import { decideSqlRun } from "./governance";
-import { buildCostPlan, buildRunPlan, buildTestPlan, CliPlan, isPlanError, PlanError, sanitizeWarehouseOutput } from "./sqlRunners";
+import { buildCostPlan, buildObservedPlan, buildRunPlan, buildTestPlan, CliPlan, isPlanError, PlanError, sanitizeWarehouseOutput } from "./sqlRunners";
 import { SqlRunResult, WarehouseConnection, WarehouseSettings } from "./types";
+import { EmbeddedDuckDbManager } from "./EmbeddedDuckDb";
 
 const secretKeyFor = (connId: string) => `forge.warehouse.${connId}`;
 
@@ -36,18 +37,41 @@ export class WarehouseService {
     private readonly confirmWrite: (action: string, subject: string, sqlPreview: string) => Promise<boolean> = async () => false,
     // Reporta ao trail unificado um BLOQUEIO de escrita pela governança do motor (DROP/TRUNCATE, escrita
     // em conexão readonly) — o mesmo desfecho "blocked" que o contrato já registrava. Default noop.
-    private readonly reportBlockedWrite: (action: string, subject: string) => void = () => undefined
+    private readonly reportBlockedWrite: (action: string, subject: string) => void = () => undefined,
+    private readonly embedded?: EmbeddedDuckDbManager
   ) {}
 
   connections(): WarehouseConnection[] {
-    return this.settings().connections;
+    const configured = this.settings().connections;
+    const local = this.localLabConnection();
+    return local && !configured.some((connection) => connection.id === local.id)
+      ? [...configured, local]
+      : configured;
   }
 
   resolve(id?: string): WarehouseConnection | undefined {
     const s = this.settings();
     const target = (id ?? s.defaultId ?? "").trim();
-    if (target) return s.connections.find((c) => c.id === target);
-    return s.connections[0];
+    const all = this.connections();
+    if (target) return all.find((c) => c.id === target);
+    return s.connections[0] ?? this.localLabConnection();
+  }
+
+  localLabConnection(): WarehouseConnection | undefined {
+    const root = this.workspaceRoot();
+    if (!root || !this.settings().localLab.enabled) return undefined;
+    return {
+      id: "forge-local",
+      label: "FORGE SQL Lab",
+      kind: "duckdb",
+      runtime: "embedded",
+      dialect: "duckdb",
+      managedLocal: true,
+      // O laboratório precisa materializar tabelas locais. Cada escrita continua passando pelo modal
+      // governado; DROP/TRUNCATE permanecem bloqueados pelo motor sem override.
+      readonly: false,
+      connect: path.join(".forge", "sql", "lab.duckdb"),
+    };
   }
 
   // Senha da conexão: SecretStorage; pede UMA vez (input mascarado) e persiste. Kinds sem senha
@@ -103,6 +127,9 @@ export class WarehouseService {
       if (!ok) return { refused: hostT("sql.writeCancelled") };
     }
     const rowCap = opts?.rowCapOverride ?? this.settings().rowCap;
+    if (this.useEmbedded(conn)) {
+      return this.runEmbedded(conn, sql, rowCap, opts?.skipMask);
+    }
     const plan = buildRunPlan(conn, sql, { password: await this.passwordFor(conn), rowCap });
     return this.execute(conn, plan, { rowCap, skipMask: opts?.skipMask });
   }
@@ -119,18 +146,116 @@ export class WarehouseService {
     if (decision.verdict !== "auto") {
       return { refused: hostT("wh.err.costReadonly", { reason: decision.reason }) };
     }
-    const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn), statementCount: classifySql(sql, { backslashEscapes: dialectUsesBackslashEscapes(conn.kind) }).length });
-    return this.execute(conn, plan, { rowCap: 500 });
+    const statementCount = classifySql(sql, { backslashEscapes: dialectUsesBackslashEscapes(conn.kind) }).length;
+    if (statementCount !== 1) {
+      return { refused: hostT("wh.err.costReadonly", { reason: "EXPLAIN requer exatamente uma instrução SQL." }) };
+    }
+    if (this.useEmbedded(conn)) {
+      return this.runEmbedded(conn, `EXPLAIN (FORMAT JSON) ${sql}`, 2_000, false, "DuckDB embedded EXPLAIN", 128_000);
+    }
+    const plan = buildCostPlan(conn, sql, { password: await this.passwordFor(conn), statementCount });
+    return this.execute(conn, plan, { rowCap: 2_000, maxChars: 128_000 });
+  }
+
+  // Análise observada: EXECUTA o SELECT por meio de EXPLAIN ANALYZE. O consentimento explícito e auditado
+  // acontece no Controller; aqui repetimos a governança e a regra de statement único (defesa em profundidade).
+  async observedPlan(connId: string | undefined, sql: string): Promise<SqlRunResult | { refused: string }> {
+    const conn = this.resolve(connId);
+    if (!conn) return { refused: hostT("wh.err.noneConfiguredShort") };
+    if (conn.mcp) return { refused: hostT("wh.err.observedUnavailable", { kind: `${conn.kind} via MCP` }) };
+    const bad = this.validateConn(conn);
+    if (bad) return { refused: bad };
+    const decision = decideSqlRun(sql, conn);
+    if (decision.verdict !== "auto") {
+      return { refused: hostT("wh.err.observedReadonly", { reason: decision.reason }) };
+    }
+    const statementCount = classifySql(sql, { backslashEscapes: dialectUsesBackslashEscapes(conn.kind) }).length;
+    if (statementCount !== 1) return { refused: hostT("wh.err.observedSingle") };
+    if (this.useEmbedded(conn)) {
+      return this.runEmbedded(conn, `EXPLAIN ANALYZE ${sql}`, 2_000, false, "DuckDB embedded EXPLAIN ANALYZE", 128_000);
+    }
+    const plan = buildObservedPlan(conn, sql, { password: await this.passwordFor(conn), statementCount });
+    return this.execute(conn, plan, { rowCap: 2_000, maxChars: 128_000 });
   }
 
   async testConnection(conn: WarehouseConnection): Promise<SqlRunResult | { refused: string }> {
     const bad = this.validateConn(conn);
     if (bad) return { refused: bad };
+    if (this.useEmbedded(conn)) {
+      return this.runEmbedded(conn, "SELECT version() AS duckdb_version", 5, true, "DuckDB embedded");
+    }
     const plan = buildTestPlan(conn, { password: await this.passwordFor(conn) });
     return this.execute(conn, plan, { rowCap: 5 });
   }
 
-  private async execute(conn: WarehouseConnection, plan: CliPlan | PlanError, opts: { rowCap: number; skipMask?: boolean }): Promise<SqlRunResult | { refused: string }> {
+  async dispose(): Promise<void> {
+    await this.embedded?.dispose();
+  }
+
+  private useEmbedded(conn: WarehouseConnection): boolean {
+    return conn.kind === "duckdb" && !!this.embedded &&
+      (conn.managedLocal === true || conn.runtime === "embedded" || conn.runtime === "auto");
+  }
+
+  private async runEmbedded(
+    conn: WarehouseConnection,
+    sql: string,
+    rowCap: number,
+    skipMask = false,
+    command = "DuckDB embedded",
+    maxChars = 16_000
+  ): Promise<SqlRunResult | { refused: string }> {
+    const root = this.workspaceRoot();
+    if (!root || !this.embedded) return { refused: "O DuckDB embutido requer um workspace aberto." };
+    const rawPath = conn.connect?.trim() || ":memory:";
+    const databasePath = rawPath === ":memory:" ? rawPath : path.resolve(root, rawPath);
+    if (databasePath !== ":memory:") {
+      const relative = path.relative(root, databasePath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        return { refused: "O banco DuckDB embutido deve ficar dentro do workspace." };
+      }
+    }
+    const cfg = this.settings().localLab;
+    const tempDirectory = path.join(root, ".forge", "sql", "tmp");
+    if (databasePath !== ":memory:") await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.mkdir(tempDirectory, { recursive: true });
+    try {
+      const result = await this.embedded.run(
+        {
+          databasePath,
+          workspaceRoot: root,
+          tempDirectory,
+          memoryLimit: cfg.memoryLimit,
+          maxTempDirectorySize: cfg.maxTempDirectorySize,
+          threads: cfg.threads,
+        },
+        sql,
+        rowCap,
+        this.settings().timeoutSeconds * 1000
+      );
+      const sanitized = sanitizeWarehouseOutput(result.output, rowCap, skipMask, maxChars);
+      return {
+        ok: result.ok,
+        exitCode: result.ok ? 0 : 1,
+        output: sanitized.output,
+        truncated: result.truncated || sanitized.truncated,
+        durationMs: result.durationMs,
+        command: `${command}${result.version ? ` (${result.version})` : ""}`,
+      };
+    } catch (error) {
+      if (conn.runtime === "auto" && !conn.managedLocal) {
+        const plan = buildRunPlan(conn, sql, { rowCap });
+        return this.execute(conn, plan, { rowCap, skipMask });
+      }
+      return { refused: `DuckDB embutido indisponível: ${(error as Error).message}` };
+    }
+  }
+
+  private async execute(
+    conn: WarehouseConnection,
+    plan: CliPlan | PlanError,
+    opts: { rowCap: number; skipMask?: boolean; maxChars?: number }
+  ): Promise<SqlRunResult | { refused: string }> {
     if (isPlanError(plan)) return { refused: plan.error };
     const toolPath = resolveExecutable(plan.tool);
     if (!toolPath) {
@@ -186,7 +311,7 @@ export class WarehouseService {
       // skipMask: consultas de METADADOS/AGREGADOS (inventário de schema, perfil de paridade, custo) —
       // o resultado não tem PII por construção (tabela,coluna,tipo / COUNT), e mascarar CORROMPE os
       // números (um count de 8 dígitos virava ▇ e a paridade dava falso "OK") — achado da revisão.
-      const { output, truncated } = sanitizeWarehouseOutput(raw.out, opts.rowCap, opts.skipMask);
+      const { output, truncated } = sanitizeWarehouseOutput(raw.out, opts.rowCap, opts.skipMask, opts.maxChars);
       return {
         ok: raw.code === 0,
         exitCode: raw.code,

@@ -491,7 +491,7 @@ export class ProjectGateRunner {
     const hasTests = props.some((e) => /(^|\/)test_[^/]*\.py$|_test\.py$/i.test(normGatePath(e.proposal.filePath)));
     if (!hasTests) return; // sem suíte gerada — nada a rodar
     const ws = this.deps.workspaceRoot();
-    const venvPy = ws ? findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV) : undefined;
+    const venvPy = ws ? findVenvPython(ws, process.platform === "win32", existsSync) : undefined;
     if (!venvPy) {
       this.deps.post({ type: "stream/notice", taskId, level: "info", message: hostT("notice.smoke.noVenv") });
       return;
@@ -605,7 +605,7 @@ export class ProjectGateRunner {
   private async resolveGatePython(): Promise<string> {
     const ws = this.deps.workspaceRoot();
     const isWin = process.platform === "win32";
-    const venv = ws ? findVenvPython(ws, isWin, existsSync, process.env.VIRTUAL_ENV) : undefined;
+    const venv = ws ? findVenvPython(ws, isWin, existsSync) : undefined;
     const candidates = [venv, "python", "python3", "py"].filter((c): c is string => !!c);
     for (const cand of candidates) {
       const probe = await runFileCheck({ id: "probe", label: "python", gate: false }, cand, ["--version"], { timeoutMs: 15_000 });
@@ -739,7 +739,7 @@ export class ProjectGateRunner {
     try {
       const ws = this.deps.workspaceRoot();
       if (!ws) return;
-      const venv = findVenvPython(ws, process.platform === "win32", existsSync, process.env.VIRTUAL_ENV);
+      const venv = findVenvPython(ws, process.platform === "win32", existsSync);
       if (!venv || py !== venv) return; // só num venv do workspace; nunca no python global/system
       const probe = await runFileCheck({ id: "probe", label: spec.module, gate: false }, py, ["-m", spec.module, "--version"], { timeoutMs: 15_000 });
       if (probe.status === "ok") return; // já disponível no venv

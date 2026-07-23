@@ -76,8 +76,22 @@ export function roleLabel(role: Role): string {
 // todas as skills continuam disponíveis pela seleção léxica; a lista alimenta o CARTÃO pós-seleção
 // ("o que este papel carrega") para o dev saber o que o FORGE prioriza no seu contexto.
 const ROLE_SKILLS: Record<Role, string[]> = {
-  "cientista-de-dados": ["eda-notebooks", "pandas-defensive-pipelines", "polars-pipelines", "sql-dialect-aware"],
-  "engenheiro-de-dados": ["airflow-dags", "dbt-modeling", "spark-pipelines", "sql-dialect-aware", "data-quality-checks"],
+  "cientista-de-dados": [
+    "eda-notebooks",
+    "pandas-defensive-pipelines",
+    "polars-pipelines",
+    "spark-connect-notebooks",
+    "sql-dialect-aware",
+  ],
+  "engenheiro-de-dados": [
+    "airflow-dags",
+    "dbt-modeling",
+    "spark-pipelines",
+    "spark-connect-notebooks",
+    "spark-classic-rdd",
+    "sql-dialect-aware",
+    "data-quality-checks",
+  ],
   "engenheiro-de-ml": ["mlops-pipelines", "pytorch-training", "pandas-defensive-pipelines", "data-quality-checks"],
   "engenheiro-de-ia": ["mlops-pipelines", "pytorch-training", "eda-notebooks"],
   "engenheiro-de-software": ["data-quality-checks", "sql-dialect-aware"],

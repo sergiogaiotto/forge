@@ -396,28 +396,39 @@ export class Task {
   private async makeCellProposal(cb: import("../util/cellBlocks").CellBlock): Promise<DiffProposal> {
     const d = this.deps;
     let original = "";
+    let targetIndex = cb.index;
+    let originalCell: import("../util/cellBlocks").NotebookCell | undefined;
     const safe = d.workspaceRoot ? safeWorkspacePath(d.workspaceRoot, cb.path) : null;
-    if (cb.op === "replace" && cb.index !== undefined && safe) {
+    if (cb.op === "replace" && safe) {
       try {
         const content = await fs.readFile(safe, "utf8");
-        original = parseNotebookCells(content)[cb.index]?.source ?? "";
+        const cells = parseNotebookCells(content);
+        if (cb.cellId) {
+          const byId = cells.findIndex((cell) => cell.id === cb.cellId);
+          if (byId >= 0) targetIndex = byId;
+        }
+        originalCell = targetIndex !== undefined ? cells[targetIndex] : undefined;
+        original = originalCell?.source ?? "";
       } catch {
         original = "";
       }
     }
+    const kind = cb.kind ?? originalCell?.kind ?? "code";
+    const language = kind === "markdown" ? "markdown" : cb.language ?? originalCell?.language ?? "python";
+    const tags = cb.tags ?? originalCell?.tags;
     const summary =
       cb.op === "add"
-        ? `Nova célula${cb.after !== undefined ? ` após [${cb.after}]` : " (ao final)"}`
-        : `Substituir célula [${cb.index}]`;
+        ? `Nova célula ${kind === "markdown" ? "Markdown" : language}${cb.after !== undefined ? ` após [${cb.after}]` : " (ao final)"}`
+        : `Substituir célula ${cb.cellId ? `id=${cb.cellId}` : `[${targetIndex}]`}`;
     return {
       id: `prop_${++proposalCounter}`,
       filePath: cb.path,
-      language: "python",
+      language,
       original,
       modified: cb.code,
       summary,
       activatedSkills: this.deps.activatedSkillNames,
-      cell: { op: cb.op, index: cb.index, after: cb.after },
+      cell: { op: cb.op, index: targetIndex, after: cb.after, cellId: cb.cellId, kind, language, tags },
     };
   }
 

@@ -3,17 +3,41 @@ import * as path from "node:path";
 import { test } from "node:test";
 import {
   buildBanditInstall,
+  buildIpykernelInstall,
+  buildIpykernelProbe,
   buildMypyInstall,
+  buildPythonDiagnosticsCommand,
   buildPytestInstall,
   buildPytestProbe,
+  buildVenvActivationCommand,
   buildVenvSetupCommand,
   chooseTestCommand,
   findVenvPython,
   isPytestCommand,
+  pythonRunPreflightAction,
   resolvePythonRunCommand,
   resolveTestCommand,
+  venvRootFromPython,
   venvPythonCandidates,
 } from "../util/pythonEnv";
+
+test("pythonRunPreflightAction: requirements + Python sem venv respeita ask/always/never", () => {
+  const base = { filePath: "src/app.py", hasProjectVenv: false, hasRequirements: true };
+  assert.equal(pythonRunPreflightAction({ ...base, policy: "ask" }), "ask");
+  assert.equal(pythonRunPreflightAction({ ...base, policy: "always" }), "prepare");
+  assert.equal(pythonRunPreflightAction({ ...base, policy: "never" }), "none");
+  assert.equal(
+    pythonRunPreflightAction({ ...base, filePath: "notebooks/eda.ipynb", policy: "ask" }),
+    "ask"
+  );
+});
+
+test("pythonRunPreflightAction: nao interfere em venv pronto, outras linguagens ou gerenciadores sem requirements", () => {
+  assert.equal(pythonRunPreflightAction({ filePath: "app.py", hasProjectVenv: true, hasRequirements: true, policy: "always" }), "none");
+  assert.equal(pythonRunPreflightAction({ filePath: "app.ts", hasProjectVenv: false, hasRequirements: true, policy: "always" }), "none");
+  assert.equal(pythonRunPreflightAction({ filePath: "app.py", hasProjectVenv: false, hasRequirements: false, policy: "always" }), "none");
+  assert.equal(pythonRunPreflightAction({ filePath: "APP.PYW", hasProjectVenv: false, hasRequirements: true, policy: "ask" }), "ask");
+});
 
 test("isPytestCommand: pytest nu e python -m pytest; wrappers/npm ficam de fora", () => {
   assert.ok(isPytestCommand("pytest -q"));
@@ -46,6 +70,18 @@ test("buildPytestProbe: proba o ambiente onde os testes VÃO RODAR (venv → mó
 test("buildPytestInstall: instala no venv EXISTENTE (o caso sem venv passa antes pelo prepareEnv)", () => {
   assert.equal(buildPytestInstall("C:/p/.venv/Scripts/python.exe"), "C:/p/.venv/Scripts/python.exe -m pip install pytest");
   assert.equal(buildPytestInstall("C:/meu proj/.venv/Scripts/python.exe"), '"C:/meu proj/.venv/Scripts/python.exe" -m pip install pytest');
+});
+
+test("ipykernel: proba e instala somente no interpretador do projeto", () => {
+  const python = "C:/meu projeto/.venv/Scripts/python.exe";
+  assert.equal(
+    buildIpykernelProbe(python),
+    '"C:/meu projeto/.venv/Scripts/python.exe" -c "import ipykernel; print(ipykernel.__version__)"'
+  );
+  assert.equal(
+    buildIpykernelInstall(python),
+    '"C:/meu projeto/.venv/Scripts/python.exe" -m pip install ipykernel'
+  );
 });
 
 test("buildMypyInstall: instala mypy no venv do gate (aspas em caminho com espaço)", () => {
@@ -104,6 +140,27 @@ test("findVenvPython: VIRTUAL_ENV tem prioridade sobre .venv da pasta", () => {
 
 test("findVenvPython: sem venv retorna undefined", () => {
   assert.equal(findVenvPython("/proj", false, () => false), undefined);
+});
+
+test("ativacao do venv considera shell e SO", () => {
+  const win = path.win32.join("C:\\", "meu projeto", ".venv", "Scripts", "python.exe");
+  assert.equal(venvRootFromPython(win), path.dirname(path.dirname(win)));
+  assert.match(buildVenvActivationCommand({ venvPython: win, shellPath: "powershell.exe", isWindows: true }), /Activate\.ps1/);
+  assert.match(buildVenvActivationCommand({ venvPython: win, shellPath: "cmd.exe", isWindows: true }), /activate\.bat/);
+  assert.match(buildVenvActivationCommand({ venvPython: win, shellPath: "bash.exe", isWindows: true }), /^source "\/c\/meu projeto\/\.venv\/Scripts\/activate"$/);
+
+  const posix = "/tmp/meu projeto/.venv/bin/python";
+  assert.equal(venvRootFromPython(posix), "/tmp/meu projeto/.venv");
+  assert.match(buildVenvActivationCommand({ venvPython: posix, shellPath: "/bin/zsh", isWindows: false }), /^source .*bin.*activate/);
+  assert.match(buildVenvActivationCommand({ venvPython: posix, shellPath: "/usr/bin/fish", isWindows: false }), /activate\.fish/);
+});
+
+test("diagnostico Python usa o interpretador do venv e inclui pip check", () => {
+  const cmd = buildPythonDiagnosticsCommand("C:/meu projeto/.venv/Scripts/python.exe");
+  assert.match(cmd, /^"C:\/meu projeto\/\.venv\/Scripts\/python\.exe" -c/);
+  assert.match(cmd, /base64\.b64decode/);
+  assert.match(cmd, /-m pip --version/);
+  assert.match(cmd, /-m pip check$/);
 });
 
 test("resolveTestCommand: 'pytest -q' vira '<venv> -m pytest -q' quando há venv", () => {

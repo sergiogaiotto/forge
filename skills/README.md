@@ -14,10 +14,15 @@ e corpo em markdown. O FORGE descobre, valida e injeta skills com *progressive d
 | `dbt-modeling` | dbt: camadas, testes, incremental | — |
 | `airflow-dags` | Airflow: TaskFlow, idempotência | ruff |
 | `spark-pipelines` | PySpark: partição, joins, skew | ruff |
+| `spark-connect-notebooks` | Trilha moderna: Spark Connect, Spark SQL e DataFrames remotos em notebooks | — |
+| `spark-classic-rdd` | Trilha avançada clássica: Spark SQL, DataFrames, SparkContext e RDD | — |
 | `pytorch-training` | PyTorch: training loop, AMP, checkpoint | ruff |
 | `mlops-pipelines` | MLflow, registry, CI de ML | ruff (gate) |
 | `data-quality-checks` | Pandera/GE: completude, ranges, PK | ruff (gate) |
 | `eda-notebooks` | EDA reprodutível em notebooks | ruff |
+| `hexagonal-backend` | Backend Python com portas/adaptadores | camada + ruff/mypy |
+| `frontend-html-a11y` | Front-end HTML robusto e acessível | a11y do gate |
+| `claro-dashboard-ui` | Dashboards data-first no padrão Claro, com XLSX/upload/`@`, KPIs e charts adaptativos | a11y do gate |
 
 ## Frontmatter
 

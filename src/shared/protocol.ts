@@ -131,6 +131,7 @@ export interface ProviderView {
   supportsReasoningEffort?: boolean; // true só para provedores OpenAI-compatíveis (gpt-oss)
   maxOutput?: number; // teto de saída escolhido por sessão (0/ausente = auto/catálogo)
   outputLanguage?: "auto" | "pt-BR" | "en"; // idioma de SAÍDA da geração (forge.outputLanguage); seletor no rodapé
+  apiKeyConfigured?: boolean; // true quando há uma chave salva no SecretStorage; nunca expõe o valor
 }
 
 export interface LicenseView {
@@ -254,7 +255,7 @@ export interface ForgeState {
   // (não numa mensagem fire-and-forget) para sobreviver à corrida de montagem: o webview o recebe no
   // handshake ready→postState mesmo no cold start / fim do onboarding. O `seq` monotônico + um ref no
   // webview garantem abertura ÚNICA; o host limpa via `ui/panelConsumed` (sem reabrir em remount).
-  uiPanel?: { panel: "inspect" | "profile"; seq: number };
+  uiPanel?: { panel: "inspect" | "profile" | "provider"; seq: number };
 }
 
 export type ValidatorStatus = "ok" | "failed" | "skipped";
@@ -277,7 +278,15 @@ export interface DiffProposal {
   summary: string;
   activatedSkills: string[];
   // Presente quando a proposta é uma edição de CÉLULA de notebook (.ipynb).
-  cell?: { op: "add" | "replace"; index?: number; after?: number };
+  cell?: {
+    op: "add" | "replace";
+    index?: number;
+    after?: number;
+    cellId?: string;
+    kind: "code" | "markdown";
+    language: string;
+    tags?: string[];
+  };
   // true quando a geração esgotou as tentativas de continuação e o arquivo pode estar incompleto —
   // entrega honesta, em vez de um arquivo truncado disfarçado de completo.
   partial?: boolean;
@@ -425,6 +434,21 @@ export interface ContextReport {
 
 // ---- Webview → Host da extensão ------------------------------------------------
 
+export type DataCommand =
+  | "conexoes"
+  | "executar-sql"
+  | "schema-db"
+  | "paridade"
+  | "custo"
+  | "auditoria-pii"
+  | "sql-lab"
+  | "importar-schema"
+  | "validar-sql"
+  | "plano-sql"
+  | "analisar-sql"
+  | "comparar-sql"
+  | "tunar-sql";
+
 export type WebviewToExt =
   | { type: "ready" }
   | { type: "license/submit"; key: string }
@@ -449,7 +473,7 @@ export type WebviewToExt =
   // o host usa o modelo do arquivo ativo no editor.
   | { type: "impact/request"; target?: string }
   // Comandos de dados (Ondas 3/4) — host executa e responde com data/card.
-  | { type: "data/command"; cmd: "conexoes" | "executar-sql" | "schema-db" | "paridade" | "custo" | "auditoria-pii"; args?: string }
+  | { type: "data/command"; cmd: DataCommand; args?: string }
   // Git governado (Fase 4): status/diff/log são leitura; commit é escrita (confirmação + auditoria).
   // Responde com data/card (reusa o mesmo canal de cartão). args = mensagem no commit.
   | { type: "git/command"; op: "status" | "diff" | "log" | "commit"; args?: string }
@@ -465,6 +489,9 @@ export type WebviewToExt =
   | { type: "proposal/applyAll"; forceBlocked?: boolean }
   | { type: "tests/run" }
   | { type: "env/prepare" }
+  | { type: "notebook/prepare" }
+  | { type: "env/activate" }
+  | { type: "docs/readme" }
   // Re-roda o gate do Modo Projeto sobre as propostas EXISTENTES (pós-"Preparar ambiente"), sem regenerar.
   | { type: "project/regate" }
   | { type: "chat/abort"; taskId: string }

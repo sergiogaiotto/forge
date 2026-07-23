@@ -32,6 +32,33 @@ test("parseCellBlocks: op default é add; replace sem index é ignorado", () => 
   assert.equal(blocks[0].op, "add");
 });
 
+test("parseCellBlocks: célula documentada preserva kind, linguagem, tags e cellId", () => {
+  const text = [
+    "````forge-cell path=analise.ipynb op=replace cellId=quality-check kind=markdown language=markdown tags=quality,documented,quality",
+    "## Qualidade dos dados",
+    "Este bloco documenta as validações.",
+    "````",
+  ].join("\n");
+  const blocks = parseCellBlocks(text);
+  assert.deepEqual(blocks, [
+    {
+      path: "analise.ipynb",
+      op: "replace",
+      cellId: "quality-check",
+      kind: "markdown",
+      language: "markdown",
+      tags: ["quality", "documented"],
+      code: "## Qualidade dos dados\nEste bloco documenta as validações.",
+    },
+  ]);
+});
+
+test("parseCellBlocks: rejeita atributos inseguros e índice negativo", () => {
+  const text =
+    "```forge-cell path=a.ipynb op=replace index=-1 cellId=../../x kind=html language=python;rm tags=ok,bad/tag\nx=1\n```";
+  assert.deepEqual(parseCellBlocks(text), []);
+});
+
 test("parseCellBlocks: cerca de 4 crases preserva cerca interna de 3 no código da célula", () => {
   const text = [
     "Vou inserir uma célula com docstring contendo um exemplo:",
@@ -58,13 +85,23 @@ test("parseCellBlocks: cerca de 4 crases preserva cerca interna de 3 no código 
 test("parseNotebookCells lê células na ordem absoluta", () => {
   const ipynb = JSON.stringify({
     cells: [
-      { cell_type: "markdown", source: ["# Título"] },
-      { cell_type: "code", source: ["import pandas as pd\n", "df = pd.DataFrame()"] },
+      { id: "intro", cell_type: "markdown", metadata: { tags: ["documented"] }, source: ["# Título"] },
+      {
+        id: "load-data",
+        cell_type: "code",
+        metadata: { tags: ["parameters"], vscode: { languageId: "python" } },
+        source: ["import pandas as pd\n", "df = pd.DataFrame()"],
+      },
     ],
   });
   const cells = parseNotebookCells(ipynb);
   assert.equal(cells.length, 2);
+  assert.equal(cells[0].id, "intro");
   assert.equal(cells[0].kind, "markdown");
+  assert.deepEqual(cells[0].tags, ["documented"]);
+  assert.equal(cells[1].id, "load-data");
+  assert.equal(cells[1].language, "python");
+  assert.deepEqual(cells[1].tags, ["parameters"]);
   assert.equal(cells[1].kind, "code");
   assert.match(cells[1].source, /import pandas/);
 });

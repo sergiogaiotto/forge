@@ -63,7 +63,7 @@ O FORGE é distribuído como um arquivo `.vsix` (um pacote de extensão do VS Co
 
 1. No VS Code, abra a aba **Extensions** (`Ctrl+Shift+X`).
 2. No menu `⋯` (canto superior direito da aba) → **Install from VSIX…**.
-3. Selecione o `forge-2.10.2.vsix` que você recebeu.
+3. Selecione o `forge-win32-x64-2.15.0.vsix` que você recebeu.
 4. Recarregue quando pedido. Um ícone 🔥 **FORGE** aparece na barra lateral (activity bar).
 
 > **Pré-requisitos:** VS Code **≥ 1.93**. Para funcionalidades opcionais: um CLI de banco no PATH (para SQL — ver §8), o `tesseract` (para OCR — ver §13) e `git` (para os comandos de git). Nenhum deles é obrigatório para o uso básico de codegen.
@@ -127,6 +127,7 @@ Esta é a área que você mais usa. Cada item abaixo é uma funcionalidade do pa
 | `/tokens` | Uso de tokens da última geração e da sessão | §12 |
 | `/limpar` | Zera a conversa (e o gasto acumulado da sessão) | §12 |
 | `/ambiente` | Diagnostica e prepara o ambiente (deps, ferramentas) | §7 |
+| `/notebook` | Prepara `.venv`, `ipykernel` e o seletor de kernel Jupyter | §5 |
 | `/testes` | Roda a suíte de testes do projeto | §7 |
 | `/perfil` | Abre/edita o perfil do projeto (`.forge/project.md`) | §10 |
 | `/indice` | Visualiza o índice (skills ativas + trechos do RAG) | §9 |
@@ -140,10 +141,17 @@ Esta é a área que você mais usa. Cada item abaixo é uma funcionalidade do pa
 | `/schema-db` | Indexa o schema real do warehouse como grounding | §8 |
 | `/impacto` | Raio de explosão (lineage) de um modelo dbt | §8 |
 | `/paridade` | Compara duas tabelas por agregados (data-diff seguro) | §8 |
-| `/custo` | Prévia de custo de uma query SQL (dry-run) | §8 |
+| `/custo` | Cockpit estimado de custo e hotspots da query ativa | §8 |
 | `/auditoria-pii` | Mapeia colunas com potencial dado pessoal (LGPD) | §8 |
 | `/testes-dbt` | Gera testes `schema.yml` de um modelo dbt | §8 |
 | `/traduzir-sql` | Traduz SQL entre dialetos preservando semântica | §8 |
+| `/sql-lab` | Abre o DuckDB local embutido e persistente | §8 |
+| `/importar-schema` | Importa um DDL para o grounding local | §8 |
+| `/validar-sql` | Valida segurança, schema e dialeto | §8 |
+| `/plano-sql` | Cockpit estruturado de EXPLAIN/dry-run da consulta ativa | §8 |
+| `/analisar-sql` | Métricas observadas com consentimento e auditoria | §8 |
+| `/comparar-sql` | Compara os planos original e `.tuned.sql` | §8 |
+| `/tunar-sql` | Otimiza usando evidências do plano, dialeto e schema | §8 |
 | `/arquivos` | Lista arquivos do repo (só-leitura, governado) | §13 |
 | `/buscar` | Busca por regex com defesa anti-ReDoS | §13 |
 | `/todos` | Varre TODO/FIXME/HACK/XXX do código | §13 |
@@ -160,7 +168,7 @@ Esta é a área que você mais usa. Cada item abaixo é uma funcionalidade do pa
 
 **Benefício.** Você recebe código no padrão do especialista daquele domínio — pipelines idempotentes, notebooks bem estruturados, SQL dialeto-consciente — sem precisar dizer "lembre de tratar nulos, tipar, testar". A skill já carrega essas convenções e as **valida no gate** (ver §7).
 
-**As 12 skills incluídas:**
+**As 15 skills incluídas:**
 
 | Skill | Domínio | Ative pedindo algo como… |
 |---|---|---|
@@ -169,13 +177,16 @@ Esta é a área que você mais usa. Cada item abaixo é uma funcionalidade do pa
 | `sql-dialect-aware` | SQL consciente de dialeto | "gere um SELECT para BigQuery" |
 | `dbt-modeling` | Modelagem dbt (staging/marts/testes) | "crie um modelo dbt de pedidos" |
 | `airflow-dags` | DAGs do Airflow | "monte uma DAG diária de ingestão" |
-| `spark-pipelines` | PySpark | "faça um job Spark de agregação" |
+| `spark-pipelines` | Roteamento e otimização geral de PySpark | "faça um job Spark de agregação" |
+| `spark-connect-notebooks` | Spark Connect, Spark SQL e DataFrames remotos | "crie um notebook Spark Connect sem JVM local" |
+| `spark-classic-rdd` | Spark clássico avançado com SQL, DataFrames e RDD | "use pair RDD e particionador customizado" |
 | `pytorch-training` | Treino em PyTorch | "escreva o loop de treino desta rede" |
 | `mlops-pipelines` | MLOps (empacote, sirva, monitore) | "empacote este modelo para produção" |
 | `data-quality-checks` | Qualidade de dados | "adicione checagens de qualidade" |
 | `eda-notebooks` | Análise exploratória em notebooks | "faça uma EDA deste dataset" |
 | `hexagonal-backend` | Backend Python em arquitetura hexagonal | "gere um serviço com portas/adaptadores" |
 | `frontend-html-a11y` | Front-end HTML acessível | "crie um formulário de login acessível" |
+| `claro-dashboard-ui` | Dashboards no padrão visual Claro | "crie um dashboard usando @data/vendas.csv" |
 
 - **Toggle de skills.** *Fundamento:* você pode ligar/desligar skills. *Benefício:* silencia uma skill que não quer no momento. *Exemplo:* desligar `eda-notebooks` numa base que já passou da fase exploratória.
 
@@ -229,6 +240,10 @@ Este é o coração para times de dados. O FORGE conecta-se a warehouses, **anco
 
 ### 8.1 Conexões e governança de execução
 
+- **`/sql-lab`** — abre um DuckDB embutido e persistente em `.forge/sql/lab.duckdb`, sem instalar
+  executável, Docker ou servidor. O arquivo `.forge/sql/lab.sql` vira a bancada local. Leituras rodam
+  diretamente; escritas pedem confirmação; `DROP` e `TRUNCATE` continuam bloqueados.
+
 - **`/conexoes`** — *Fundamento:* lista as conexões de warehouse configuradas (`forge.warehouse.connections`). *Benefício:* você vê e escolhe onde rodar sem decorar IDs. *Exemplo:* `/conexoes` mostra `dw (readonly)`, `legado`, `bq`.
 
 - **Governança de execução por motor.** *Fundamento — o coração da segurança de dados:* quem decide se um SQL pode rodar **não é a IA nem um prompt**, é um **classificador determinístico** do próprio SQL. Regra: **leitura** (`SELECT`) roda automático; **escrita** (`INSERT`/`UPDATE`/`DELETE`/`MERGE`, e `SELECT … INTO`) só roda numa conexão marcada `readonly:false` **e** com confirmação num modal; **`DROP`/`TRUNCATE` são sempre bloqueados**. Funções voláteis (`setval`, `dblink`…) contam como escrita. *Benefício:* a IA (e você) podem sugerir e rodar SQL com a **garantia estrutural** de que nada destrói dados por acidente e de que uma conexão "somente-leitura" é realmente somente-leitura. *Exemplo:* numa conexão readonly, rodar um `.sql` com `DELETE FROM clientes …` devolve "⛔ A conexão é somente-leitura e a consulta contém escrita (DELETE)".
@@ -237,17 +252,43 @@ Este é o coração para times de dados. O FORGE conecta-se a warehouses, **anco
 
 ### 8.2 Grounding: a IA conhece o seu schema
 
+- **`/importar-schema [@arquivo]`** — extrai localmente tabelas, colunas, PKs, FKs, índices e comentários
+  de um DDL, sem executá-lo. O catálogo versionável `.forge/sql/catalog.json` é combinado com dbt e
+  snapshots de warehouse no grounding, na validação semântica e no tuning.
+
 - **`/schema-db [conexão]`** *(apelido `/schema-warehouse`)* — *Fundamento:* tira um **snapshot** do schema **real** do warehouse vivo (só metadados — tabela, coluna, tipo; **nenhuma linha de dado**) e o injeta como **grounding**. *Benefício:* a IA para de inventar colunas — passa a gerar SQL com os nomes exatos do seu Oracle/Postgres/BigQuery, e o FORGE **bloqueia** proposta que referencie coluna inexistente. *Exemplo:* `/schema-db dw` → "Schema indexado: 128 tabelas, 1.4k colunas"; depois, "gere um SELECT de pedidos por mês" usa as tabelas reais.
 
 - **Grounding dbt via manifest.** *Fundamento:* o `dbt` gera um `manifest.json` (o "mapa" do projeto: modelos, sources, colunas, dependências). O FORGE o lê automaticamente. *Benefício:* em qualquer projeto dbt, a IA conhece suas tabelas/colunas reais e sugere correções de digitação — e o grounding se atualiza sozinho a cada `dbt compile`. *Exemplo:* após `dbt compile`, pedir SQL no chat já usa os modelos reais; escrever `stg_ordrs` aciona o alerta "modelo `stg_ordrs` não existe — você quis dizer `stg_orders`?".
 
 ### 8.3 Ferramentas de dados (governadas)
 
+- **`/validar-sql [conexão]`**, **`/plano-sql [conexão]`** e **`/tunar-sql [conexão]`** — formam o
+  ciclo profissional de consulta: validação determinística de segurança, anti-padrões, schema e dialeto;
+  cockpit de `EXPLAIN`/dry-run no motor selecionado; e uma proposta `.tuned.sql` ancorada em evidências
+  estruturadas. O cockpit extrai custo, cardinalidade, bytes, buffers e operadores quando o banco os fornece,
+  destaca scans, joins cartesianos, spill, partições e erros de cardinalidade e preserva o hash do plano.
+  O DuckDB serve como laboratório local, mas o banco de destino continua autoritativo para tuning.
+
+- **`/analisar-sql [conexão]`** — obtém evidência **observada**. PostgreSQL e DuckDB usam
+  `EXPLAIN ANALYZE`, portanto executam a leitura; Oracle e BigQuery consultam o último cursor/job equivalente,
+  sem repetir a query. Sempre exige confirmação explícita e gera decisão de auditoria. Use depois da estimativa,
+  em ambiente e horário adequados.
+
+- **`/comparar-sql [conexão]`** — com um arquivo `consulta.tuned.sql` ativo, localiza `consulta.sql`, obtém
+  os dois planos estimados e mostra deltas de custo/bytes/buffers, hotspots resolvidos e introduzidos. A
+  comparação de planos não afirma equivalência semântica nem ganho real: valide resultados e use
+  `/analisar-sql` para confirmar desempenho observado.
+
 - **`/impacto [modelo]`** *(apelidos `/impact`, `/blast`)* — *Fundamento:* mostra o **raio de explosão** de mexer num modelo dbt: tudo que depende dele a jusante (downstream — modelos, testes, exposures), mais as origens diretas a montante (upstream). *Benefício:* antes de alterar, você sabe exatamente quantos modelos/testes/dashboards quebram e de onde cada coluna vem — decisão baseada em dados, não em fé. *Exemplo:* `/impacto stg_orders` → "Downstream direto: 4 · Transitivo: 17 nós (prof. 3) · Testes: 9 · Exposures: painel_vendas · Upstream: raw.orders".
 
 - **`/paridade tab_a tab_b`** *(apelidos `/parity`, `/data-diff`)* — *Fundamento:* compara duas tabelas por **agregados** (contagens, não-nulos, distintos) — um data-diff **compliance-safe**: nenhuma linha sai do banco, só estatísticas. *Benefício:* valida migração/reprocessamento ("as duas tabelas batem?") sem nunca extrair uma linha sensível, atendendo LGPD por construção. *Exemplo:* `/paridade legado:clientes novo:clientes` → "Iguais em 37 métricas ✅" ou uma tabela apontando `distintos.cpf: 10.000 vs 9.998`.
 
-- **`/custo [conexão]`** *(apelidos `/cost`, `/finops`)* — *Fundamento:* dois modos FinOps. Com um `.sql` **ativo**: prévia de custo **antes** de rodar (dry-run no BigQuery = bytes que seriam processados; `EXPLAIN` em outros). Sem arquivo: relatório das consultas/usuários que mais consomem na semana. *Benefício:* você evita rodar por engano uma query que escaneia terabytes, e enxerga onde o custo se concentra. *Exemplo:* com `relatorio.sql` aberto, `/custo bq` → "Prévia: 4.2 GB seriam processados (~US$ 0,02)". *(Atenção: este `/custo` é de query de dados, não de tokens de IA — para tokens use `/tokens`, §12.)*
+- **`/custo [conexão]`** *(apelidos `/cost`, `/finops`)* — *Fundamento:* dois modos FinOps. Com um `.sql`
+  **ativo**, abre o cockpit estimado antes de rodar (dry-run no BigQuery = bytes processados; `EXPLAIN` nos
+  demais). Sem arquivo, mostra as consultas/usuários que mais consomem na semana. *Benefício:* você evita
+  scans desnecessários e enxerga onde o consumo se concentra. O FORGE não converte bytes ou custo do
+  otimizador em moeda sem uma tabela de preços autoritativa. *(Este `/custo` é da query de dados; para tokens
+  de IA use `/tokens`, §12.)*
 
 - **`/auditoria-pii`** *(apelidos `/pii`, `/lgpd`)* — *Fundamento:* varre o schema **já indexado** (dbt + snapshots) procurando colunas com provável **dado pessoal**, pelo **nome** da coluna, contra um dicionário LGPD. 100% local, não lê valores. *Benefício:* mapa instantâneo de onde mora o dado pessoal no seu warehouse, para mascaramento, governança e resposta a auditoria — sem contratar ferramenta externa. *Exemplo:* após `/schema-db dw`, rode `/auditoria-pii` → "12 colunas com potencial PII em 128 tabelas" + tabela `clientes.cpf → documento (alta)`.
 
@@ -259,7 +300,10 @@ Este é o coração para times de dados. O FORGE conecta-se a warehouses, **anco
 
 - **Máscara + rowCap.** *Fundamento:* toda amostra de dados que vai ao chat é **limitada em linhas** (`rowCap`) **e mascarada**: valores com cara de dado pessoal (CPF/CNPJ, e-mail, telefone BR, cartão) viram `▇▇▇`. *Benefício:* você usa dados reais para depurar, mas CPF/e-mail/cartão nunca aparecem crus no chat nem viram parte do prompt — LGPD por construção. *Exemplo:* um `SELECT nome,email,cpf` retorna no cartão `João, ▇▇▇, ▇▇▇`, só as primeiras `rowCap` linhas.
 
-> **Importante (o que você precisa ter):** o FORGE **não embute drivers de banco** — cada tipo exige o **CLI correspondente no PATH** (Oracle: SQLcl; BigQuery: `gcloud`/`bq`; Postgres: `psql`…). A **autenticação é do CLI**, não da extensão (BigQuery usa o `gcloud auth` do dev; Oracle ADW exige `walletDir`). Em workspace **não-confiável**, as conexões são ignoradas até você confiar na pasta. `/paridade` e `/auditoria-pii` dependem de haver **schema indexado** (dbt ou `/schema-db`); `/impacto` e `/testes-dbt` dependem do `manifest.json` (rode `dbt parse/compile` antes).
+> **Importante (o que você precisa ter):** o SQL Lab já inclui o DuckDB no VSIX Windows x64. Bancos
+> externos continuam usando o CLI correspondente no PATH ou MCP (Oracle: SQLcl; BigQuery: `gcloud`/`bq`;
+> Postgres: `psql`…). A autenticação é do CLI, não da extensão. Em workspace não-confiável, execução e
+> importação local ficam bloqueadas. Veja o [guia e roadmap do SQL Lab](docs/SQL-LAB-E-ROADMAP.md).
 
 ---
 
@@ -389,7 +433,7 @@ O FORGE trata o seu código e os seus dados como soberanos. Estas são as defesa
 
 ## 14. Referência: configurações (settings)
 
-O FORGE expõe **58** chaves `forge.*` em `settings.json` (muitas são **managed settings** do admin). As principais:
+O FORGE expõe **59** chaves `forge.*` em `settings.json` (muitas são **managed settings** do admin). As principais:
 
 | Setting | Padrão | Descrição |
 |---|---|---|
@@ -402,7 +446,11 @@ O FORGE expõe **58** chaves `forge.*` em `settings.json` (muitas são **managed
 | `forge.egress.trustInNetwork` | `true` | Confia em loopback/LAN |
 | `forge.mcp.catalog` | `[]` | Catálogo de MCP servers |
 | `forge.validation.gateBlocksApply` | `true` | Gate reprovado bloqueia *Aplicar* |
+| `forge.env.prepareOnRun` | `ask` | Em Run Python com `requirements.txt` e sem venv: `ask`, `always` ou `never` |
 | `forge.warehouse.connections` | `[]` | Conexões de warehouse (SQL/dbt) |
+| `forge.sqlLab.enabled` | `true` | Habilita o DuckDB local embutido |
+| `forge.sqlLab.memoryLimit` / `.maxTempDirectorySize` / `.threads` | `1GB` / `2GB` / `2` | Limites do SQL Lab |
+| `forge.sql.dialect` | `auto` | Dialeto para validação e tuning |
 | `forge.rag.enabled` | `true` | Liga/desliga o RAG |
 | `forge.rag.embeddings.url` / `.model` / `.dimensions` | — | Embeddings in-network (Qwen3) |
 | `forge.rag.maxChunks` / `maxFileSizeKb` | `20` / — | Quantos trechos por geração / teto por arquivo |
@@ -437,7 +485,7 @@ Além da paleta `/` do chat, há **19** comandos na paleta do VS Code (`Ctrl+Shi
 | FORGE: Mostrar saída · Exportar diagnóstico | Log / bundle redigido |
 | FORGE: Configurar observabilidade | Guardar `secretKey` do Langfuse |
 | FORGE: Definir saída máxima | Teto de tokens de saída |
-| FORGE: Preparar ambiente | Diagnosticar/preparar deps (`/ambiente`) |
+| FORGE: Preparar ambiente | Criar `.venv` e instalar deps (`/ambiente`); o Run Python também oferece esse preparo |
 | FORGE: Definir papel no projeto | Escolher o papel do dev |
 | FORGE: Inspecionar índice | Abrir o visualizador do índice (`/indice`) |
 | FORGE: Abrir Perfil do projeto | Editar `.forge/project.md` (`/perfil`) |
@@ -457,7 +505,7 @@ Além da paleta `/` do chat, há **19** comandos na paleta do VS Code (`Ctrl+Shi
 
 <div align="center">
 
-**FORGE — Codegen Claro** · v2.10.2 · publisher `claro-data-platform` · VS Code ≥ 1.93
+**FORGE — Codegen Claro** · v2.12.0 · publisher `claro-data-platform` · VS Code ≥ 1.93
 Licença do produto: **Apache-2.0** ([LICENSE](LICENSE) · [NOTICE](NOTICE))
 
 Implementação independente e limpa, inspirada no Cline (Apache-2.0) e no padrão aberto Agent Skills, sem usar marca/código "Cline".

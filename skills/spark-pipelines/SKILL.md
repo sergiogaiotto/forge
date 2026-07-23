@@ -24,6 +24,16 @@ Senior-level guidance for writing and tuning PySpark pipelines (batch and struct
 streaming) using the DataFrame / Spark SQL API. The goal is correct, scalable code that
 minimizes shuffles, keeps work on the executors, and degrades gracefully under skew.
 
+## Choose the runtime lane first
+
+- Use `spark-connect-notebooks` for the modern notebook lane: remote Spark Connect,
+  Spark SQL and DataFrames, including clients that do not need a local JVM.
+- Use `spark-classic-rdd` for the advanced classic lane: Spark SQL and DataFrames plus
+  `SparkContext`, RDDs, pair RDDs, custom partitioning or direct JVM-dependent APIs.
+- Never emit `.rdd`, `SparkContext`, `_jdf` or `_jsc` for a Spark Connect session.
+- Do not silently replace Connect with a local classic session. State the runtime change
+  and its JVM/deployment requirements when the requested API forces the classic lane.
+
 ## Critical rules
 
 - **ALWAYS discover conventions first.** Read 2–3 existing jobs in the repo before writing one:

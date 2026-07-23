@@ -139,6 +139,15 @@ test("exactSlashCommand: só o comando NU e exato executa — cauda é mensagem 
   assert.equal(exactSlashCommand("/limpar\ndepois analise o log"), undefined);
 });
 
+test("/notebook, /venv e /readme são comandos distintos de preparar ambiente", () => {
+  assert.equal(exactSlashCommand("/ambiente")?.id, "ambiente");
+  assert.equal(exactSlashCommand("/notebook")?.id, "notebook");
+  assert.equal(exactSlashCommand("/jupyter")?.id, "notebook");
+  assert.equal(exactSlashCommand("/venv")?.id, "venv");
+  assert.equal(exactSlashCommand("/activate-venv")?.id, "venv");
+  assert.equal(exactSlashCommand("/readme")?.id, "readme");
+});
+
 const REPORT: ContextReport = {
   modelId: "openai/gpt-oss-120b",
   contextWindow: 131072,
@@ -303,6 +312,14 @@ test("/impacto, /traduzir-sql e /testes-dbt: registrados, com cauda como argumen
   // aliases
   assert.equal(exactSlashCommand("/impact")?.id, "impacto");
   assert.equal(exactSlashCommand("/dbt-tests")?.id, "testes-dbt");
+});
+
+test("cockpit SQL: plano, análise observada e comparação aceitam conexão opcional", () => {
+  assert.equal(exactSlashCommand("/plano-sql")?.id, "plano-sql");
+  assert.equal(exactSlashCommand("/analisar-sql")?.id, "analisar-sql");
+  assert.equal(exactSlashCommand("/comparar-sql")?.id, "comparar-sql");
+  assert.equal(slashWithArgs("/analisar-sql dw")?.args, "dw");
+  assert.equal(slashWithArgs("/compare-sql pg")?.cmd.id, "comparar-sql");
 });
 
 test("buildSqlTranslateRequest: preservação semântica, sufixo do dialeto e forge-file único", () => {

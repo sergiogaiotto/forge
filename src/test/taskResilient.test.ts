@@ -543,6 +543,47 @@ test("partialFilePath: truncamento mascarado por BARE_FENCE_TAIL (último bloco 
   assert.equal(partialFilePath(true, c, MASKED_TRUNC), "README.md");
 });
 
+test("partialFilePath: código aberto com 5 crases e fechado com 4 é recuperado como completo (caso Doom)", () => {
+  const text = [
+    "`````forge-file path=doom_clone/main.py",
+    "import sys",
+    "",
+    "def main():",
+    "    sys.exit(0)",
+    "````",
+    "",
+    "Próximos passos em prosa fora do arquivo.",
+  ].join("\n");
+  const c = checkCompleteness(text);
+  assert.equal(c.complete, true, "5→4 em arquivo de código deve ser fechamento recuperável, não cerca-aberta");
+  assert.equal(partialFilePath(true, c, text), undefined, "o arquivo recuperado fechado não é parcial");
+});
+
+test("partialFilePath: código 5→4 no EOF também é tratado como fechado", () => {
+  const text = ["`````forge-file path=doom_clone/main.py", "import sys", "````"].join("\n");
+  const c = checkCompleteness(text);
+  assert.equal(c.complete, true);
+  assert.equal(partialFilePath(true, c, text), undefined);
+});
+
+test("resilientGenerate: 5→4 em arquivo de código não dispara continuação falsa", async () => {
+  const text = [
+    "`````forge-file path=doom_clone/main.py",
+    "import sys",
+    "",
+    "def main():",
+    "    sys.exit(0)",
+    "````",
+    "",
+    "Próximos passos em prosa fora do arquivo.",
+  ].join("\n");
+  const s = scripted([{ text }]);
+  const r = await resilientGenerate(base, s.fn, opts);
+  assert.equal(r.truncated, false);
+  assert.equal(r.attempts, 0);
+  assert.equal(r.completeness.complete, true);
+});
+
 test("cenário do README ponta-a-ponta: 1 arquivo FECHADO com corte do provider → truncado mas NÃO parcial", async () => {
   const s = scripted([{ text: FENCE + "forge-file path=README.md\n# Projeto\nrodar: `python -m app`\n" + FENCE + "\n", truncated: true }]);
   const r = await resilientGenerate(base, s.fn, opts);

@@ -1,4 +1,4 @@
-import React, { useEffect, useReducer } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
 import { DevPanel } from "./components/DevPanel";
 import { Onboarding } from "./components/Onboarding";
 import { Icon } from "./icons";
@@ -9,6 +9,8 @@ import type { ExtToWebview } from "./vscode";
 
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [showProviderSetup, setShowProviderSetup] = useState(false);
+  const lastProviderPanelSeq = useRef(0);
 
   useEffect(() => {
     const handler = (event: MessageEvent<ExtToWebview>) => dispatch({ kind: "ext", msg: event.data });
@@ -25,6 +27,14 @@ export function App(): JSX.Element {
   }, [state.toast?.seq]);
 
   const forge = state.forge;
+  useEffect(() => {
+    const req = forge?.uiPanel;
+    if (!req || req.panel !== "provider" || req.seq <= lastProviderPanelSeq.current) return;
+    lastProviderPanelSeq.current = req.seq;
+    setShowProviderSetup(true);
+    post({ type: "ui/panelConsumed" });
+  }, [forge?.uiPanel]);
+
   if (!forge) {
     return (
       <div className="app">
@@ -36,12 +46,12 @@ export function App(): JSX.Element {
     );
   }
 
-  const showOnboarding = forge.stage === "onboarding-license" || forge.stage === "onboarding-provider";
+  const showOnboarding = forge.stage === "onboarding-license" || forge.stage === "onboarding-provider" || showProviderSetup;
 
   return (
     <div className="app">
       {showOnboarding ? (
-        <Onboarding state={state} dispatch={dispatch} />
+        <Onboarding state={state} dispatch={dispatch} onProviderConfigured={() => setShowProviderSetup(false)} />
       ) : (
         <DevPanel state={state} dispatch={dispatch} />
       )}

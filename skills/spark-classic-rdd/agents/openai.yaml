@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spark Classic SQL e RDD"
+  short_description: "Spark SQL, DataFrames e RDD avançado"
+  default_prompt: "Use $spark-classic-rdd para implementar um fluxo avançado com Spark SQL e RDD no Spark clássico."

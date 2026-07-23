@@ -2,7 +2,7 @@
   "name": "forge",
   "displayName": "FORGE — Codegen Claro",
   "description": "%ext.description%",
-  "version": "2.10.2",
+  "version": "2.15.0",
   "publisher": "claro-data-platform",
   "license": "Apache-2.0",
   "icon": "media/forge-icon.png",
@@ -173,6 +173,42 @@
         "icon": "$(plug)"
       },
       {
+        "command": "forge.prepareNotebook",
+        "title": "%cmd.prepareNotebook%",
+        "category": "FORGE",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "forge.activateVenv",
+        "title": "%cmd.activateVenv%",
+        "category": "FORGE",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "forge.diagnosePythonEnv",
+        "title": "%cmd.diagnosePythonEnv%",
+        "category": "FORGE",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "forge.generateReadme",
+        "title": "%cmd.generateReadme%",
+        "category": "FORGE",
+        "icon": "$(book)"
+      },
+      {
+        "command": "forge.createEnvExample",
+        "title": "%cmd.createEnvExample%",
+        "category": "FORGE",
+        "icon": "$(symbol-variable)"
+      },
+      {
+        "command": "forge.updateGitignore",
+        "title": "%cmd.updateGitignore%",
+        "category": "FORGE",
+        "icon": "$(exclude)"
+      },
+      {
         "command": "forge.pickRole",
         "title": "%cmd.pickRole%",
         "category": "FORGE",
@@ -189,6 +225,48 @@
         "title": "%cmd.openProfile%",
         "category": "FORGE",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "forge.openSqlLab",
+        "title": "%cmd.openSqlLab%",
+        "category": "FORGE",
+        "icon": "$(database)"
+      },
+      {
+        "command": "forge.importSqlSchema",
+        "title": "%cmd.importSqlSchema%",
+        "category": "FORGE",
+        "icon": "$(database)"
+      },
+      {
+        "command": "forge.validateSql",
+        "title": "%cmd.validateSql%",
+        "category": "FORGE",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "forge.explainSql",
+        "title": "%cmd.explainSql%",
+        "category": "FORGE",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "forge.analyzeSql",
+        "title": "%cmd.analyzeSql%",
+        "category": "FORGE",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "forge.compareSql",
+        "title": "%cmd.compareSql%",
+        "category": "FORGE",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "forge.tuneSql",
+        "title": "%cmd.tuneSql%",
+        "category": "FORGE",
+        "icon": "$(wrench)"
       }
     ],
     "menus": {
@@ -401,6 +479,51 @@
           "default": 60,
           "markdownDescription": "%config.warehouse.timeoutSeconds.md%"
         },
+        "forge.sqlLab.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.sqlLab.enabled.md%"
+        },
+        "forge.sqlLab.memoryLimit": {
+          "type": "string",
+          "default": "1GB",
+          "markdownDescription": "%config.sqlLab.memoryLimit.md%"
+        },
+        "forge.sqlLab.maxTempDirectorySize": {
+          "type": "string",
+          "default": "2GB",
+          "markdownDescription": "%config.sqlLab.maxTempDirectorySize.md%"
+        },
+        "forge.sqlLab.threads": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 8,
+          "markdownDescription": "%config.sqlLab.threads.md%"
+        },
+        "forge.sql.dialect": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "ansi",
+            "postgres",
+            "mysql",
+            "bigquery",
+            "snowflake",
+            "redshift",
+            "oracle",
+            "sqlserver",
+            "tsql",
+            "spark",
+            "databricks",
+            "duckdb",
+            "trino",
+            "hive",
+            "sqlite"
+          ],
+          "default": "auto",
+          "markdownDescription": "%config.sql.dialect.md%"
+        },
         "forge.project.reconcileDependencies": {
           "type": "boolean",
           "default": true,
@@ -531,6 +654,21 @@
           "type": "number",
           "default": 900,
           "markdownDescription": "%config.env.timeoutSeconds.md%"
+        },
+        "forge.env.prepareOnRun": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "always",
+            "never"
+          ],
+          "enumDescriptions": [
+            "%config.env.prepareOnRun.enum.ask%",
+            "%config.env.prepareOnRun.enum.always%",
+            "%config.env.prepareOnRun.enum.never%"
+          ],
+          "default": "ask",
+          "markdownDescription": "%config.env.prepareOnRun.md%"
         },
         "forge.run.commands": {
           "type": "object",
@@ -663,6 +801,7 @@
     }
   },
   "dependencies": {
+    "@duckdb/node-api": "^1.5.5-r.1",
     "js-yaml": "^4.1.0"
   },
   "scripts": {
@@ -672,14 +811,14 @@
     "watch:ext": "node esbuild.mjs --watch",
     "watch:webview": "vite build --watch",
     "typecheck": "tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.webview.json --noEmit",
-    "test": "tsx --test src/test/*.test.ts",
+    "test": "node ci/run-tests.mjs",
     "keygen": "node admin-cli/forge-admin.mjs keygen",
     "keygen:build-exe": "node admin-cli/build-exe.mjs",
     "license:issue": "node admin-cli/forge-admin.mjs issue",
     "license:revoke": "node admin-cli/forge-admin.mjs revoke",
     "sign:vsix": "node admin-cli/forge-admin.mjs sign-vsix",
     "verify:vsix": "node admin-cli/forge-admin.mjs verify-vsix",
-    "package": "npm run build && vsce package --allow-missing-repository --skip-license --baseContentUrl https://git.interno.claro.com.br/data-platform/forge/-/blob/main --baseImagesUrl https://git.interno.claro.com.br/data-platform/forge/-/raw/main",
+    "package": "npm run build && vsce package --target win32-x64 --allow-missing-repository --skip-license --baseContentUrl https://git.interno.claro.com.br/data-platform/forge/-/blob/main --baseImagesUrl https://git.interno.claro.com.br/data-platform/forge/-/raw/main",
     "publish:vsce": "vsce publish",
     "publish:ovsx": "ovsx publish",
     "vscode:prepublish": "npm run build"

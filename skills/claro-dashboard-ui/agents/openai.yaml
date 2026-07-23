@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claro Dashboard UI"
+  short_description: "Dashboards Claro ricos, variados e data-first"
+  default_prompt: "Use $claro-dashboard-ui para transformar meus dados em um dashboard funcional, responsivo e fiel à identidade Claro."

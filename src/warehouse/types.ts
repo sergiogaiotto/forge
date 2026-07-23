@@ -7,6 +7,10 @@
 export type WarehouseKind = "oracle" | "postgres" | "bigquery" | "duckdb" | "s3" | "oci-os";
 
 export interface WarehouseConnection {
+  runtime?: "auto" | "embedded" | "cli";
+  dialect?: string;
+  version?: string;
+  managedLocal?: boolean;
   id: string; // referência nos comandos (/executar-sql <id>) e no SecretStorage
   label?: string;
   kind: WarehouseKind;
@@ -35,6 +39,12 @@ export interface WarehouseSettings {
   defaultId: string; // conexão usada quando o comando não nomeia uma
   rowCap: number; // linhas máximas exibidas/retornadas de um SELECT (LGPD: amostra, nunca o dataset)
   timeoutSeconds: number;
+  localLab: {
+    enabled: boolean;
+    memoryLimit: string;
+    maxTempDirectorySize: string;
+    threads: number;
+  };
 }
 
 export interface SqlRunResult {

@@ -259,13 +259,23 @@ não estiverem instaladas, aparece "indisponível" — e isso **não** te impede
 
 ### Notebooks Jupyter (.ipynb) — célula a célula
 Com um notebook aberto, o FORGE edita **por célula**, sem reescrever o arquivo:
+- Ele propõe células de **Markdown documentado** e células de **código** com linguagem e tags. Para
+  substituições, usa primeiro o ID estável da célula e só usa o índice como compatibilidade.
 - Ele propõe **inserir** uma célula nova ou **substituir** uma célula específica — você aplica com
   **Inserir célula** / **Substituir célula [N]**, e o resto do notebook (outras células, saídas) fica intacto.
 - Depois de aplicar, clique em **Executar célula**: o FORGE roda aquela célula (usando o kernel do
   notebook), **captura a saída**; se der erro, aparece **"Corrigir com FORGE"** para ajustar e rodar de novo.
 - Também funciona em `.py` com marcadores `# %%`.
 
-> Precisa de um kernel Python ativo (a extensão Jupyter/Python do VSCode fornece) para executar as células.
+Use `/notebook` ou **FORGE: Preparar kernel Jupyter do projeto**. O FORGE cria/reutiliza `.venv`,
+instala `ipykernel` somente nesse ambiente, configura o interpretador do workspace, verifica as extensões
+Python/Jupyter e abre o seletor de kernel. No primeiro **Executar célula**, esse preflight também é oferecido
+automaticamente. Instalações continuam explícitas e respeitam a política de rede da empresa.
+
+Para Spark, há duas trilhas separadas:
+- **Spark Connect:** notebook moderno e remoto com Spark SQL/DataFrames, sem exigir JVM local e sem APIs RDD.
+- **Spark Classic avançado:** Spark SQL/DataFrames combinados com `SparkContext` e RDD quando há justificativa
+  técnica, com particionamento, lineage, serialização e retries revisados.
 
 ### Ferramentas internas (MCP)
 Se o admin tiver habilitado, o FORGE pode usar ferramentas da empresa (por exemplo, consultar um
@@ -320,6 +330,9 @@ Tecle `Ctrl+Shift+P` (abre a "paleta de comandos"), digite **"FORGE"** e escolha
 | **FORGE: Ativar licença** | reabre a tela de licença |
 | **FORGE: Configurar provedor** | troca a IA / ajusta o provedor |
 | **FORGE: Executar arquivo atual** | roda o arquivo aberto e mostra a saída |
+| **FORGE: Preparar kernel Jupyter do projeto** | cria/reutiliza `.venv`, instala `ipykernel` e abre o seletor |
+| **FORGE: Analisar SQL com métricas observadas** | mede a query ativa após sua confirmação |
+| **FORGE: Comparar planos SQL original e otimizado** | compara o `.tuned.sql` ativo com o original |
 | **FORGE: Rodar testes (pytest)** | roda a suíte de testes e mostra o resultado |
 | **FORGE: Revisar alterações** | revisão por IA (interna) do seu `git diff` |
 | **FORGE: Reindexar codebase (RAG)** | relê o projeto para a busca |
@@ -329,7 +342,22 @@ Tecle `Ctrl+Shift+P` (abre a "paleta de comandos"), digite **"FORGE"** e escolha
 
 ### Comandos "/" no chat (digite `/` para ver a paleta)
 
-Além dos comandos de dados (`/conexoes`, `/executar-sql`…), o FORGE tem **git governado** direto no chat:
+Os principais comandos de dados e tuning são:
+
+| Comando | O que faz |
+|---|---|
+| `/plano-sql [conexão]` | estima custo, cardinalidade e hotspots sem medir a execução real |
+| `/tunar-sql [conexão]` | cria uma proposta `.tuned.sql` baseada no plano e no schema |
+| `/comparar-sql [conexão]` | compara planos estimados do `.tuned.sql` ativo e do original |
+| `/analisar-sql [conexão]` | coleta métricas observadas após confirmação auditada |
+| `/custo [conexão]` | abre o cockpit estimado ou, sem SQL ativo, o relatório FinOps semanal |
+
+Comece por `/plano-sql`. Em PostgreSQL e DuckDB, `/analisar-sql` executa a leitura via
+`EXPLAIN ANALYZE`; em Oracle e BigQuery ele procura a última execução equivalente no histórico. O FORGE
+sempre pede confirmação porque a medição ou a leitura de metadados pode consumir recursos. Um plano com
+custo menor não prova que os resultados são iguais; valide a consulta antes de substituir o original.
+
+O FORGE também tem **git governado** direto no chat:
 
 | Comando | O que faz |
 |---|---|

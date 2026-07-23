@@ -14,6 +14,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const controller = new Controller(context);
   const provider = new ForgeViewProvider(context, controller);
+  context.subscriptions.push({ dispose: () => void controller.dispose() });
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ForgeViewProvider.viewId, provider, {
@@ -36,7 +37,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await focusView();
     }),
     vscode.commands.registerCommand("forge.activateLicense", focusView),
-    vscode.commands.registerCommand("forge.setupProvider", focusView),
+    vscode.commands.registerCommand("forge.setupProvider", async () => {
+      await focusView();
+      controller.openWebviewPanel("provider");
+    }),
     vscode.commands.registerCommand("forge.reindexSkills", async () => {
       await controller.reindexSkills();
       await controller.postState();
@@ -75,6 +79,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await focusView();
       await controller.prepareEnv();
     }),
+    vscode.commands.registerCommand("forge.prepareNotebook", async () => {
+      await focusView();
+      await controller.prepareNotebookKernel();
+    }),
+    vscode.commands.registerCommand("forge.activateVenv", async () => {
+      await controller.activateVenv();
+    }),
+    vscode.commands.registerCommand("forge.diagnosePythonEnv", async () => {
+      await focusView();
+      await controller.diagnosePythonEnv();
+    }),
+    vscode.commands.registerCommand("forge.generateReadme", async () => {
+      await focusView();
+      await controller.generateReadme();
+    }),
+    vscode.commands.registerCommand("forge.createEnvExample", async () => {
+      await controller.createEnvExample();
+    }),
+    vscode.commands.registerCommand("forge.updateGitignore", async () => {
+      await controller.updateGitignore();
+    }),
     vscode.commands.registerCommand("forge.pickRole", async () => {
       await focusView();
       await controller.pickProjectRole();
@@ -86,6 +111,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("forge.openProfile", async () => {
       await focusView();
       controller.openWebviewPanel("profile");
+    }),
+    vscode.commands.registerCommand("forge.openSqlLab", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("sql-lab");
+    }),
+    vscode.commands.registerCommand("forge.importSqlSchema", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("importar-schema");
+    }),
+    vscode.commands.registerCommand("forge.validateSql", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("validar-sql");
+    }),
+    vscode.commands.registerCommand("forge.explainSql", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("plano-sql");
+    }),
+    vscode.commands.registerCommand("forge.analyzeSql", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("analisar-sql");
+    }),
+    vscode.commands.registerCommand("forge.compareSql", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("comparar-sql");
+    }),
+    vscode.commands.registerCommand("forge.tuneSql", async () => {
+      await focusView();
+      await controller.runDataCommandFromPalette("tunar-sql");
     })
   );
 

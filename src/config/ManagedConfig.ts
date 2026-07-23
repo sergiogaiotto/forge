@@ -3,6 +3,8 @@ import { EgressPolicy } from "../net/EgressEnforcer";
 import { McpServerEntry } from "../mcp/types";
 import { CaptureMode, ObsConfig, resolveObsMode } from "../obs/types";
 import { sanitizePricing } from "../api/pricing";
+import { PrepareOnRunPolicy } from "../util/pythonEnv";
+import { WarehouseConnection, WarehouseSettings } from "../warehouse/types";
 
 export interface RagConfig {
   enabled: boolean;
@@ -13,6 +15,15 @@ export interface RagConfig {
   maxFileSizeKb: number;
   include: string[];
   exclude: string[];
+}
+
+function duckDbSize(value: string, fallback: string, maxGb: number): string {
+  const match = /^(\d+(?:\.\d+)?)\s*(KB|MB|GB)$/i.exec(value.trim());
+  if (!match) return fallback;
+  const amount = Number(match[1]);
+  const unit = match[2].toUpperCase();
+  const gb = unit === "GB" ? amount : unit === "MB" ? amount / 1024 : amount / (1024 * 1024);
+  return Number.isFinite(amount) && amount > 0 && gb <= maxGb ? `${amount}${unit}` : fallback;
 }
 
 // Lê as configurações `forge.*` gerenciadas pelo admin. Em uma implantação real elas são
@@ -117,11 +128,11 @@ export class ManagedConfig {
 
   // Conexões de warehouse (Onda 3): caminho tradicional (CLIs do dev: SQLcl/sqlplus, psql, bq,
   // duckdb, aws/oci) e/ou MCP. Senhas NUNCA aqui — SecretStorage (pedidas no primeiro uso).
-  warehouse(): { connections: import("../warehouse/types").WarehouseConnection[]; defaultId: string; rowCap: number; timeoutSeconds: number } {
+  warehouse(): WarehouseSettings {
     const c = this.cfg();
     const raw = c.get<unknown[]>("warehouse.connections", []);
     const connections = (Array.isArray(raw) ? raw : []).filter(
-      (x): x is import("../warehouse/types").WarehouseConnection =>
+      (x): x is WarehouseConnection =>
         !!x && typeof x === "object" && typeof (x as { id?: unknown }).id === "string" && typeof (x as { kind?: unknown }).kind === "string"
     );
     return {
@@ -129,7 +140,17 @@ export class ManagedConfig {
       defaultId: c.get<string>("warehouse.default", "").trim(),
       rowCap: Math.max(1, Math.min(500, c.get<number>("warehouse.rowCap", 50))),
       timeoutSeconds: Math.max(5, c.get<number>("warehouse.timeoutSeconds", 60)),
+      localLab: {
+        enabled: c.get<boolean>("sqlLab.enabled", true),
+        memoryLimit: duckDbSize(c.get<string>("sqlLab.memoryLimit", "1GB"), "1GB", 8),
+        maxTempDirectorySize: duckDbSize(c.get<string>("sqlLab.maxTempDirectorySize", "2GB"), "2GB", 50),
+        threads: Math.max(1, Math.min(8, c.get<number>("sqlLab.threads", 2))),
+      },
     };
+  }
+
+  sqlDialect(): string {
+    return this.cfg().get<string>("sql.dialect", "auto").trim().toLowerCase() || "auto";
   }
 
   // Gate SQL (dados, Onda 1): o motor determinístico in-process analisa propostas .sql. "conservative"
@@ -206,8 +227,13 @@ export class ManagedConfig {
   // Timeout PRÓPRIO do "Preparar ambiente" (venv + pip install): instalar pacotes pesados
   // (scikit-learn, pyspark…) num cache frio passa fácil dos 120s do run — matar o pip no meio
   // deixa o venv meio-populado e o dev num loop de reexecutar/falhar.
-  env(): { timeoutSeconds: number } {
-    return { timeoutSeconds: this.cfg().get<number>("env.timeoutSeconds", 900) };
+  env(): { timeoutSeconds: number; prepareOnRun: PrepareOnRunPolicy } {
+    const c = this.cfg();
+    const raw = c.get<string>("env.prepareOnRun", "ask");
+    return {
+      timeoutSeconds: c.get<number>("env.timeoutSeconds", 900),
+      prepareOnRun: raw === "always" || raw === "never" ? raw : "ask",
+    };
   }
 
   test(): { enabled: boolean; command: string; autoInstall: boolean } {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderPreset, ProviderSetup, ProviderType } from "../../../src/shared/protocol";
 import { Icon, IconName } from "../icons";
 import { t } from "../i18n";
@@ -20,39 +20,85 @@ function fmtExpiry(unix?: number): string {
   }
 }
 
-export function Onboarding({ state, dispatch }: { state: UIState; dispatch: React.Dispatch<Action> }): JSX.Element {
+export function Onboarding({
+  state,
+  dispatch,
+  onProviderConfigured,
+}: {
+  state: UIState;
+  dispatch: React.Dispatch<Action>;
+  onProviderConfigured?: () => void;
+}): JSX.Element {
   const forge = state.forge!;
   const licenseActive = forge.license.active;
   const [licenseKey, setLicenseKey] = useState("");
   const [email, setEmail] = useState("");
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const presets = forge.presets;
-  const [presetId, setPresetId] = useState<string>(presets.find((p) => p.id === "hubgpu-120b")?.id ?? presets[0]?.id ?? "");
+  const initialPresetId =
+    (forge.provider.configured
+      ? presets.find(
+          (p) =>
+            p.type === forge.provider.type &&
+            p.modelId === forge.provider.modelId &&
+            (p.baseUrl ?? "") === (forge.provider.baseUrl ?? "")
+        )?.id ?? presets.find((p) => p.type === forge.provider.type)?.id
+      : undefined) ??
+    presets.find((p) => p.id === "hubgpu-120b")?.id ??
+    presets[0]?.id ??
+    "";
+  const [presetId, setPresetId] = useState<string>(initialPresetId);
   const preset: ProviderPreset | undefined = useMemo(() => presets.find((p) => p.id === presetId), [presets, presetId]);
 
-  const [baseUrl, setBaseUrl] = useState(preset?.baseUrl ?? "");
-  const [modelId, setModelId] = useState(preset?.modelId ?? "");
+  const [baseUrl, setBaseUrl] = useState(forge.provider.baseUrl ?? preset?.baseUrl ?? "");
+  const [modelId, setModelId] = useState(forge.provider.modelId ?? preset?.modelId ?? "");
   const [apiKey, setApiKey] = useState(preset?.apiKeyDefault ?? "");
-  const [timeout, setTimeoutS] = useState(300);
+  const [timeout, setTimeoutS] = useState(forge.provider.timeoutSeconds ?? 300);
+  const didInitPreset = useRef(false);
 
   useEffect(() => {
     if (!preset) return;
+    if (!didInitPreset.current) {
+      didInitPreset.current = true;
+      return;
+    }
     setBaseUrl(preset.baseUrl ?? "");
     setModelId(preset.modelId);
     setApiKey(preset.apiKeyDefault ?? "");
   }, [presetId]);
 
-  const buildSetup = (): ProviderSetup => ({
-    type: (preset?.type ?? "openai-compatible") as ProviderType,
-    modelId,
-    baseUrl: preset?.type === "anthropic" ? undefined : baseUrl,
-    apiKey,
-    timeoutSeconds: timeout,
-  });
+  const providerType = (preset?.type ?? "openai-compatible") as ProviderType;
+  const apiKeyNotNeeded = preset?.apiKeyDefault === "not-needed";
+  const apiKeyRequired = !apiKeyNotNeeded;
+  const canReuseSavedApiKey =
+    apiKeyRequired &&
+    forge.provider.configured &&
+    !!forge.provider.apiKeyConfigured &&
+    forge.provider.type === providerType &&
+    forge.provider.modelId === modelId.trim() &&
+    (forge.provider.baseUrl ?? "") === (providerType === "anthropic" ? "" : baseUrl.trim());
+  const missingApiKey = apiKeyRequired && !apiKey.trim() && !canReuseSavedApiKey;
+  const missingModel = !modelId.trim();
+
+  const buildSetup = (): ProviderSetup => {
+    const key = apiKey.trim();
+    return {
+      type: providerType,
+      modelId: modelId.trim(),
+      baseUrl: providerType === "anthropic" ? undefined : baseUrl.trim(),
+      apiKey: key ? key : apiKeyNotNeeded ? "not-needed" : undefined,
+      timeoutSeconds: Number.isFinite(timeout) && timeout > 0 ? timeout : 300,
+    };
+  };
 
   const submitLicense = () => {
     if (licenseKey.trim()) post({ type: "license/submit", key: licenseKey.trim() });
   };
+  const providerActionTitle = forge.identity.emailRequired
+    ? t("ob.provider.finishTitleEmail")
+    : missingApiKey
+      ? t("ob.provider.finishTitleApiKey")
+      : t("ob.provider.finishTitle");
 
   return (
     <div className="ob">
@@ -185,8 +231,21 @@ export function Onboarding({ state, dispatch }: { state: UIState; dispatch: Reac
               </div>
             </div>
             <div>
-              <div className="label">{t("ob.field.apiKey")}</div>
-              <input className="field" style={{ color: "#8b8b8b" }} value={apiKey} onChange={(e) => setApiKey(e.target.value)} spellCheck={false} />
+              <div className="label">
+                {t("ob.field.apiKey")}
+                {apiKeyRequired ? " *" : ""}
+              </div>
+              <input
+                className="field"
+                type={apiKeyNotNeeded ? "text" : "password"}
+                style={{ color: apiKeyNotNeeded ? "#8b8b8b" : "#9cdcfe" }}
+                value={apiKey}
+                placeholder={canReuseSavedApiKey ? t("ob.field.apiKeySavedPlaceholder") : apiKeyNotNeeded ? "not-needed" : "sk-..."}
+                onChange={(e) => setApiKey(e.target.value)}
+                readOnly={apiKeyNotNeeded}
+                autoComplete="off"
+                spellCheck={false}
+              />
               {preset?.note && (
                 <div className="muted-note">
                   <Icon name="info-circle" size={12} /> {preset.note}
@@ -211,15 +270,20 @@ export function Onboarding({ state, dispatch }: { state: UIState; dispatch: Reac
                 dispatch({ kind: "providerTestPending" });
                 post({ type: "provider/test", setup: buildSetup() });
               }}
+              disabled={missingModel || missingApiKey}
+              title={providerActionTitle}
             >
               <Icon name={state.providerTest?.pending ? "refresh" : "plug"} size={13} className={state.providerTest?.pending ? "spin" : ""} />{" "}
               {t("ob.provider.test")}
             </button>
             <button
               className="btn p"
-              onClick={() => post({ type: "provider/setup", setup: buildSetup() })}
-              disabled={!modelId.trim() || forge.identity.emailRequired}
-              title={forge.identity.emailRequired ? t("ob.provider.finishTitleEmail") : t("ob.provider.finishTitle")}
+              onClick={() => {
+                post({ type: "provider/setup", setup: buildSetup() });
+                onProviderConfigured?.();
+              }}
+              disabled={missingModel || missingApiKey || forge.identity.emailRequired}
+              title={providerActionTitle}
             >
               <Icon name="check" size={13} /> {t("ob.provider.finish")}
             </button>

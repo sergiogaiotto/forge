@@ -100,7 +100,9 @@ export type HostMessageKey =
   | "notice.codeBlock.needReply"
   | "notice.cell.openFailed"
   | "notice.cell.applyFailed"
+  | "notice.cell.changed"
   | "notice.cell.applyFirst"
+  | "notice.cell.markdownNoRun"
   | "notice.cell.runFailed"
   // Licença/provedor/e-mail/contexto
   | "notice.license.noPubkey"
@@ -159,7 +161,31 @@ export type HostMessageKey =
   | "notice.env.pyprojectNoBuild"
   | "notice.env.reqGenerated"
   | "notice.env.noDeps"
+  | "notice.env.activated"
+  | "notice.notebook.prepared"
+  | "notice.notebook.extensionMissing"
+  | "notice.notebook.installFailed"
+  | "notice.notebook.ipykernelFailed"
+  | "notice.notebook.selectKernelFailed"
+  | "notice.workspace.trustRequired"
+  | "dialog.env.activateMissing"
+  | "dialog.env.prepareBtn"
+  | "dialog.notebook.prepareForRun"
+  | "dialog.notebook.prepareBtn"
+  | "dialog.notebook.installExtensions"
+  | "dialog.notebook.installBtn"
+  | "dialog.workspace.pickProject"
+  | "notice.readme.generating"
+  | "notice.envExample.none"
+  | "notice.envExample.unchanged"
+  | "notice.envExample.updated"
+  | "notice.gitignore.unchanged"
+  | "notice.gitignore.updated"
+  | "notice.artifact.failed"
+  | "notice.artifact.notUtf8"
   | "run.label.env"
+  | "run.label.envDiagnostics"
+  | "run.label.ipykernelInstall"
   | "run.label.pytestInstall"
   | "run.label.gateMypy"
   | "run.label.gateBandit"
@@ -238,9 +264,14 @@ export type HostMessageKey =
   | "dialog.search.placeholder"
   | "dialog.attach.placeholder"
   | "dialog.run.openFile"
+  | "dialog.env.prepareForRun"
+  | "dialog.env.prepareAndRun"
+  | "dialog.env.runWithoutPrepare"
   | "dialog.pytest.installVenv"
   | "dialog.pytest.createVenv"
   | "dialog.pytest.installBtn"
+  | "dialog.sqlAnalyze.confirm"
+  | "dialog.sqlAnalyze.confirmBtn"
   | "dialog.cancel"
   | "dialog.deps.detected"
   | "dialog.deps.addBtn"
@@ -314,6 +345,9 @@ export type HostMessageKey =
   | "wh.err.costSingle"
   | "wh.err.costSingleShort"
   | "wh.err.costUnavailable"
+  | "wh.err.observedSingle"
+  | "wh.err.observedUnavailable"
+  | "wh.err.observedReadonly"
   | "wh.result.noOutput"
   | "wh.result.capped"
   | "wh.result.masked"
@@ -531,7 +565,9 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.codeBlock.needReply": "Gere uma resposta antes de salvar um trecho como arquivo.",
     "notice.cell.openFailed": "Não foi possível abrir o notebook: {error}",
     "notice.cell.applyFailed": "Falha ao aplicar a célula no notebook.",
+    "notice.cell.changed": "A célula mudou desde a proposta. Não sobrescrevi seu trabalho; peça para o FORGE regenerar usando o notebook atual.",
     "notice.cell.applyFirst": "Aplique a célula antes de executá-la.",
+    "notice.cell.markdownNoRun": "Célula Markdown aplicada. Ela documenta o notebook e não precisa de execução.",
     "notice.cell.runFailed": "Falha ao executar a célula (kernel disponível?): {error}",
     "notice.license.noPubkey": "Chave pública de licença não embutida. Rode `npm run keygen` (admin) antes de validar licenças.",
     "notice.license.refused": "Licença recusada: {error}",
@@ -579,14 +615,38 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.tests.runDisabled": "pytest ausente e a execução de comandos está desabilitada (forge.run.enabled) — instale manualmente no venv.",
     "notice.tests.cancelled": "Testes cancelados: pytest ausente no ambiente.",
     "notice.tests.busyLater": "Há uma execução em andamento — rode os testes de novo quando ela terminar.",
-    "notice.env.venvFailed": "Não consegui criar o venv — veja o cartão 'ambiente'.",
+    "notice.env.venvFailed": "Não consegui preparar o .venv — veja o cartão 'ambiente'.",
     "notice.tests.installNotStarted": "A instalação do pytest não iniciou (há uma execução em andamento ou a execução está desabilitada). Tente de novo.",
     "notice.tests.installFailed": "A instalação do pytest falhou — veja o cartão de execução.",
     "notice.env.reqIncremented": "requirements.txt incrementado: {packages}.",
     "notice.env.pyprojectNoBuild": "pyproject.toml sem [project]/[build-system]: crio o venv e atualizo o pip (adicione requirements.txt ou torne o pacote instalável para instalar dependências).",
     "notice.env.reqGenerated": "requirements.txt gerado com {count} pacote(s) detectado(s) no código: {packages}. Revise à vontade.",
     "notice.env.noDeps": "Nenhuma dependência de terceiros detectada — crio o venv (.venv) e atualizo o pip.",
+    "notice.env.activated": "Ambiente Python ativado no terminal FORGE (.venv); interpretador do workspace: {path}.",
+    "notice.notebook.prepared": "Kernel Python preparado em {path}. Selecione esse ambiente no picker do notebook.",
+    "notice.notebook.extensionMissing": "O kernel foi preparado, mas as extensões Python/Jupyter ainda não estão disponíveis. Instale-as para executar o notebook.",
+    "notice.notebook.installFailed": "Não consegui instalar as extensões Python/Jupyter. Verifique a rede corporativa ou use o Runtime Pack offline.",
+    "notice.notebook.ipykernelFailed": "Não consegui instalar o ipykernel no .venv — veja o cartão de execução.",
+    "notice.notebook.selectKernelFailed": "O ambiente está pronto, mas não consegui abrir o seletor. Use Notebook: Select Notebook Kernel e escolha a .venv.",
+    "notice.workspace.trustRequired": "Esta ação exige um workspace confiável no VS Code.",
+    "dialog.env.activateMissing": "Não há um ambiente Python do projeto. Preparar a .venv agora?",
+    "dialog.env.prepareBtn": "Preparar ambiente",
+    "dialog.notebook.prepareForRun": "O notebook ainda não tem um runtime FORGE pronto. Criar/usar a .venv e garantir o ipykernel agora?",
+    "dialog.notebook.prepareBtn": "Preparar kernel",
+    "dialog.notebook.installExtensions": "Para executar notebooks, faltam as extensões: {extensions}. Instalá-las agora?",
+    "dialog.notebook.installBtn": "Instalar extensões",
+    "dialog.workspace.pickProject": "Escolha o projeto para executar esta ação",
+    "notice.readme.generating": "Analisando o projeto para criar ou atualizar o README.md como proposta revisável…",
+    "notice.envExample.none": "Nenhuma variável de ambiente foi detectada no código; .env.example não foi criado.",
+    "notice.envExample.unchanged": ".env.example já contém todas as variáveis detectadas.",
+    "notice.envExample.updated": ".env.example atualizado com {count} variável(is) detectada(s), sem copiar valores.",
+    "notice.gitignore.unchanged": ".gitignore já contém os padrões recomendados para este projeto.",
+    "notice.gitignore.updated": ".gitignore atualizado com {count} padrão(ões) ausente(s).",
+    "notice.artifact.failed": "Não consegui atualizar {path}: {error}",
+    "notice.artifact.notUtf8": "Não consegui atualizar {path}: o arquivo existente não está em UTF-8 ou não pôde ser lido.",
     "run.label.env": "ambiente",
+    "run.label.envDiagnostics": "ambiente · diagnóstico Python",
+    "run.label.ipykernelInstall": "notebook · instalação do ipykernel",
     "run.label.pytestInstall": "pytest · instalação",
     "run.label.gateMypy": "gate · mypy (coerência)",
     "run.label.gateBandit": "gate · bandit (segurança)",
@@ -660,9 +720,14 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "dialog.search.placeholder": "termos da busca…",
     "dialog.attach.placeholder": "Anexar arquivo do workspace ao contexto",
     "dialog.run.openFile": "FORGE: abra um arquivo do workspace para executar.",
+    "dialog.env.prepareForRun": "Não há .venv neste projeto. Criar o ambiente, instalar o requirements.txt e executar {file}?",
+    "dialog.env.prepareAndRun": "Criar e executar",
+    "dialog.env.runWithoutPrepare": "Executar sem preparar",
     "dialog.pytest.installVenv": "O pytest não está instalado no ambiente (.venv). Instalar agora e rodar os testes?",
     "dialog.pytest.createVenv": "Não há venv neste projeto. Criar o .venv com as dependências do código, instalar o pytest e rodar os testes?",
     "dialog.pytest.installBtn": "Instalar e rodar",
+    "dialog.sqlAnalyze.confirm": "A análise observada usará EXPLAIN ANALYZE ou o histórico do motor na conexão \"{id}\" para coletar tempo, buffers e cardinalidade real. Ela pode consumir CPU, I/O e créditos até o timeout configurado. Continuar?",
+    "dialog.sqlAnalyze.confirmBtn": "Executar e medir",
     "dialog.cancel": "Cancelar",
     "dialog.deps.detected": "Detectei no código pacote(s) ausente(s) do requirements.txt: {packages}. Adicionar?",
     "dialog.deps.addBtn": "Adicionar e instalar",
@@ -733,6 +798,9 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wh.err.costSingle": "Prévia de custo aceita só UM statement — selecione apenas o SELECT que quer estimar.",
     "wh.err.costSingleShort": "Prévia de custo aceita só UM statement.",
     "wh.err.costUnavailable": "Prévia de custo não disponível para este tipo de conexão.",
+    "wh.err.observedSingle": "Análise observada aceita somente um SELECT por vez.",
+    "wh.err.observedUnavailable": "Análise observada ainda não está disponível com segurança para conexões {kind}; use o plano estimado e o histórico de custo.",
+    "wh.err.observedReadonly": "⛔ Análise observada só executa um SELECT de leitura confirmado ({reason}).",
     "wh.result.noOutput": "(sem saída)",
     "wh.result.capped": " · ⚠ amostra capada em {n} linhas",
     "wh.result.masked": "_Valores sensíveis são mascarados localmente antes de qualquer exibição (LGPD)._",
@@ -940,7 +1008,9 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.codeBlock.needReply": "Generate a response before saving a snippet as a file.",
     "notice.cell.openFailed": "Could not open the notebook: {error}",
     "notice.cell.applyFailed": "Failed to apply the cell to the notebook.",
+    "notice.cell.changed": "The cell changed since the proposal. I did not overwrite your work; ask FORGE to regenerate from the current notebook.",
     "notice.cell.applyFirst": "Apply the cell before running it.",
+    "notice.cell.markdownNoRun": "Markdown cell applied. It documents the notebook and does not need to run.",
     "notice.cell.runFailed": "Failed to run the cell (is a kernel available?): {error}",
     "notice.license.noPubkey": "License public key not embedded. Run `npm run keygen` (admin) before validating licenses.",
     "notice.license.refused": "License refused: {error}",
@@ -988,14 +1058,38 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.tests.runDisabled": "pytest missing and command execution is disabled (forge.run.enabled) — install it manually in the venv.",
     "notice.tests.cancelled": "Tests cancelled: pytest missing from the environment.",
     "notice.tests.busyLater": "There is a run in progress — run the tests again when it finishes.",
-    "notice.env.venvFailed": "I couldn't create the venv — see the 'environment' card.",
+    "notice.env.venvFailed": "I couldn't prepare the .venv — see the 'environment' card.",
     "notice.tests.installNotStarted": "The pytest installation didn't start (there is a run in progress or execution is disabled). Try again.",
     "notice.tests.installFailed": "The pytest installation failed — see the run card.",
     "notice.env.reqIncremented": "requirements.txt updated: {packages}.",
     "notice.env.pyprojectNoBuild": "pyproject.toml without [project]/[build-system]: I create the venv and update pip (add a requirements.txt or make the package installable to install dependencies).",
     "notice.env.reqGenerated": "requirements.txt generated with {count} package(s) detected in the code: {packages}. Review at will.",
     "notice.env.noDeps": "No third-party dependencies detected — I create the venv (.venv) and update pip.",
+    "notice.env.activated": "Python environment activated in the FORGE (.venv) terminal; workspace interpreter: {path}.",
+    "notice.notebook.prepared": "Python kernel prepared at {path}. Select this environment in the notebook kernel picker.",
+    "notice.notebook.extensionMissing": "The kernel is prepared, but the Python/Jupyter extensions are not available yet. Install them to run the notebook.",
+    "notice.notebook.installFailed": "I couldn't install the Python/Jupyter extensions. Check the corporate network or use the offline Runtime Pack.",
+    "notice.notebook.ipykernelFailed": "I couldn't install ipykernel in the .venv — see the run card.",
+    "notice.notebook.selectKernelFailed": "The environment is ready, but I couldn't open the picker. Use Notebook: Select Notebook Kernel and choose .venv.",
+    "notice.workspace.trustRequired": "This action requires a trusted VS Code workspace.",
+    "dialog.env.activateMissing": "There is no project Python environment. Prepare .venv now?",
+    "dialog.env.prepareBtn": "Prepare environment",
+    "dialog.notebook.prepareForRun": "This notebook does not have a FORGE runtime ready yet. Create/use .venv and ensure ipykernel now?",
+    "dialog.notebook.prepareBtn": "Prepare kernel",
+    "dialog.notebook.installExtensions": "The following extensions are required to run notebooks: {extensions}. Install them now?",
+    "dialog.notebook.installBtn": "Install extensions",
+    "dialog.workspace.pickProject": "Choose the project for this action",
+    "notice.readme.generating": "Analyzing the project to create or update README.md as a reviewable proposal…",
+    "notice.envExample.none": "No environment variables were detected in the code; .env.example was not created.",
+    "notice.envExample.unchanged": ".env.example already contains all detected variables.",
+    "notice.envExample.updated": ".env.example updated with {count} detected variable(s), without copying values.",
+    "notice.gitignore.unchanged": ".gitignore already contains the recommended patterns for this project.",
+    "notice.gitignore.updated": ".gitignore updated with {count} missing pattern(s).",
+    "notice.artifact.failed": "I couldn't update {path}: {error}",
+    "notice.artifact.notUtf8": "I couldn't update {path}: the existing file is not UTF-8 or could not be read.",
     "run.label.env": "environment",
+    "run.label.envDiagnostics": "environment · Python diagnostics",
+    "run.label.ipykernelInstall": "notebook · ipykernel install",
     "run.label.pytestInstall": "pytest · install",
     "run.label.gateMypy": "gate · mypy (coherence)",
     "run.label.gateBandit": "gate · bandit (security)",
@@ -1069,9 +1163,14 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "dialog.search.placeholder": "search terms…",
     "dialog.attach.placeholder": "Attach a workspace file to the context",
     "dialog.run.openFile": "FORGE: open a workspace file to run.",
+    "dialog.env.prepareForRun": "There is no .venv in this project. Create it, install requirements.txt, and run {file}?",
+    "dialog.env.prepareAndRun": "Create and run",
+    "dialog.env.runWithoutPrepare": "Run without preparing",
     "dialog.pytest.installVenv": "pytest is not installed in the environment (.venv). Install now and run the tests?",
     "dialog.pytest.createVenv": "There is no venv in this project. Create .venv with the code's dependencies, install pytest and run the tests?",
     "dialog.pytest.installBtn": "Install and run",
+    "dialog.sqlAnalyze.confirm": "Observed analysis will use EXPLAIN ANALYZE or engine history on connection \"{id}\" to collect actual time, buffers, and cardinality. It may consume CPU, I/O, and credits until the configured timeout. Continue?",
+    "dialog.sqlAnalyze.confirmBtn": "Execute and measure",
     "dialog.cancel": "Cancel",
     "dialog.deps.detected": "I detected package(s) in the code missing from requirements.txt: {packages}. Add them?",
     "dialog.deps.addBtn": "Add and install",
@@ -1142,6 +1241,9 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wh.err.costSingle": "Cost preview accepts only ONE statement — select just the SELECT you want to estimate.",
     "wh.err.costSingleShort": "Cost preview accepts only ONE statement.",
     "wh.err.costUnavailable": "Cost preview not available for this connection type.",
+    "wh.err.observedSingle": "Observed analysis accepts only one SELECT at a time.",
+    "wh.err.observedUnavailable": "Observed analysis is not yet safely available for {kind} connections; use the estimated plan and cost history.",
+    "wh.err.observedReadonly": "⛔ Observed analysis only executes a confirmed read-only SELECT ({reason}).",
     "wh.result.noOutput": "(no output)",
     "wh.result.capped": " · ⚠ sample capped at {n} rows",
     "wh.result.masked": "_Sensitive values are masked locally before any display (LGPD)._",
@@ -1349,7 +1451,9 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.codeBlock.needReply": "Genera una respuesta antes de guardar un fragmento como archivo.",
     "notice.cell.openFailed": "No se pudo abrir el notebook: {error}",
     "notice.cell.applyFailed": "Fallo al aplicar la celda en el notebook.",
+    "notice.cell.changed": "La celda cambió desde la propuesta. No sobrescribí tu trabajo; pide a FORGE que regenere usando el notebook actual.",
     "notice.cell.applyFirst": "Aplica la celda antes de ejecutarla.",
+    "notice.cell.markdownNoRun": "Celda Markdown aplicada. Documenta el notebook y no necesita ejecución.",
     "notice.cell.runFailed": "Fallo al ejecutar la celda (¿kernel disponible?): {error}",
     "notice.license.noPubkey": "Clave pública de licencia no incrustada. Ejecuta `npm run keygen` (admin) antes de validar licencias.",
     "notice.license.refused": "Licencia rechazada: {error}",
@@ -1397,14 +1501,38 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "notice.tests.runDisabled": "pytest ausente y la ejecución de comandos está deshabilitada (forge.run.enabled) — instálalo manualmente en el venv.",
     "notice.tests.cancelled": "Pruebas canceladas: pytest ausente en el entorno.",
     "notice.tests.busyLater": "Hay una ejecución en curso — ejecuta las pruebas de nuevo cuando termine.",
-    "notice.env.venvFailed": "No pude crear el venv — mira la tarjeta 'entorno'.",
+    "notice.env.venvFailed": "No pude preparar el .venv — mira la tarjeta 'entorno'.",
     "notice.tests.installNotStarted": "La instalación de pytest no inició (hay una ejecución en curso o la ejecución está deshabilitada). Inténtalo de nuevo.",
     "notice.tests.installFailed": "La instalación de pytest falló — mira la tarjeta de ejecución.",
     "notice.env.reqIncremented": "requirements.txt actualizado: {packages}.",
     "notice.env.pyprojectNoBuild": "pyproject.toml sin [project]/[build-system]: creo el venv y actualizo pip (añade requirements.txt o vuelve el paquete instalable para instalar dependencias).",
     "notice.env.reqGenerated": "requirements.txt generado con {count} paquete(s) detectados en el código: {packages}. Revisa con calma.",
     "notice.env.noDeps": "Ninguna dependencia de terceros detectada — creo el venv (.venv) y actualizo pip.",
+    "notice.env.activated": "Entorno Python activado en la terminal FORGE (.venv); intérprete del workspace: {path}.",
+    "notice.notebook.prepared": "Kernel Python preparado en {path}. Selecciona este entorno en el selector del notebook.",
+    "notice.notebook.extensionMissing": "El kernel está preparado, pero las extensiones Python/Jupyter aún no están disponibles. Instálalas para ejecutar el notebook.",
+    "notice.notebook.installFailed": "No pude instalar las extensiones Python/Jupyter. Verifica la red corporativa o usa el Runtime Pack offline.",
+    "notice.notebook.ipykernelFailed": "No pude instalar ipykernel en el .venv — mira la tarjeta de ejecución.",
+    "notice.notebook.selectKernelFailed": "El entorno está listo, pero no pude abrir el selector. Usa Notebook: Select Notebook Kernel y elige .venv.",
+    "notice.workspace.trustRequired": "Esta acción requiere un workspace confiable en VS Code.",
+    "dialog.env.activateMissing": "No hay un entorno Python del proyecto. ¿Preparar .venv ahora?",
+    "dialog.env.prepareBtn": "Preparar entorno",
+    "dialog.notebook.prepareForRun": "Este notebook aún no tiene un runtime FORGE listo. ¿Crear/usar .venv y garantizar ipykernel ahora?",
+    "dialog.notebook.prepareBtn": "Preparar kernel",
+    "dialog.notebook.installExtensions": "Para ejecutar notebooks faltan estas extensiones: {extensions}. ¿Instalarlas ahora?",
+    "dialog.notebook.installBtn": "Instalar extensiones",
+    "dialog.workspace.pickProject": "Elige el proyecto para esta acción",
+    "notice.readme.generating": "Analizando el proyecto para crear o actualizar README.md como propuesta revisable…",
+    "notice.envExample.none": "No se detectaron variables de entorno en el código; no se creó .env.example.",
+    "notice.envExample.unchanged": ".env.example ya contiene todas las variables detectadas.",
+    "notice.envExample.updated": ".env.example actualizado con {count} variable(s) detectada(s), sin copiar valores.",
+    "notice.gitignore.unchanged": ".gitignore ya contiene los patrones recomendados para este proyecto.",
+    "notice.gitignore.updated": ".gitignore actualizado con {count} patrón(es) ausente(s).",
+    "notice.artifact.failed": "No pude actualizar {path}: {error}",
+    "notice.artifact.notUtf8": "No pude actualizar {path}: el archivo existente no está en UTF-8 o no se pudo leer.",
     "run.label.env": "entorno",
+    "run.label.envDiagnostics": "entorno · diagnóstico Python",
+    "run.label.ipykernelInstall": "notebook · instalación de ipykernel",
     "run.label.pytestInstall": "pytest · instalación",
     "run.label.gateMypy": "gate · mypy (coherencia)",
     "run.label.gateBandit": "gate · bandit (seguridad)",
@@ -1478,9 +1606,14 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "dialog.search.placeholder": "términos de búsqueda…",
     "dialog.attach.placeholder": "Adjuntar archivo del workspace al contexto",
     "dialog.run.openFile": "FORGE: abre un archivo del workspace para ejecutar.",
+    "dialog.env.prepareForRun": "No hay .venv en este proyecto. ¿Crearlo, instalar requirements.txt y ejecutar {file}?",
+    "dialog.env.prepareAndRun": "Crear y ejecutar",
+    "dialog.env.runWithoutPrepare": "Ejecutar sin preparar",
     "dialog.pytest.installVenv": "pytest no está instalado en el entorno (.venv). ¿Instalar ahora y ejecutar las pruebas?",
     "dialog.pytest.createVenv": "No hay venv en este proyecto. ¿Crear el .venv con las dependencias del código, instalar pytest y ejecutar las pruebas?",
     "dialog.pytest.installBtn": "Instalar y ejecutar",
+    "dialog.sqlAnalyze.confirm": "El análisis observado usará EXPLAIN ANALYZE o el historial del motor en la conexión \"{id}\" para recopilar tiempo, buffers y cardinalidad reales. Puede consumir CPU, E/S y créditos hasta el timeout configurado. ¿Continuar?",
+    "dialog.sqlAnalyze.confirmBtn": "Ejecutar y medir",
     "dialog.cancel": "Cancelar",
     "dialog.deps.detected": "Detecté en el código paquete(s) ausentes del requirements.txt: {packages}. ¿Añadirlos?",
     "dialog.deps.addBtn": "Añadir e instalar",
@@ -1551,6 +1684,9 @@ export const HOST_MESSAGES: Record<Locale, Partial<Record<HostMessageKey, string
     "wh.err.costSingle": "La vista previa de costo acepta solo UN statement — selecciona únicamente el SELECT que quieres estimar.",
     "wh.err.costSingleShort": "La vista previa de costo acepta solo UN statement.",
     "wh.err.costUnavailable": "Vista previa de costo no disponible para este tipo de conexión.",
+    "wh.err.observedSingle": "El análisis observado acepta solo un SELECT a la vez.",
+    "wh.err.observedUnavailable": "El análisis observado aún no está disponible de forma segura para conexiones {kind}; usa el plan estimado y el historial de costos.",
+    "wh.err.observedReadonly": "⛔ El análisis observado solo ejecuta un SELECT de lectura confirmado ({reason}).",
     "wh.result.noOutput": "(sin salida)",
     "wh.result.capped": " · ⚠ muestra limitada a {n} filas",
     "wh.result.masked": "_Los valores sensibles se enmascaran localmente antes de cualquier exhibición (LGPD)._",

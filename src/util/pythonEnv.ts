@@ -3,6 +3,30 @@
 // (ModuleNotFoundError) ou ser de outro ambiente. Rodar "<venv>/python -m pytest" elimina o problema.
 import * as path from "node:path";
 
+export type PrepareOnRunPolicy = "ask" | "always" | "never";
+export type PythonRunPreflightAction = "none" | "ask" | "prepare";
+
+// Decide se um Run precisa preparar o ambiente. O pre-flight automatico e conservador:
+// so arquivos Python/notebooks com requirements.txt entram; Poetry/uv/Conda e projetos sem manifesto
+// seguem seus fluxos proprios em vez de serem silenciosamente convertidos para pip + .venv.
+export function pythonRunPreflightAction(input: {
+  filePath: string;
+  hasProjectVenv: boolean;
+  hasRequirements: boolean;
+  policy: PrepareOnRunPolicy;
+}): PythonRunPreflightAction {
+  const ext = path.extname(input.filePath).toLowerCase();
+  if (
+    (ext !== ".py" && ext !== ".pyw" && ext !== ".ipynb") ||
+    input.hasProjectVenv ||
+    !input.hasRequirements ||
+    input.policy === "never"
+  ) {
+    return "none";
+  }
+  return input.policy === "always" ? "prepare" : "ask";
+}
+
 // Caminhos candidatos do interpretador de um venv na raiz do workspace, em ordem de preferência.
 export function venvPythonCandidates(workspaceRoot: string, isWindows: boolean): string[] {
   const rel = isWindows ? ["Scripts", "python.exe"] : ["bin", "python"];
@@ -22,6 +46,71 @@ export function findVenvPython(
     if (exists(p)) return p;
   }
   return venvPythonCandidates(workspaceRoot, isWindows).find(exists);
+}
+
+// Raiz e comando de ativacao de um venv a partir do interpretador encontrado. A escolha considera o
+// shell, nao apenas o SO: Windows pode estar em PowerShell, cmd ou Git Bash; PowerShell tambem existe
+// em macOS/Linux. O caminho e sempre citado para suportar workspaces com espacos.
+export function venvRootFromPython(venvPython: string): string {
+  return path.dirname(path.dirname(venvPython));
+}
+
+export function buildVenvActivationCommand(input: {
+  venvPython: string;
+  shellPath: string;
+  isWindows: boolean;
+}): string {
+  const root = venvRootFromPython(input.venvPython);
+  const shell = path.basename(input.shellPath).toLowerCase();
+  const q = (p: string) => `"${p.replace(/"/g, '\\"')}"`;
+  const forPosixShell = (p: string): string => {
+    if (!input.isWindows) return p;
+    const normalized = p.replace(/\\/g, "/");
+    const drive = normalized.match(/^([A-Za-z]):\/(.*)$/);
+    return drive ? `/${drive[1].toLowerCase()}/${drive[2]}` : normalized;
+  };
+
+  if (shell.includes("powershell") || shell === "pwsh" || shell === "pwsh.exe") {
+    const script = path.join(root, input.isWindows ? "Scripts" : "bin", "Activate.ps1");
+    return `& ${q(script)}`;
+  }
+  if (input.isWindows && (shell === "cmd" || shell === "cmd.exe")) {
+    return q(path.join(root, "Scripts", "activate.bat"));
+  }
+  if (shell.includes("fish")) {
+    return `source ${q(forPosixShell(path.join(root, input.isWindows ? "Scripts" : "bin", "activate.fish")))}`;
+  }
+  if (shell.includes("csh") || shell.includes("tcsh")) {
+    return `source ${q(forPosixShell(path.join(root, input.isWindows ? "Scripts" : "bin", "activate.csh")))}`;
+  }
+  // bash/zsh/sh e Git Bash no Windows entendem source; o venv do Windows traz Scripts/activate.
+  return `source ${q(forPosixShell(path.join(root, input.isWindows ? "Scripts" : "bin", "activate")))}`;
+}
+
+export function buildPythonDiagnosticsCommand(venvPython: string): string {
+  const q = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
+  const py = q(venvPython);
+  const probe = [
+    "import os, platform, site, sys",
+    'print("Python:", sys.version.replace("\\n", " "))',
+    'print("Executavel:", sys.executable)',
+    'print("VIRTUAL_ENV:", os.environ.get("VIRTUAL_ENV") or "(nao exportado; interpretador direto)")',
+    'print("Plataforma:", platform.platform())',
+    'print("Site-packages:", ", ".join(site.getsitepackages()))',
+  ].join("\n");
+  // Base64 evita a divergencia de quoting entre cmd.exe e shells POSIX no `python -c`.
+  const encoded = Buffer.from(probe, "utf8").toString("base64");
+  return `${py} -c "import base64;exec(base64.b64decode('${encoded}'))" && ${py} -m pip --version && ${py} -m pip check`;
+}
+
+export function buildIpykernelProbe(venvPython: string): string {
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -c "import ipykernel; print(ipykernel.__version__)"`;
+}
+
+export function buildIpykernelInstall(venvPython: string): string {
+  const interp = /\s/.test(venvPython) ? `"${venvPython}"` : venvPython;
+  return `${interp} -m pip install ipykernel`;
 }
 
 // Monta o comando de "Preparar ambiente" (venv + dependências) para um projeto Python. Se já existe

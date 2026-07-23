@@ -37,6 +37,22 @@ const README_COHERENCE =
   "caminhos de arquivo e os nomes de módulo/função REAIS deste projeto. NÃO descreva um wiring/estrutura " +
   "ALTERNATIVOS nem cite arquivos/funções que você NÃO gerou (ex.: 'troque X em `y.py`' onde `y.py` não define X).";
 
+export function buildReadmeRequest(projectName: string, existing: boolean): string {
+  const action = existing
+    ? "ATUALIZE o README.md existente, preservando o que ainda estiver correto e corrigindo o que divergir do projeto."
+    : "CRIE um README.md novo para o projeto.";
+  return [
+    `${action} Projeto: ${projectName}.`,
+    "Leia o codebase, os manifestos de dependências, scripts, configurações e testes disponíveis no contexto.",
+    "Gere EXATAMENTE um arquivo, em um único bloco `forge-file path=README.md`; não altere nenhum outro arquivo.",
+    "O README deve ser completo e objetivo, com: título e resumo; funcionalidades reais; arquitetura e estrutura de pastas; requisitos; instalação; configuração e variáveis de ambiente; execução; testes, lint e formatação; exemplos de uso; troubleshooting; contribuição; licença quando ela puder ser comprovada.",
+    "Todo comando deve ser copiável e coerente com os manifestos/scripts reais. Diferencie Windows de macOS/Linux quando a ativação de ambiente Python for relevante.",
+    "Documente apenas NOMES de variáveis de ambiente; nunca exponha valores, tokens, senhas ou conteúdo de arquivos de segredo.",
+    "Não invente endpoints, scripts, arquivos, classes, funções, licenças ou capacidades. Quando algo não puder ser comprovado, omita ou marque claramente como pendente.",
+    `${README_COHERENCE} ${NO_PHANTOM_SYMBOL} ${NO_ELLIPSIS_RULE}`,
+  ].join("\n");
+}
+
 // Contexto opcional do WORKSPACE injetado nos prompts do Modo Projeto: o PROPÓSITO do charter
 // (.forge/project.md) e as dependências FIXADAS (requirements.txt). Sem isso o modelo ignora o charter
 // (sai o exemplo canônico Pedido/Pagamento) e alucina libs/versões — os dois achados da auditoria.
@@ -142,21 +158,31 @@ ${FORGE_FENCE}
 Protocolo de NOTEBOOKS (.ipynb) — edição célula-a-célula:
 - Quando o usuário está num notebook, NÃO reescreva o arquivo inteiro. Edite por CÉLULA com blocos
   \`${FORGE_CELL_BLOCK_LANG}\`, também cercados por QUATRO crases (\`${FORGE_FENCE}\`). O contexto do notebook
-  lista as células com seu índice ABSOLUTO ([0], [1], …).
-- Para INSERIR uma célula nova:
+  lista as células com índice absoluto, \`cellId\` estável quando disponível, tipo, linguagem e tags.
+- Para INSERIR uma célula de CÓDIGO:
 
-${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=add after=2
+${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=add after=2 kind=code language=python tags=analysis
 <código da nova célula>
 ${FORGE_FENCE}
 
   (\`after=N\` insere depois da célula N; omita \`after\` para acrescentar ao final.)
-- Para SUBSTITUIR uma célula existente:
+- Para INSERIR documentação, explicações, hipóteses ou conclusões, use uma célula MARKDOWN:
 
-${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=replace index=3
+${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=add after=2 kind=markdown tags=analysis-notes
+## O que este bloco faz
+Explique objetivo, premissas e como interpretar o resultado seguinte.
+${FORGE_FENCE}
+
+- Para SUBSTITUIR uma célula existente, prefira o \`cellId\` do contexto; use \`index\` como fallback:
+
+${FORGE_FENCE}${FORGE_CELL_BLOCK_LANG} path=notebook.ipynb op=replace cellId=abc-123 kind=code language=python tags=analysis
 <novo código da célula 3>
 ${FORGE_FENCE}
 
-- Use o índice absoluto exato do contexto. Uma célula por bloco. O usuário aplica e executa a célula.
+  Um bloco antigo com \`op=replace index=3\` continua válido. \`tags\` é uma lista separada por vírgulas,
+  sem espaços. Em \`replace\`, omitir \`kind\` preserva o tipo atual; em \`add\`, o padrão é código Python.
+- Uma célula por bloco. Intercale Markdown e código quando o pedido exigir um notebook documentado. Células
+  Markdown descrevem objetivo, premissas e leitura do resultado; não repitam o código em prosa.
 - A regra das crases é a mesma do protocolo de arquivos: o fechamento (\`${FORGE_FENCE}\`) fica sozinho na
   linha, com o mesmo número de crases da abertura, e quatro crases preservam cercas de três no código.
 - Cada célula deve vir COMPLETA: proibido reticências ou comentários de omissão ("# ... resto da célula")

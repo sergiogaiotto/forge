@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spark Connect Notebooks"
+  short_description: "Spark SQL e DataFrames remotos em notebooks"
+  default_prompt: "Use $spark-connect-notebooks para criar um notebook com Spark SQL e DataFrames via Spark Connect."

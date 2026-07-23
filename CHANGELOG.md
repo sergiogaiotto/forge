@@ -19,6 +19,37 @@ burst concorrente furar o teto ~96x (fechada com reserva síncrona no admit + re
 escrita não-atômica que um crash corromperia, zerando o teto do dia (fechada com tmp+rename). 1034 testes.
 
 ### Added
+- **Cockpit profissional de custo e tuning SQL:** `/plano-sql` e `/custo` agora interpretam planos de
+  PostgreSQL, Oracle, BigQuery e DuckDB em métricas, operadores, hotspots e hash. `/analisar-sql` coleta
+  evidência observada com consentimento e auditoria (`EXPLAIN ANALYZE` em PostgreSQL/DuckDB; histórico em
+  Oracle/BigQuery), enquanto `/comparar-sql` calcula deltas entre o original e o `.tuned.sql`, sem alegar
+  equivalência semântica ou ganho real sem validação. O tuning recebe evidências estruturadas e as consultas
+  históricas usam correspondência exata/hashing sem interpolar a SQL alvo no BigQuery.
+- **Jupyter notebook-first com preparação integrada:** `/notebook` e a Command Palette criam/reutilizam
+  `.venv`, instalam `ipykernel` no projeto, configuram o interpretador, verificam as extensões Python/Jupyter
+  e abrem o seletor de kernel. Propostas `.ipynb` agora distinguem Markdown/código, idioma, tags e ID estável
+  de célula; o Run oferece preflight automático e não tenta executar células Markdown.
+- **Duas trilhas profissionais para Spark:** `spark-connect-notebooks` cobre Spark Connect, Spark SQL e
+  DataFrames remotos sem JVM local; `spark-classic-rdd` cobre a trilha avançada com Spark SQL, DataFrames,
+  `SparkContext`, pair RDDs, particionamento, lineage, serialização e retries. A skill geral
+  `spark-pipelines` roteia os runtimes e impede APIs RDD em sessões Connect.
+- **FORGE SQL Lab embutido:** DuckDB `v1.5.5` persistente em `.forge/sql/lab.duckdb`, isolado em Worker,
+  sem CLI ou servidor externo. Inclui limites de memória/disco/threads, timeout que encerra o Worker,
+  acesso a arquivos contido no workspace e extensões/autoinstall desabilitados.
+- **Fluxo SQL profissional:** `/sql-lab`, `/importar-schema`, `/validar-sql`, `/plano-sql` e `/tunar-sql`
+  no chat e na Command Palette. DDL importado alimenta um catálogo local com tabelas, colunas, PK/FK e
+  índices; validação resolve dialeto; tuning combina plano real, versão do banco e schema indexado.
+- **Preflight Python no Run/Definition of Done:** ao executar `.py`/`.pyw` com `requirements.txt` e sem
+  ambiente local, o FORGE oferece criar `.venv`, instalar as dependências e continuar automaticamente com
+  o interpretador do projeto. A política `forge.env.prepareOnRun` aceita `ask` (padrão), `always` ou `never`;
+  Run, testes e quality gates deixam de herdar acidentalmente um `VIRTUAL_ENV` externo ao workspace.
+- **Skill `claro-dashboard-ui` para dashboards com identidade Claro:** aplica tokens visuais aproximados da
+  referência fornecida, padrões de KPI/gráficos/tabelas, responsividade e acessibilidade. Evoluiu para um
+  workflow data-first que veta o dashboard cru de schema+preview, perfila XLSX/CSV, protege a verdade das
+  métricas e escolhe entre tiles, linhas, barras, gauge, pizza/donut, box plot, scatter, heatmap, funil e outros
+  somente quando os dados sustentam o visual. Seis arquétipos permitem variar completamente a composição sem
+  perder a identidade Claro. A ativação é determinística e aceita upload ou `@arquivo` sem permitir que o
+  conteúdo anexado controle a seleção de skills. Inclui testes contra falsos positivos de dbt, ETL e painéis físicos.
 - **Orçamento de tokens/dia na licença** (`admin-cli issue --budget <n>`): assina o teto por subject
   (0/ausente = ilimitado; licenças antigas seguem ilimitadas — byte-idênticas).
 - **Enforcement no gateway** (`gateway/spend.mjs` + `server.mjs`): `overBudget` barra o proxy com **402**

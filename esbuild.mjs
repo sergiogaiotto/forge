@@ -7,15 +7,18 @@ const production = process.argv.includes("--production") || process.env.NODE_ENV
 
 /** @type {import('esbuild').BuildOptions} */
 const options = {
-  entryPoints: ["src/extension.ts"],
+  entryPoints: {
+    extension: "src/extension.ts",
+    "duckdb-worker": "src/warehouse/duckdbWorker.ts",
+  },
   bundle: true,
-  outfile: "dist/extension.js",
+  outdir: "dist",
   platform: "node",
   format: "cjs",
   target: "node18",
   sourcemap: !production,
   minify: production,
-  external: ["vscode"],
+  external: ["vscode", "@duckdb/node-api", "@duckdb/node-bindings"],
   logLevel: "info",
   define: {
     "process.env.NODE_ENV": JSON.stringify(production ? "production" : "development"),

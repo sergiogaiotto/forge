@@ -12,6 +12,7 @@ import {
   buildProjectFromBlueprintPrompt,
   buildProjectPrompt,
   buildProjectRepairPrompt,
+  buildReadmeRequest,
   buildReviewPrompt,
   buildSummarizeSystemPrompt,
   buildTailContinuation,
@@ -20,6 +21,17 @@ import {
   setOutputLanguage,
   uiLayerInstruction,
 } from "../core/systemPrompt";
+
+test("buildReadmeRequest limita a geracao a README.md e proibe segredos/alucinacoes", () => {
+  const fresh = buildReadmeRequest("meu-projeto", false);
+  assert.match(fresh, /CRIE um README\.md/);
+  assert.match(fresh, /EXATAMENTE um arquivo/);
+  assert.match(fresh, /forge-file path=README\.md/);
+  assert.match(fresh, /Windows de macOS\/Linux/);
+  assert.match(fresh, /nunca exponha valores, tokens, senhas/);
+  assert.match(fresh, /Não invente endpoints/);
+  assert.match(buildReadmeRequest("meu-projeto", true), /ATUALIZE o README\.md existente/);
+});
 
 // Onda 2 — o prompt de auto-reparo mostra o arquivo reprovado, os erros do mypy e o CONTRATO REAL dos
 // deps que passaram, exigindo blocos forge-file completos e proibindo símbolos inventados.

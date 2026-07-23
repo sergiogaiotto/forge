@@ -4,6 +4,7 @@
 // object storage. O I/O (temp files, spawn, timeout) fica no WarehouseService; aqui é 100% testável.
 // Segredo NUNCA vai em argv (aparece na lista de processos): Oracle recebe a senha no script-wrapper
 // temporário (apagado no finally), psql via env PGPASSWORD, bq/aws/oci usam a auth do próprio CLI.
+import { createHash } from "node:crypto";
 import { hostT } from "../i18n";
 import { maskDataSample } from "../util/piiScan";
 import { WarehouseConnection } from "./types";
@@ -24,6 +25,16 @@ export interface PlanError {
 
 export function isPlanError(p: CliPlan | PlanError): p is PlanError {
   return (p as PlanError).error !== undefined;
+}
+
+function oracleClobEquals(column: string, value: string): string[] {
+  const chars = Array.from(value);
+  const clauses = [`DBMS_LOB.GETLENGTH(${column}) = ${chars.length}`];
+  for (let offset = 0; offset < chars.length; offset += 1_000) {
+    const chunk = chars.slice(offset, offset + 1_000).join("").replace(/'/g, "''");
+    clauses.push(`DBMS_LOB.SUBSTR(${column}, 1000, ${offset + 1}) = '${chunk}'`);
+  }
+  return clauses;
 }
 
 // Garante um terminador executável no fim do SQL Oracle. `;` termina um statement comum; `/` executa
@@ -127,26 +138,115 @@ export function buildCostPlan(conn: WarehouseConnection, sql: string, opts: { pa
     case "bigquery":
       return {
         tool: conn.tool ?? "bq",
-        args: ["query", "--nouse_legacy_sql", "--dry_run", ...(conn.connect ? [`--project_id=${conn.connect}`] : [])],
+        args: ["query", "--nouse_legacy_sql", "--dry_run", "--format=prettyjson", ...(conn.connect ? [`--project_id=${conn.connect}`] : [])],
         env: conn.env,
         stdin: sql,
-        display: "bq query --dry_run",
+        display: "bq query --dry_run --format=prettyjson",
       };
     case "postgres": {
       if (multi) return { error: hostT("wh.err.costSingle") };
-      const plan = buildRunPlan(conn, `EXPLAIN ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 500 });
+      const plan = buildRunPlan(
+        conn,
+        `EXPLAIN (FORMAT JSON, VERBOSE, SETTINGS) ${sql.replace(/;\s*$/, "")}`,
+        { password: opts.password, rowCap: 2_000 }
+      );
       return isPlanError(plan) ? plan : { ...plan, display: plan.display.replace("consulta.sql", "explain.sql") };
     }
     case "oracle": {
       if (multi) return { error: hostT("wh.err.costSingle") };
-      const wrapped = `EXPLAIN PLAN FOR\n${sql.replace(/;\s*$/, "")};\nSELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY());`;
-      return buildRunPlan(conn, wrapped, { password: opts.password, rowCap: 500 });
+      const wrapped = [
+        `EXPLAIN PLAN FOR`,
+        `${sql.replace(/;\s*$/, "")};`,
+        `SELECT plan_table_output`,
+        `FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, NULL, 'ALL +PREDICATE +PARTITION +ALIAS +NOTE'));`,
+      ].join("\n");
+      return buildRunPlan(conn, wrapped, { password: opts.password, rowCap: 2_000 });
     }
     case "duckdb":
       if (multi) return { error: hostT("wh.err.costSingleShort") };
-      return buildRunPlan(conn, `EXPLAIN ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 500 });
+      return buildRunPlan(conn, `EXPLAIN (FORMAT JSON) ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 2_000 });
     default:
       return { error: hostT("wh.err.costUnavailable") };
+  }
+}
+
+// Plano OBSERVADO: PostgreSQL/DuckDB executam o SELECT via EXPLAIN ANALYZE; Oracle e BigQuery consultam
+// o último cursor/job equivalente no histórico do próprio motor, sem executar novamente a consulta.
+// O chamador sempre obtém consentimento explícito porque até a leitura de metadados pode consumir recursos.
+export function buildObservedPlan(
+  conn: WarehouseConnection,
+  sql: string,
+  opts: { password?: string; statementCount?: number }
+): CliPlan | PlanError {
+  if ((opts.statementCount ?? 1) !== 1) return { error: hostT("wh.err.observedSingle") };
+  switch (conn.kind) {
+    case "oracle": {
+      // O cursor Oracle não preserva o terminador de cliente (`;`) no SQL armazenado.
+      const normalizedSql = sql.trim().replace(/;\s*$/, "");
+      const match = oracleClobEquals("sql_fulltext", normalizedSql);
+      const observed = [
+        "VAR forge_sql_id VARCHAR2(13)",
+        "VAR forge_child NUMBER",
+        "BEGIN",
+        "  SELECT sql_id, child_number INTO :forge_sql_id, :forge_child",
+        "  FROM (",
+        "    SELECT sql_id, child_number",
+        "    FROM v$sql",
+        `    WHERE ${match.join("\n      AND ")}`,
+        "    ORDER BY last_active_time DESC",
+        "  )",
+        "  WHERE ROWNUM = 1;",
+        "END;",
+        "/",
+        "SELECT plan_table_output",
+        "FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(:forge_sql_id, :forge_child,",
+        "  'ALLSTATS LAST +IOSTATS +MEMSTATS +PREDICATE +PARTITION +ALIAS +NOTE'));",
+      ].join("\n");
+      return buildRunPlan(conn, observed, { password: opts.password, rowCap: 2_000 });
+    }
+    case "postgres": {
+      const plan = buildRunPlan(
+        conn,
+        `EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS, FORMAT JSON) ${sql.replace(/;\s*$/, "")}`,
+        { password: opts.password, rowCap: 2_000 }
+      );
+      return isPlanError(plan) ? plan : { ...plan, display: plan.display.replace("consulta.sql", "explain-analyze.sql") };
+    }
+    case "bigquery": {
+      const region = conn.schemas?.find((scope) => scope.startsWith("region-")) ?? "region-us";
+      const queryHash = createHash("sha256").update(sql, "utf8").digest("hex");
+      const historySql = [
+        "SELECT",
+        "  total_bytes_processed AS totalBytesProcessed,",
+        "  total_bytes_billed AS totalBytesBilled,",
+        "  total_slot_ms AS totalSlotMs,",
+        "  cache_hit AS cacheHit,",
+        "  TIMESTAMP_DIFF(end_time, start_time, MILLISECOND) AS executionTimeMs",
+        `FROM \`${region}\`.INFORMATION_SCHEMA.JOBS_BY_PROJECT`,
+        "WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)",
+        "  AND job_type = 'QUERY' AND state = 'DONE'",
+        `  AND LOWER(TO_HEX(SHA256(query))) = '${queryHash}'`,
+        "ORDER BY creation_time DESC",
+        "LIMIT 1",
+      ].join("\n");
+      return {
+        tool: conn.tool ?? "bq",
+        args: [
+          "query",
+          "--nouse_legacy_sql",
+          "--format=prettyjson",
+          "--max_rows=1",
+          ...(conn.connect ? [`--project_id=${conn.connect}`] : []),
+        ],
+        env: conn.env,
+        stdin: historySql,
+        display: "bq query INFORMATION_SCHEMA.JOBS_BY_PROJECT --format=prettyjson",
+      };
+    }
+    case "duckdb":
+      return buildRunPlan(conn, `EXPLAIN ANALYZE ${sql.replace(/;\s*$/, "")}`, { password: opts.password, rowCap: 2_000 });
+    default:
+      return { error: hostT("wh.err.observedUnavailable", { kind: conn.kind }) };
   }
 }
 
@@ -182,9 +282,18 @@ export function buildTestPlan(conn: WarehouseConnection, opts: { password?: stri
 // LGPD — o mesmo contrato de SqlRunResult.output ("já capado e mascarado") num lugar só (o ramo MCP
 // deixava PII crua no chat). Metadados/agregados passam skipMask=true (mascarar corromperia os números).
 // PURO/testável (sem vscode).
-export function sanitizeWarehouseOutput(text: string, rowCap: number, skipMask = false): { output: string; truncated: boolean } {
+export function sanitizeWarehouseOutput(
+  text: string,
+  rowCap: number,
+  skipMask = false,
+  maxChars = 16_000
+): { output: string; truncated: boolean } {
   const capped = capCsv(text, rowCap);
-  return { output: (skipMask ? capped.text : maskDataSample(capped.text)).slice(0, 16000), truncated: capped.truncated };
+  const sanitized = skipMask ? capped.text : maskDataSample(capped.text);
+  return {
+    output: sanitized.slice(0, maxChars),
+    truncated: capped.truncated || sanitized.length > maxChars,
+  };
 }
 
 // Capa o CSV em N linhas de DADOS (a 1ª é cabeçalho quando houver ≥2). O rowCap protege o dev de

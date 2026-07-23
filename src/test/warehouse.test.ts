@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { decideSqlRun } from "../warehouse/governance";
 import { classifySql, sideEffectFnCall } from "../sql/classify";
 import { dialectUsesBackslashEscapes } from "../sql/lex";
-import { buildCostPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
+import { buildCostPlan, buildObservedPlan, buildRunPlan, buildTestPlan, capCsv, isPlanError, renderResultCard, sanitizeWarehouseOutput } from "../warehouse/sqlRunners";
 import { columnsInventorySql, mergeIndexes, parseInventoryCsv, parseSnapshot, serializeSnapshot, snapshotToIndex } from "../warehouse/schemaSnapshot";
 import { compareProfiles, parseParityArgs, parseProfileCsv, profileSql, renderParityCard } from "../warehouse/parity";
 import { renderFinopsCard, topQueriesSql } from "../warehouse/finops";
@@ -190,9 +190,46 @@ test("plano: object storage não executa SQL; teste de conexão lista objetos; c
   const ociTest = buildTestPlan({ id: "oci", kind: "oci-os", connect: "ns1/bucket-dados" }, {});
   if (!isPlanError(ociTest)) assert.ok(ociTest.args.includes("bucket-dados"));
   const bqCost = buildCostPlan(BQ, "SELECT * FROM vendas.pedidos", {});
-  if (!isPlanError(bqCost)) assert.ok(bqCost.args.includes("--dry_run"));
+  if (!isPlanError(bqCost)) {
+    assert.ok(bqCost.args.includes("--dry_run"));
+    assert.ok(bqCost.args.includes("--format=prettyjson"));
+  }
   const oraCost = buildCostPlan(ORA, "SELECT * FROM pedidos", { password: "x" });
   if (!isPlanError(oraCost)) assert.ok(oraCost.scripts?.some((s) => s.content.includes("DBMS_XPLAN")));
+});
+
+test("plano observado: Postgres/DuckDB executam ANALYZE; Oracle/BigQuery consultam histórico", () => {
+  const pg = buildObservedPlan(PG, "SELECT * FROM orders", { password: "x", statementCount: 1 });
+  assert.ok(!isPlanError(pg));
+  if (!isPlanError(pg)) {
+    assert.ok(pg.scripts?.some((script) => script.content.includes("ANALYZE, BUFFERS, WAL, SETTINGS, FORMAT JSON")));
+    assert.match(pg.display, /explain-analyze\.sql/);
+  }
+
+  const duck = buildObservedPlan({ id: "local", kind: "duckdb", connect: "x.duckdb" }, "SELECT 1", { statementCount: 1 });
+  assert.ok(!isPlanError(duck));
+  if (!isPlanError(duck)) assert.equal(duck.stdin, "EXPLAIN ANALYZE SELECT 1");
+
+  const oracle = buildObservedPlan(ORA, "SELECT * FROM orders WHERE name = 'O''Brien'", { password: "x", statementCount: 1 });
+  assert.ok(!isPlanError(oracle));
+  if (!isPlanError(oracle)) {
+    const script = oracle.scripts?.find((item) => item.name === "consulta.sql")?.content ?? "";
+    assert.match(script, /v\$sql/);
+    assert.match(script, /DISPLAY_CURSOR/);
+    assert.match(script, /DBMS_LOB\.SUBSTR/);
+    assert.match(script, /DBMS_LOB\.GETLENGTH/);
+    assert.ok(!script.includes("name = 'O''Brien'"), "a aspa do SQL alvo precisa ser escapada dentro do literal Oracle");
+  }
+
+  const bq = buildObservedPlan({ ...BQ, schemas: ["region-southamerica-east1"] }, "SELECT * FROM `p.d.t` WHERE s = 'x'", { statementCount: 1 });
+  assert.ok(!isPlanError(bq));
+  if (!isPlanError(bq)) {
+    assert.match(bq.stdin ?? "", /INFORMATION_SCHEMA\.JOBS_BY_PROJECT/);
+    assert.match(bq.stdin ?? "", /region-southamerica-east1/);
+    assert.match(bq.stdin ?? "", /SHA256\(query\)/);
+    assert.ok(!(bq.stdin ?? "").includes("SELECT * FROM `p.d.t`"), "o SQL alvo não deve ser interpolado no wrapper BigQuery");
+  }
+  assert.ok(isPlanError(buildObservedPlan(PG, "SELECT 1; SELECT 2", { statementCount: 2 })));
 });
 
 test("capCsv limita as linhas de dados; renderResultCard vira tabela quando pequeno", () => {
@@ -412,4 +449,10 @@ test("REGRESSÃO: sanitizeWarehouseOutput garante cap+máscara (contrato do cami
   assert.ok(!r.output.includes("ana@x.com"));
   // skipMask preserva agregados
   assert.equal(sanitizeWarehouseOutput("count\n45000000", 100, true).output, "count\n45000000");
+});
+
+test("sanitizeWarehouseOutput: plano pode usar cap maior sem mudar o default de resultados", () => {
+  const large = "x".repeat(20_000);
+  assert.equal(sanitizeWarehouseOutput(large, 10).output.length, 16_000);
+  assert.equal(sanitizeWarehouseOutput(large, 10, true, 32_000).output.length, 20_000);
 });

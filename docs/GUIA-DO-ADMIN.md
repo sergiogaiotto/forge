@@ -368,6 +368,23 @@ privado) **deixam de ser liberados automaticamente** — só loopback (a própri
 allowlist; todo o resto precisa estar em `allowedHosts`. Use em ambientes que exigem defesa contra
 exfiltração/SSRF **dentro** da rede. O padrão `true` mantém o comportamento clássico.
 
+### Privilégios para o cockpit SQL
+
+O `/plano-sql` usa somente estimativa. O `/analisar-sql` pede confirmação em toda execução e registra a
+decisão como `sql.analyze`. Configure uma conta técnica com o menor privilégio possível:
+
+| Banco | Estimativa | Observado |
+|---|---|---|
+| PostgreSQL | permissão de `SELECT` nas relações | a mesma permissão; `EXPLAIN ANALYZE` executa o `SELECT` |
+| Oracle | acesso normal a `EXPLAIN PLAN` | leitura de `V$SQL` e execução de `DBMS_XPLAN.DISPLAY_CURSOR` |
+| BigQuery | permissão para dry-run | leitura de `INFORMATION_SCHEMA.JOBS_BY_PROJECT` no projeto/região |
+| DuckDB local | já embutido | executa a leitura no banco `.forge/sql/lab.duckdb` |
+
+Oracle e BigQuery não repetem a query no modo observado: procuram o último cursor/job com o mesmo SQL.
+PostgreSQL e DuckDB executam a consulta. Não conceda privilégios de DDL/DML apenas para habilitar tuning.
+O FORGE mostra bytes, buffers, tempo e custo relativo quando disponíveis, mas não fabrica custo monetário
+sem preço autoritativo.
+
 ### MCP (ferramentas internas governadas)
 MCP permite que o FORGE use ferramentas da empresa (ex.: consultar o Oracle). Você define o
 **catálogo** (apenas você — é uma "managed setting"):
@@ -384,6 +401,7 @@ MCP permite que o FORGE use ferramentas da empresa (ex.: consultar o Oracle). Vo
   }
 ]
 ```
+
 Regras aplicadas automaticamente:
 - **Apenas endereços internos** são conectáveis (egress externo é negado).
 - Cada chamada de ferramenta **pede aprovação** do dev (a menos que você marque `autoApprove` para

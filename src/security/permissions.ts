@@ -6,7 +6,14 @@
 // vira evento obs (`permission.decision`) — visível no Langfuse pelos sinks existentes.
 // PURO (sem vscode): o diálogo nativo é injetado pelo Controller; testável de ponta a ponta.
 
-export type PermissionKind = "mcp.tool" | "sql.write" | "proposal.force" | "contract.unverified" | "env.dependency" | "git.commit";
+export type PermissionKind =
+  | "mcp.tool"
+  | "sql.write"
+  | "sql.analyze"
+  | "proposal.force"
+  | "contract.unverified"
+  | "env.dependency"
+  | "git.commit";
 export type PermissionOutcome = "auto" | "approved" | "denied" | "blocked";
 // Por onde a decisão foi tomada: "policy" (bloqueio do admin, sem prompt), "auto" (auto-approve
 // somente-leitura), "dialog" (modal nativo do host) ou "webview" (botão/card do painel).

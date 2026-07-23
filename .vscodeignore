@@ -6,6 +6,11 @@ admin-cli/**
 gateway/**
 ci/**
 node_modules/**
+!node_modules/@duckdb/
+!node_modules/@duckdb/node-api/**
+!node_modules/@duckdb/node-bindings/**
+!node_modules/@duckdb/node-bindings-win32-x64/**
+!node_modules/detect-libc/**
 .vscode/**
 .github/**
 .gitlab-ci.yml

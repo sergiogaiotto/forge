@@ -5,7 +5,7 @@ import { atMentionToken, dedupeMentions, filterMentions, mentionInsertText, repl
 import type { Action, MessageVM, PartialFileBlock, ProfileView, ProposalVM, RunResultData, UIState } from "../state";
 import { parsePartialFileBlocks, stripFileBlocksFromText } from "../state";
 import { post } from "../vscode";
-import type { WorkspaceEntry } from "../../../src/shared/protocol";
+import type { DataCommand, WorkspaceEntry } from "../../../src/shared/protocol";
 import {
   CharterKey,
   isRenderablePath,
@@ -108,6 +108,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
   useEffect(() => {
     const req = forge.uiPanel;
     if (!req || req.seq <= lastPanelSeq.current) return;
+    if (req.panel === "provider") return;
     lastPanelSeq.current = req.seq;
     if (req.panel === "inspect") {
       setShowInspect(true);
@@ -144,6 +145,16 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         break;
       case "ambiente":
         post({ type: "env/prepare" });
+        break;
+      case "notebook":
+        post({ type: "notebook/prepare" });
+        break;
+      case "venv":
+        post({ type: "env/activate" });
+        break;
+      case "readme":
+        dispatch({ kind: "pushUser", text: commandLabel(cmd) });
+        post({ type: "docs/readme" });
         break;
       case "testes":
         post({ type: "tests/run" });
@@ -185,6 +196,27 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
           kind: "pushLocal",
           text: t("cmd.translateSql.prompt", { dialects: SQL_DIALECTS.map((d) => `\`${d}\``).join(", ") }),
         });
+        break;
+      case "sql-lab":
+        runData("sql-lab");
+        break;
+      case "importar-schema":
+        runData("importar-schema");
+        break;
+      case "validar-sql":
+        runData("validar-sql");
+        break;
+      case "plano-sql":
+        runData("plano-sql");
+        break;
+      case "analisar-sql":
+        runData("analisar-sql");
+        break;
+      case "comparar-sql":
+        runData("comparar-sql");
+        break;
+      case "tunar-sql":
+        runData("tunar-sql");
         break;
       case "testes-dbt":
         runDbtTests(""); // sem argumento = modelo do arquivo ativo
@@ -298,7 +330,7 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
 
   // Comandos de DADOS (Ondas 3/4): host executa (conexões/SQL/schema/paridade/custo/PII) e responde
   // com data/card — nenhum LLM no caminho; governança do motor no host.
-  const runData = (cmd: "conexoes" | "executar-sql" | "schema-db" | "paridade" | "custo" | "auditoria-pii", args?: string) => {
+  const runData = (cmd: DataCommand, args?: string) => {
     dispatch({ kind: "pushUser", text: `[${cmdLabelById(cmd)}]${args ? " " + args : ""}` });
     post({ type: "data/command", cmd, args });
     setInput("");
@@ -355,8 +387,22 @@ export function DevPanel({ state, dispatch }: { state: UIState; dispatch: React.
         return;
       }
       // dados: conexão é token único; /paridade aceita exatamente dois tokens (tabelas, com : opcional)
-      if ((withArgs.cmd.id === "executar-sql" || withArgs.cmd.id === "schema-db" || withArgs.cmd.id === "custo") && /^[\w.-]+$/.test(withArgs.args)) {
+      if (
+        (withArgs.cmd.id === "executar-sql" ||
+          withArgs.cmd.id === "schema-db" ||
+          withArgs.cmd.id === "custo" ||
+          withArgs.cmd.id === "validar-sql" ||
+          withArgs.cmd.id === "plano-sql" ||
+          withArgs.cmd.id === "analisar-sql" ||
+          withArgs.cmd.id === "comparar-sql" ||
+          withArgs.cmd.id === "tunar-sql") &&
+        /^[\w.-]+$/.test(withArgs.args)
+      ) {
         runData(withArgs.cmd.id, withArgs.args);
+        return;
+      }
+      if (withArgs.cmd.id === "importar-schema" && /^@?[\p{L}\p{N}._/\\ -]+$/u.test(withArgs.args)) {
+        runData("importar-schema", withArgs.args.trim());
         return;
       }
       if (withArgs.cmd.id === "paridade" && /^[\w.:-]+\s+[\w.:-]+$/.test(withArgs.args.trim())) {

@@ -65,12 +65,14 @@ export type MessageKey =
   | "ob.provider.sub"
   | "ob.provider.test"
   | "ob.provider.finishTitleEmail"
+  | "ob.provider.finishTitleApiKey"
   | "ob.provider.finishTitle"
   | "ob.provider.finish"
   | "ob.field.baseUrl"
   | "ob.field.model"
   | "ob.field.timeout"
   | "ob.field.apiKey"
+  | "ob.field.apiKeySavedPlaceholder"
   | "ob.field.endpoint"
   | "ob.field.dims"
   | "ob.test.connOk"
@@ -417,12 +419,14 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "ob.provider.sub": "Selecione o backend de modelo. O HubGPU usa o endpoint OpenAI-compatible.",
     "ob.provider.test": "Testar conexão",
     "ob.provider.finishTitleEmail": "Informe seu e-mail antes de concluir",
+    "ob.provider.finishTitleApiKey": "Informe a API key para este provedor",
     "ob.provider.finishTitle": "Concluir",
     "ob.provider.finish": "Concluir configuração",
     "ob.field.baseUrl": "Base URL",
     "ob.field.model": "Modelo",
     "ob.field.timeout": "Timeout (s)",
     "ob.field.apiKey": "API Key",
+    "ob.field.apiKeySavedPlaceholder": "chave já salva; deixe em branco para manter",
     "ob.field.endpoint": "Endpoint",
     "ob.field.dims": "Densidade",
     "ob.test.connOk": "Conexão OK",
@@ -748,12 +752,14 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "ob.provider.sub": "Select the model backend. HubGPU uses the OpenAI-compatible endpoint.",
     "ob.provider.test": "Test connection",
     "ob.provider.finishTitleEmail": "Enter your e-mail before finishing",
+    "ob.provider.finishTitleApiKey": "Enter the API key for this provider",
     "ob.provider.finishTitle": "Finish",
     "ob.provider.finish": "Finish setup",
     "ob.field.baseUrl": "Base URL",
     "ob.field.model": "Model",
     "ob.field.timeout": "Timeout (s)",
     "ob.field.apiKey": "API Key",
+    "ob.field.apiKeySavedPlaceholder": "key already saved; leave blank to keep it",
     "ob.field.endpoint": "Endpoint",
     "ob.field.dims": "Dimensions",
     "ob.test.connOk": "Connection OK",
@@ -1079,12 +1085,14 @@ export const MESSAGES: Record<Locale, Partial<Record<MessageKey, string>>> = {
     "ob.provider.sub": "Selecciona el backend de modelo. HubGPU usa el endpoint OpenAI-compatible.",
     "ob.provider.test": "Probar conexión",
     "ob.provider.finishTitleEmail": "Indica tu e-mail antes de finalizar",
+    "ob.provider.finishTitleApiKey": "Indica la API key para este proveedor",
     "ob.provider.finishTitle": "Finalizar",
     "ob.provider.finish": "Finalizar configuración",
     "ob.field.baseUrl": "Base URL",
     "ob.field.model": "Modelo",
     "ob.field.timeout": "Timeout (s)",
     "ob.field.apiKey": "API Key",
+    "ob.field.apiKeySavedPlaceholder": "clave ya guardada; déjalo en blanco para mantenerla",
     "ob.field.endpoint": "Endpoint",
     "ob.field.dims": "Dimensiones",
     "ob.test.connOk": "Conexión OK",

@@ -291,6 +291,54 @@ test("D: abre com 4 e fecha com 3 — recuperado; a cerca curta NÃO é tratada 
   assert.equal(blocks[0].content, "pygame>=2.0\ntransformers>=4.40\n```");
 });
 
+test("caso real gpt-oss: abre código com 5 crases e fecha com 4 — corta na cerca padrão e preserva prosa", () => {
+  const text = [
+    "Segue:",
+    "`````forge-file path=doom_clone/main.py",
+    "import sys",
+    "",
+    "def main():",
+    "    sys.exit(0)",
+    "````",
+    "",
+    "Próximos passos em prosa fora do arquivo.",
+    "Thus answer: \"````\".",
+  ].join("\n");
+  const blocks = parseFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].path, "doom_clone/main.py");
+  assert.equal(blocks[0].content, "import sys\n\ndef main():\n    sys.exit(0)");
+
+  const partials = parsePartialFileBlocks(text);
+  assert.equal(partials.length, 1);
+  assert.equal(partials[0].closed, true, "o verificador de completude não deve pedir continuação falsa");
+
+  const out = stripFileBlockOfPath(text, "doom_clone/main.py");
+  assert.match(out, /Segue:/);
+  assert.match(out, /Próximos passos/);
+  assert.ok(!out.includes("import sys"));
+});
+
+test("guarda: README com cerca externa de 5 preserva cerca interna de 4", () => {
+  const text = [
+    "`````forge-file path=README.md",
+    "# Guia",
+    "",
+    "Exemplo:",
+    "````",
+    "bloco markdown interno",
+    "````",
+    "",
+    "Fim.",
+    "`````",
+  ].join("\n");
+  const blocks = parseFileBlocks(text);
+  assert.equal(blocks.length, 1);
+  assert.match(blocks[0].content, /bloco markdown interno/);
+  assert.match(blocks[0].content, /Fim\./);
+  assert.ok(blocks[0].content.includes("````"), "a cerca interna de 4 é conteúdo legítimo do README");
+});
+
 // -- regressão crítica (achados #1–#4): cerca interna MAIS LONGA que a externa não pode fechar cedo --
 
 test("regressão #1: cerca interna de 4 NÃO fecha um bloco bem-formado aberto com 3 (sem perda)", () => {
